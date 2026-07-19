@@ -274,6 +274,38 @@ class WebSearchSettings(BaseModel):
     openrouter: WebSearchOpenRouterSettings = Field(default_factory=WebSearchOpenRouterSettings)
 
 
+class LLMTierSettings(BaseModel):
+    """A (provider, model) pair — used for both the primary/fallback tiers
+    and per-purpose overrides."""
+
+    provider: str = ""
+    model: str = ""
+
+
+class LLMGroqSettings(BaseModel):
+    api_key: Optional[str] = None
+    timeout_seconds: float = 30.0
+
+
+class LLMOllamaSettings(BaseModel):
+    endpoint: str = "http://127.0.0.1:11434"
+    timeout_seconds: float = 60.0
+
+
+class LLMSettings(BaseModel):
+    primary: LLMTierSettings = Field(
+        default_factory=lambda: LLMTierSettings(provider="groq", model="openai/gpt-oss-120b")
+    )
+    fallback: LLMTierSettings = Field(
+        default_factory=lambda: LLMTierSettings(provider="ollama", model="qwen3.5:latest")
+    )
+    # purpose -> {"primary": {...}, "fallback": {...}}; only overridden fields
+    # need to be present, see llm/router.py ModelRouter._resolve_tier.
+    purposes: Dict[str, Any] = Field(default_factory=dict)
+    groq: LLMGroqSettings = Field(default_factory=LLMGroqSettings)
+    ollama: LLMOllamaSettings = Field(default_factory=LLMOllamaSettings)
+
+
 class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
@@ -296,6 +328,7 @@ class AppSettings(BaseSettings):
     ui: UISettings = Field(default_factory=UISettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
+    llm: LLMSettings = Field(default_factory=LLMSettings)
 
     @classmethod
     def settings_customise_sources(

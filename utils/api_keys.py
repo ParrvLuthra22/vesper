@@ -70,6 +70,39 @@ def get_gemini_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional
     return None
 
 
+def get_groq_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional[str]:
+    """
+    Resolve Groq key from common env/config locations.
+
+    Priority:
+    1. Environment variables (GROQ_API_KEY)
+    2. Optional config getter (dot-path lookups)
+    """
+    env_key = get_env_value(
+        "GROQ_API_KEY",
+        "groq_api_key",
+    )
+    if env_key:
+        return env_key
+
+    if config_getter is None:
+        return None
+
+    for key in (
+        "llm.groq.api_key",
+        "groq_api_key",
+        "general.groq_api_key",
+    ):
+        try:
+            value = _clean(config_getter(key))
+        except Exception:
+            value = None
+        if value:
+            return value
+
+    return None
+
+
 def get_openrouter_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional[str]:
     """
     Resolve OpenRouter key from common env/config locations.

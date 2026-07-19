@@ -515,3 +515,43 @@ web_search:
     api_key: null
     model: "x-ai/grok-3-mini-beta"
     endpoint: "https://openrouter.ai/api/v1/chat/completions"
+
+
+# -----------------------------------------------------------------------------
+# LLM Router Configuration (llm/router.py — not yet wired into the Brain, P03)
+# -----------------------------------------------------------------------------
+llm:
+  # Primary provider/model for completions. Groq deprecated
+  # llama-3.3-70b-versatile on 2026-08-16 in favor of openai/gpt-oss-120b for
+  # agentic tool-use workloads (faster + cheaper too) — see console.groq.com/docs/models.
+  primary:
+    provider: "groq"
+    model: "openai/gpt-oss-120b"
+
+  # Fallback provider/model, used when the primary is rate-limited (after one
+  # retry) or unreachable. Tag verified locally via `ollama list`.
+  fallback:
+    provider: "ollama"
+    model: "qwen3.5:latest"
+
+  # Per-purpose overrides. Only the fields present here override the base
+  # primary/fallback tier above (e.g. "chat" keeps provider=groq but swaps in
+  # a smaller/faster model than the "planning" default).
+  purposes:
+    chat:
+      primary:
+        model: "openai/gpt-oss-20b"
+
+  groq:
+    # Prefer the GROQ_API_KEY environment variable (.env supported); this is
+    # a fallback for users who prefer config-file keys.
+    api_key: null
+    timeout_seconds: 30
+
+  ollama:
+    endpoint: "http://127.0.0.1:11434"
+    # qwen3.5:latest is only partially GPU-resident on typical dev hardware
+    # (59%/41% CPU/GPU split observed locally) — a trivial completion measured
+    # 110-160s end to end across runs, so 60s was clipping real (non-hung)
+    # responses. 240s gives headroom above the observed worst case.
+    timeout_seconds: 240

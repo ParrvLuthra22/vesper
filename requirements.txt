@@ -49,6 +49,12 @@ langchain-core>=0.3.0        # LangChain core abstractions
 langchain-google-genai>=2.0.0  # Gemini integration for LangChain/LangGraph
 chromadb>=0.5.5              # Local persistent vector DB for semantic memory
 tavily-python>=0.5.0         # Web search API client
+
+# ------------------------------------------------------------------------------
+# LLM Router (llm/) - Groq primary, Ollama fallback
+# ------------------------------------------------------------------------------
+groq>=1.0.0                  # Groq chat completions + tool calling SDK
+ollama>=0.6.2                # Local Ollama chat completions + tools API client
 # Optional: Enhanced TTS
 # ------------------------------------------------------------------------------
 # elevenlabs>=0.2.0       # ElevenLabs TTS (high quality voices)
