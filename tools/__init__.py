@@ -1,44 +1,18 @@
 """
-Tools Module - Exposes Jarvis agent capabilities as callable tools.
+Tools Module — the registry the planner (LLM router) plans over.
 
-This module provides:
-- ToolDefinition: Schema for defining tools with metadata
-- ToolRegistry: Central registry of all available tools
-- ToolExecutor: Async execution engine that routes through EventBus
-- ToolPermissions: Permission checking for tool execution
-
-Design Principles:
-- Tools are abstractions over agent capabilities (no duplicate implementations)
-- All tool execution goes through EventBus (observable, async)
-- Tool results are tracked and can be awaited
+Importing this package registers all built-in bus-routed capability tools
+(tools.builtin) as a side effect, so `get_registry()` is populated as soon
+as `tools` is imported.
 """
 
-from tools.registry import (
-    ToolDefinition,
-    ToolParameter,
-    ToolRegistry,
-    ToolPermission,
-    ToolCategory,
-    get_tool_registry,
-)
-from tools.executor import (
-    ToolExecutor,
-    ToolExecutionResult,
-    ToolExecutionStatus,
-    get_tool_executor,
-)
+from tools.registry import ToolRegistry, ToolSpec, get_registry, tool
+
+import tools.builtin  # noqa: F401  (side effect: registers built-in tools)
 
 __all__ = [
-    # Registry
-    "ToolDefinition",
-    "ToolParameter",
+    "ToolSpec",
     "ToolRegistry",
-    "ToolPermission",
-    "ToolCategory",
-    "get_tool_registry",
-    # Executor
-    "ToolExecutor",
-    "ToolExecutionResult",
-    "ToolExecutionStatus",
-    "get_tool_executor",
+    "tool",
+    "get_registry",
 ]

@@ -524,6 +524,42 @@ class ApplicationLaunchedEvent(BaseEvent):
 
 
 @dataclass(frozen=True)
+class ConfirmationRequestedEvent(BaseEvent):
+    """
+    Event emitted by the Guardian when a confirm/dangerous-tier tool call
+    needs explicit approval before it may run.
+
+    Attributes:
+        summary: One-line human-readable summary of exactly what will run
+            (tool name plus rendered arguments).
+        tool_name: Name of the tool awaiting confirmation.
+        arguments: The tool call's arguments.
+        request_id: Unique ID used to match a later ConfirmationResponseEvent.
+    """
+
+    summary: str = ""
+    tool_name: str = ""
+    arguments: Dict[str, Any] = field(default_factory=dict)
+    request_id: str = ""
+    source: str = field(default="Guardian")
+
+
+@dataclass(frozen=True)
+class ConfirmationResponseEvent(BaseEvent):
+    """
+    Event emitted in response to a ConfirmationRequestedEvent (e.g. by voice,
+    HUD, or another UI surface) to approve or deny a pending tool call.
+
+    Attributes:
+        request_id: Matches the ConfirmationRequestedEvent being resolved.
+        approved: Whether the user approved the pending tool call.
+    """
+
+    request_id: str = ""
+    approved: bool = False
+
+
+@dataclass(frozen=True)
 class SystemNotificationEvent(BaseEvent):
     """
     Event to display a system notification.
