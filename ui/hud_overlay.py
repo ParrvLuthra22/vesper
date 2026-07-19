@@ -28,7 +28,6 @@ from schemas.events import (
     AgentStoppedEvent,
     BaseEvent,
     HUDGraphStateEvent,
-    HUDImageEvent,
     HUDSearchResultsEvent,
     HUDUpdateEvent,
     ListeningStateChangedEvent,
@@ -50,7 +49,6 @@ TARGET_AGENTS = [
     "VisionAgent",
     "WebSearchAgent",
     "MacOSControlAgent",
-    "ImageAgent",
 ]
 
 
@@ -74,7 +72,7 @@ def _hud_process_main(config: Dict[str, Any], ipc_queue: "mp.Queue") -> None:
     background = str(config.get("background", "#0a0e1a"))
 
     root = tk.Tk()
-    root.title("FRIDAY HUD")
+    root.title("VESPER HUD")
     root.geometry(f"{collapsed_size}x{collapsed_size}+{x}+{y}")
     root.configure(bg=background)
     root.overrideredirect(True)
@@ -483,7 +481,7 @@ class JarvisHUDOverlay:
             root = tk.Tk()
             self._root = root
 
-            root.title("FRIDAY HUD")
+            root.title("VESPER HUD")
             root.geometry(f"{self._width}x{self._height}+{self._x}+{self._y}")
             root.configure(bg=self._background)
             root.overrideredirect(True)
@@ -928,7 +926,6 @@ class HUDOverlayController:
         self._tokens.append(self._event_bus.subscribe(AgentErrorEvent, self._on_agent_error))
         self._tokens.append(self._event_bus.subscribe(AgentHealthCheckEvent, self._on_agent_health))
         self._tokens.append(self._event_bus.subscribe(HUDUpdateEvent, self._on_hud_update))
-        self._tokens.append(self._event_bus.subscribe(HUDImageEvent, self._on_hud_generated_image))
         self._tokens.append(self._event_bus.subscribe(HUDGraphStateEvent, self._on_hud_graph_state))
 
         logger.info("HUD overlay controller started")
@@ -1086,19 +1083,6 @@ class HUDOverlayController:
                     "query": event.query,
                     "summary": event.summary,
                     "sources": event.sources,
-                }
-            )
-
-    async def _on_hud_generated_image(self, event: HUDImageEvent) -> None:
-        prompt = str((event.metadata or {}).get("prompt", "")).strip()
-        if self._hud:
-            self._hud.set_generated_image(event.image_path, prompt)
-        else:
-            self._push_process_message(
-                {
-                    "kind": "hud_generated_image",
-                    "image_path": event.image_path,
-                    "prompt": prompt,
                 }
             )
 

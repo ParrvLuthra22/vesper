@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 from uuid import UUID, uuid4
@@ -288,7 +288,7 @@ class ToolExecutor:
             ToolExecutionResult with status and result/error
         """
         invocation_id = uuid4()
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         result = ToolExecutionResult(
             invocation_id=invocation_id,
@@ -469,7 +469,7 @@ class ToolExecutor:
     
     def _finalize_result(self, result: ToolExecutionResult) -> ToolExecutionResult:
         """Finalize a result with timing information."""
-        result.end_time = datetime.utcnow()
+        result.end_time = datetime.now(timezone.utc)
         if result.start_time:
             delta = result.end_time - result.start_time
             result.execution_time_ms = delta.total_seconds() * 1000

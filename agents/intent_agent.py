@@ -47,7 +47,6 @@ from agents.base_agent import AgentCapability, BaseAgent
 from bus.event_bus import EventBus
 from orchestrator.reasoning_engine import ReasoningEngine
 from schemas.events import (
-    EventPriority,
     IntentRecognizedEvent,
     IntentUnknownEvent,
     MultiIntentEvent,
@@ -57,7 +56,6 @@ from schemas.events import (
 from utils.logger import get_logger
 from utils.prompts import IntentPrompts, FallbackPatterns, log_prompt_usage
 from utils.api_keys import get_gemini_api_key
-from utils.face_auth import FaceAuthenticator
 
 
 logger = get_logger(__name__)
@@ -827,11 +825,6 @@ class IntentAgent(BaseAgent):
         )
         self._last_provider_success: Optional[bool] = None
         self._reasoning_engine: Optional[ReasoningEngine] = None
-        self._face_auth_enabled = bool(self._get_config("security.face_auth.enabled", True))
-        self._face_authenticator: Optional[FaceAuthenticator] = None
-        self._access_granted = not self._face_auth_enabled
-        self._face_auth_in_progress = False
-        self._face_auth_task: Optional[asyncio.Task] = None
     
     @property
     def capabilities(self) -> List[AgentCapability]:
@@ -890,58 +883,19 @@ class IntentAgent(BaseAgent):
         # Subscribe to voice input
         self._subscribe(VoiceInputEvent, self._handle_voice_input)
 
-        # Run startup face-auth sequence after agent startup so VoiceAgent is
-        # fully ready and can speak boot messages deterministically.
-        if self._face_auth_enabled:
-            self._access_granted = False
-            self._face_auth_in_progress = True
-            self._face_auth_task = asyncio.create_task(self._run_startup_face_auth())
-        else:
-            self._access_granted = True
-            self._face_auth_in_progress = False
-        
         provider_name = self._get_config("intent.provider", "pattern")
         self._logger.info(
             f"Intent agent initialized with {len(self._intents)} intents "
             f"using {provider_name} provider"
         )
-    
+
     async def _teardown(self) -> None:
         """Cleanup resources."""
-        if self._face_auth_task and not self._face_auth_task.done():
-            self._face_auth_task.cancel()
-            try:
-                await self._face_auth_task
-            except asyncio.CancelledError:
-                pass
-        self._face_auth_task = None
-
         if self._primary_provider:
             await self._primary_provider.shutdown()
         await self._fallback_provider.shutdown()
         self._reasoning_engine = None
         self._logger.info("Intent agent shutdown complete")
-
-    async def _run_startup_face_auth(self) -> None:
-        """Run face auth slightly after startup so TTS is reliably available."""
-        delay = float(self._get_config("security.face_auth.startup_delay_seconds", 1.2))
-        try:
-            if delay > 0:
-                await asyncio.sleep(delay)
-            await self._initialize_face_auth()
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self._logger.error(f"Startup face verification failed: {exc}", exc_info=True)
-            self._access_granted = False
-            self._face_auth_in_progress = False
-            await self._emit(
-                VoiceOutputEvent(
-                    text=f"Startup verification failed: {exc}",
-                    source=self._name,
-                    priority=EventPriority.CRITICAL,
-                )
-            )
 
     async def _initialize_providers(self) -> None:
         """Initialize NLU providers based on configuration."""
@@ -1004,21 +958,6 @@ class IntentAgent(BaseAgent):
         if not text or not text.strip():
             return
 
-        # During startup verification, ignore all incoming voice commands to keep
-        # the boot sequence deterministic and avoid interleaved speech.
-        if self._face_auth_in_progress:
-            return
-
-        if self._face_auth_enabled and not self._access_granted:
-            await self._emit(
-                VoiceOutputEvent(
-                    text="Access denied, Sir. Face verification failed at startup.",
-                    source=self._name,
-                    correlation_id=event.event_id,
-                )
-            )
-            return
-        
         self._logger.debug(f"Processing: '{text}'")
 
         if self._reasoning_engine and await self._reasoning_engine.is_complex_request(text):
@@ -1047,60 +986,6 @@ class IntentAgent(BaseAgent):
         # Process results
         await self._emit_results(result, text, event.event_id)
 
-    async def _initialize_face_auth(self) -> None:
-        """Verify operator identity at startup using local face recognition."""
-        if not self._face_auth_enabled:
-            self._access_granted = True
-            self._face_auth_in_progress = False
-            return
-
-        await self._emit(
-            VoiceOutputEvent(
-                text="friday starting verifying for user",
-                source=self._name,
-                priority=EventPriority.CRITICAL,
-            )
-        )
-
-        self._face_authenticator = FaceAuthenticator(
-            data_dir=str(self._get_config("security.face_auth.data_dir", "data/face_auth")),
-            camera_id=int(self._get_config("security.face_auth.camera_id", 0)),
-            threshold=float(self._get_config("security.face_auth.threshold", 0.78)),
-        )
-
-        try:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, self._face_authenticator.verify_or_enroll)
-            self._access_granted = result.granted
-
-            owner_name = str(self._get_config("security.face_auth.owner_name", "parrv luthra")).strip()
-            owner_display = owner_name.title()
-            if result.granted:
-                await self._emit(
-                    VoiceOutputEvent(
-                        text=f"Verification Successful, Welcome {owner_display}",
-                        source=self._name,
-                        priority=EventPriority.CRITICAL,
-                    )
-                )
-                await self._emit(
-                    VoiceOutputEvent(
-                        text="Hello Sir what are we working on today",
-                        source=self._name,
-                        priority=EventPriority.CRITICAL,
-                    )
-                )
-            else:
-                await self._emit(
-                    VoiceOutputEvent(
-                        text=result.message,
-                        source=self._name,
-                        priority=EventPriority.CRITICAL,
-                    )
-                )
-        finally:
-            self._face_auth_in_progress = False
-    
     async def _emit_results(
         self,
         result: Dict[str, Any],

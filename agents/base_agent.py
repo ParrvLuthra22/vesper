@@ -39,7 +39,7 @@ import asyncio
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Type, Union
 from uuid import UUID, uuid4
@@ -324,7 +324,7 @@ class BaseAgent(ABC):
         """Get the agent's uptime in seconds."""
         if self._started_at is None:
             return 0.0
-        return (datetime.utcnow() - self._started_at).total_seconds()
+        return (datetime.now(timezone.utc) - self._started_at).total_seconds()
 
     def is_healthy(self) -> bool:
         """
@@ -385,7 +385,7 @@ class BaseAgent(ABC):
             await self._run_start_hooks()
             
             self._state = AgentState.RUNNING
-            self._started_at = datetime.utcnow()
+            self._started_at = datetime.now(timezone.utc)
             
             # Announce that we're running (via EventBus - the only communication method)
             await self._emit(AgentStartedEvent(
@@ -659,7 +659,7 @@ class BaseAgent(ABC):
             self._logger.event_received(event)
             
             self._metrics.events_received += 1
-            self._metrics.last_event_time = datetime.utcnow()
+            self._metrics.last_event_time = datetime.now(timezone.utc)
             
             start_time = asyncio.get_event_loop().time()
             

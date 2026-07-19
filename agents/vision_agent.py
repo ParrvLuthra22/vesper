@@ -61,7 +61,6 @@ except Exception:  # pragma: no cover - optional dependency
 from agents.base_agent import AgentCapability, BaseAgent
 from schemas.events import (
     HUDUpdateEvent,
-    ImageGenerationEvent,
     IntentRecognizedEvent,
     ScreenshotEvent,
     VoiceOutputEvent,
@@ -69,7 +68,7 @@ from schemas.events import (
 from utils.api_keys import get_gemini_api_key
 
 
-SCREENSHOT_PATH = Path("/tmp/friday_screen.png")
+SCREENSHOT_PATH = Path("/tmp/vesper_screen.png")
 DEFAULT_GEMINI_MODEL_NAME = "gemini-2.0-flash"
 MIN_CLICK_CONFIDENCE = 0.7
 MAX_OCR_RESPONSE_CHARS = 1800
@@ -121,7 +120,7 @@ class VisionAgent(BaseAgent):
                 name="screen_understanding",
                 description="Captures screen, answers visual questions, and performs safe click actions",
                 input_events=["IntentRecognizedEvent", "ScreenshotEvent"],
-                output_events=["VoiceOutputEvent", "HUDUpdateEvent", "ImageGenerationEvent"],
+                output_events=["VoiceOutputEvent", "HUDUpdateEvent"],
             )
         ]
 
@@ -285,19 +284,6 @@ class VisionAgent(BaseAgent):
         if click_query:
             await self._click_query_target(click_query, event)
             return
-
-        image_query = self._extract_query(
-            candidates,
-            [r"visuali[sz]e\s+(.+)", r"show me\s+(.+)", r"generate image of\s+(.+)"],
-        )
-        if image_query:
-            await self._emit(
-                ImageGenerationEvent(
-                    prompt=image_query,
-                    source=self._name,
-                    correlation_id=event.correlation_id or event.event_id,
-                )
-            )
 
     @staticmethod
     def _matches_any(candidates: List[str], phrases: List[str]) -> bool:

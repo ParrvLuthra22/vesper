@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-JARVIS Virtual Assistant - Main Entry Point.
+VESPER Virtual Assistant - Main Entry Point.
 
-This is the main entry point for the JARVIS-like virtual assistant.
+This is the main entry point for the VESPER virtual assistant.
 It initializes the system, loads configuration, and starts the Brain
 which orchestrates all agents.
 
@@ -161,14 +161,12 @@ def log_startup_preflight(config: Dict[str, Any], logger: Any) -> None:
     """
     Log critical startup feature switches and key availability.
 
-    This helps confirm .env keys and face-auth settings are being applied
-    when launching with `python3 main.py`.
+    This helps confirm .env keys are being applied when launching with
+    `python3 main.py`.
     """
     from utils.api_keys import get_gemini_api_key, get_openrouter_api_key
 
-    face_auth_enabled = bool(config.get("security", {}).get("face_auth", {}).get("enabled", True))
-    owner_name = str(config.get("security", {}).get("face_auth", {}).get("owner_name", "parrv luthra"))
-    wake_word = str(config.get("voice", {}).get("wake_word", "friday"))
+    wake_word = str(config.get("voice", {}).get("wake_word", "vesper"))
     tavily_key = (
         os.getenv("TAVILY_API_KEY")
         or config.get("web_search", {}).get("tavily_api_key")
@@ -177,12 +175,7 @@ def log_startup_preflight(config: Dict[str, Any], logger: Any) -> None:
     openrouter_key = get_openrouter_api_key(lambda key: _dot_get(config, key))
     gemini_key = get_gemini_api_key(lambda key: _dot_get(config, key))
 
-    logger.info(
-        "Startup preflight | "
-        f"wake_word={wake_word} | "
-        f"face_auth_enabled={face_auth_enabled} | "
-        f"owner={owner_name}"
-    )
+    logger.info(f"Startup preflight | wake_word={wake_word}")
     logger.info(
         "Startup preflight keys | "
         f"TAVILY_API_KEY={'set' if bool(tavily_key) else 'missing'} | "
@@ -206,18 +199,18 @@ def _dot_get(config: Dict[str, Any], key: str) -> Any:
 def print_banner() -> None:
     """Print startup banner."""
     banner = """
-    ╔═══════════════════════════════════════════════════════════════╗
-    ║                                                               ║
-    ║       ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗                ║
-    ║       ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝                ║
-    ║       ██║███████║██████╔╝██║   ██║██║███████╗                ║
-    ║  ██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║                ║
-    ║  ╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║                ║
-    ║   ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝                ║
-    ║                                                               ║
-    ║           Virtual Assistant for macOS                         ║
-    ║                                                               ║
-    ╚═══════════════════════════════════════════════════════════════╝
+    ╔═════════════════════════════════════════════════════════════════╗
+    ║                                                                 ║
+    ║        ██╗   ██╗███████╗███████╗██████╗ ███████╗██████╗         ║
+    ║        ██║   ██║██╔════╝██╔════╝██╔══██╗██╔════╝██╔══██╗        ║
+    ║        ██║   ██║█████╗  ███████╗██████╔╝█████╗  ██████╔╝        ║
+    ║        ╚██╗ ██╔╝██╔══╝  ╚════██║██╔═══╝ ██╔══╝  ██╔══██╗        ║
+    ║         ╚████╔╝ ███████╗███████║██║     ███████╗██║  ██║        ║
+    ║          ╚═══╝  ╚══════╝╚══════╝╚═╝     ╚══════╝╚═╝  ╚═╝        ║
+    ║                                                                 ║
+    ║                   Virtual Assistant for macOS                   ║
+    ║                                                                 ║
+    ╚═════════════════════════════════════════════════════════════════╝
     """
     print(banner)
 
@@ -299,7 +292,7 @@ def parse_args() -> Dict[str, Any]:
 def print_help() -> None:
     """Print help message."""
     help_text = """
-JARVIS Virtual Assistant
+VESPER Virtual Assistant
 
 Usage:
     python main.py [options]
@@ -491,7 +484,7 @@ async def main() -> int:
     
     logger = get_logger(__name__)
     logger.info("=" * 60)
-    logger.info("FRIDAY Virtual Assistant Starting")
+    logger.info("VESPER Virtual Assistant Starting")
     logger.info(f"Python {sys.version}")
     logger.info(f"Project root: {PROJECT_ROOT}")
     logger.info("=" * 60)
@@ -523,7 +516,7 @@ async def main() -> int:
     try:
         # Start the brain (this registers and starts all agents)
         logger.info("Starting Brain and all agents...")
-        logger.info("Boot sequence enabled: voice startup + face verification + full agent routing")
+        logger.info("Boot sequence enabled: voice startup + full agent routing")
         await brain.start()
         logger.info("Brain started successfully")
         
@@ -576,7 +569,7 @@ async def main() -> int:
         
     finally:
         logger.info("=" * 60)
-        logger.info("FRIDAY Virtual Assistant Stopped")
+        logger.info("VESPER Virtual Assistant Stopped")
         logger.info("=" * 60)
 
 
@@ -620,7 +613,7 @@ def _cleanup_on_exit() -> None:
     if _brain_instance is not None:
         # Note: atexit handlers can't run async code properly
         # The graceful shutdown in main() should handle this
-        print("FRIDAY cleanup complete")
+        print("VESPER cleanup complete")
 
 
 if __name__ == "__main__":

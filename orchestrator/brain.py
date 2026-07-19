@@ -41,7 +41,7 @@ import asyncio
 import signal
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Deque, Dict, List, Optional, Type
 from uuid import UUID, uuid4
@@ -53,12 +53,6 @@ from agents.intent_agent import IntentAgent
 from agents.system_agent import SystemAgent
 from agents.macos_control_agent import MacOSControlAgent
 from agents.web_search_agent import WebSearchAgent
-try:
-    from agents.image_agent import ImageAgent
-    IMAGE_AVAILABLE = True
-except ImportError:
-    ImageAgent = None  # type: ignore
-    IMAGE_AVAILABLE = False
 from agents.memory_agent import MemoryAgent
 from agents.plugin_agent import PluginAgent
 from api.health import HealthServer
@@ -204,7 +198,7 @@ class ConversationContext:
         """Add a new turn to the conversation."""
         turn = ConversationTurn(
             turn_number=len(self.turns) + 1,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             user_input=user_input,
             intent=intent,
             entities=entities or {},
@@ -303,7 +297,7 @@ class ExecutionPlan:
     plan_id: UUID = field(default_factory=uuid4)
     description: str = ""
     steps: List[PlanStep] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     current_step: int = 0
     completed: bool = False
     aborted: bool = False
@@ -350,15 +344,18 @@ class ExecutionPlan:
 # Mapping of intent names to target agents and actions
 INTENT_ROUTING: Dict[str, Dict[str, Any]] = {
     # ==========================================================================
-    # System control intents -> SystemAgent (lowercase - legacy support)
+    # System control intents -> SystemAgent
     # ==========================================================================
+    # Keys are normalized to lowercase; callers must lowercase the intent
+    # string before looking it up here (see _route_intent).
     "open_application": {"agent": "SystemAgent", "action": "open_app"},
     "open_app": {"agent": "SystemAgent", "action": "open_app"},
     "close_application": {"agent": "SystemAgent", "action": "close_app"},
     "close_app": {"agent": "SystemAgent", "action": "close_app"},
     "focus_app": {"agent": "SystemAgent", "action": "focus_app"},
+    "switch_app": {"agent": "SystemAgent", "action": "focus_app"},
     "list_apps": {"agent": "SystemAgent", "action": "list_apps"},
-    
+
     # Volume
     "set_volume": {"agent": "SystemAgent", "action": "control_volume"},
     "control_volume": {"agent": "SystemAgent", "action": "control_volume"},
@@ -367,101 +364,52 @@ INTENT_ROUTING: Dict[str, Dict[str, Any]] = {
     "volume_down": {"agent": "SystemAgent", "action": "volume_down"},
     "mute": {"agent": "SystemAgent", "action": "mute"},
     "unmute": {"agent": "SystemAgent", "action": "unmute"},
-    
+
     # Brightness
     "set_brightness": {"agent": "SystemAgent", "action": "set_brightness"},
+    "control_brightness": {"agent": "SystemAgent", "action": "set_brightness"},
     "get_brightness": {"agent": "SystemAgent", "action": "get_brightness"},
     "brightness_up": {"agent": "SystemAgent", "action": "brightness_up"},
     "brightness_down": {"agent": "SystemAgent", "action": "brightness_down"},
-    
+
     # Time/Date
     "get_time": {"agent": "SystemAgent", "action": "get_time"},
     "get_date": {"agent": "SystemAgent", "action": "get_date"},
-    
+
     # System Info
     "system_info": {"agent": "SystemAgent", "action": "system_info"},
+    "get_system_stats": {"agent": "SystemAgent", "action": "system_info"},
     "get_cpu": {"agent": "SystemAgent", "action": "get_cpu"},
     "get_memory": {"agent": "SystemAgent", "action": "get_memory"},
     "get_battery": {"agent": "SystemAgent", "action": "get_battery"},
     "get_disk": {"agent": "SystemAgent", "action": "get_disk"},
-    
+
     # Screen Control
     "sleep_display": {"agent": "SystemAgent", "action": "sleep_display"},
     "lock_screen": {"agent": "SystemAgent", "action": "lock_screen"},
-    
+    "system_control": {"agent": "SystemAgent", "action": "system_control"},
+
     # Web
     "search_web": {"agent": "SystemAgent", "action": "search_web"},
     "open_url": {"agent": "SystemAgent", "action": "open_url"},
-    
+
     # Misc
     "take_screenshot": {"agent": "SystemAgent", "action": "screenshot"},
     "show_notification": {"agent": "SystemAgent", "action": "notify"},
-    
-    # ==========================================================================
-    # System control intents -> SystemAgent (UPPERCASE from IntentAgent)
-    # ==========================================================================
-    "OPEN_APP": {"agent": "SystemAgent", "action": "open_app"},
-    "CLOSE_APP": {"agent": "SystemAgent", "action": "close_app"},
-    "FOCUS_APP": {"agent": "SystemAgent", "action": "focus_app"},
-    "SWITCH_APP": {"agent": "SystemAgent", "action": "focus_app"},
-    "LIST_APPS": {"agent": "SystemAgent", "action": "list_apps"},
-    
-    # Volume
-    "CONTROL_VOLUME": {"agent": "SystemAgent", "action": "control_volume"},
-    "SET_VOLUME": {"agent": "SystemAgent", "action": "control_volume"},
-    "GET_VOLUME": {"agent": "SystemAgent", "action": "get_volume"},
-    "VOLUME_UP": {"agent": "SystemAgent", "action": "volume_up"},
-    "VOLUME_DOWN": {"agent": "SystemAgent", "action": "volume_down"},
-    "MUTE": {"agent": "SystemAgent", "action": "mute"},
-    "UNMUTE": {"agent": "SystemAgent", "action": "unmute"},
-    
-    # Brightness
-    "CONTROL_BRIGHTNESS": {"agent": "SystemAgent", "action": "set_brightness"},
-    "SET_BRIGHTNESS": {"agent": "SystemAgent", "action": "set_brightness"},
-    "GET_BRIGHTNESS": {"agent": "SystemAgent", "action": "get_brightness"},
-    "BRIGHTNESS_UP": {"agent": "SystemAgent", "action": "brightness_up"},
-    "BRIGHTNESS_DOWN": {"agent": "SystemAgent", "action": "brightness_down"},
-    
-    # Time/Date
-    "GET_TIME": {"agent": "SystemAgent", "action": "get_time"},
-    "GET_DATE": {"agent": "SystemAgent", "action": "get_date"},
-    
-    # System Info
-    "GET_SYSTEM_STATS": {"agent": "SystemAgent", "action": "system_info"},
-    "SYSTEM_INFO": {"agent": "SystemAgent", "action": "system_info"},
-    "GET_CPU": {"agent": "SystemAgent", "action": "get_cpu"},
-    "GET_MEMORY": {"agent": "SystemAgent", "action": "get_memory"},
-    "GET_BATTERY": {"agent": "SystemAgent", "action": "get_battery"},
-    "GET_DISK": {"agent": "SystemAgent", "action": "get_disk"},
-    
-    # Screen/System Control
-    "SLEEP_DISPLAY": {"agent": "SystemAgent", "action": "sleep_display"},
-    "LOCK_SCREEN": {"agent": "SystemAgent", "action": "lock_screen"},
-    "SYSTEM_CONTROL": {"agent": "SystemAgent", "action": "system_control"},
-    
-    # Web
-    "SEARCH_WEB": {"agent": "SystemAgent", "action": "search_web"},
-    "OPEN_URL": {"agent": "SystemAgent", "action": "open_url"},
-    
-    # Screenshot
-    "TAKE_SCREENSHOT": {"agent": "SystemAgent", "action": "screenshot"},
-    
+
     # ==========================================================================
     # Voice/speech intents -> VoiceAgent (via Brain delegation)
     # ==========================================================================
     "stop_speaking": {"agent": "VoiceAgent", "action": "stop_speech"},
-    "STOP_SPEAKING": {"agent": "VoiceAgent", "action": "stop_speech"},
-    
+
     # ==========================================================================
     # Memory intents -> MemoryAgent
     # ==========================================================================
     "remember": {"agent": "MemoryAgent", "action": "store"},
     "recall": {"agent": "MemoryAgent", "action": "query"},
     "forget": {"agent": "MemoryAgent", "action": "delete"},
-    "REMEMBER": {"agent": "MemoryAgent", "action": "store"},
-    "RECALL": {"agent": "MemoryAgent", "action": "query"},
-    "SET_REMINDER": {"agent": "MemoryAgent", "action": "store"},
-    
+    "set_reminder": {"agent": "MemoryAgent", "action": "store"},
+
     # ==========================================================================
     # Meta intents -> SystemAgent handles conversational responses
     # ==========================================================================
@@ -470,14 +418,10 @@ INTENT_ROUTING: Dict[str, Dict[str, Any]] = {
     "goodbye": {"agent": "SystemAgent", "action": "goodbye"},
     "status": {"agent": "Brain", "action": "respond"},
     "thanks": {"agent": "Brain", "action": "respond"},
-    "GREETING": {"agent": "SystemAgent", "action": "greeting"},
-    "HELP": {"agent": "SystemAgent", "action": "help"},
-    "GOODBYE": {"agent": "SystemAgent", "action": "goodbye"},
-    "THANKS": {"agent": "Brain", "action": "respond"},
-    
+
     # General questions (future: route to LLM agent)
-    "GENERAL_QUESTION": {"agent": "Brain", "action": "respond"},
-    
+    "general_question": {"agent": "Brain", "action": "respond"},
+
     # ==========================================================================
     # Vision intents -> VisionAgent
     # ==========================================================================
@@ -486,11 +430,6 @@ INTENT_ROUTING: Dict[str, Dict[str, Any]] = {
     "stop_vision": {"agent": "VisionAgent", "action": "toggle_vision"},
     "enroll_face": {"agent": "VisionAgent", "action": "enroll_face"},
     "recognize_face": {"agent": "VisionAgent", "action": "recognize_face"},
-    "TOGGLE_VISION": {"agent": "VisionAgent", "action": "toggle_vision"},
-    "START_VISION": {"agent": "VisionAgent", "action": "toggle_vision"},
-    "STOP_VISION": {"agent": "VisionAgent", "action": "toggle_vision"},
-    "ENROLL_FACE": {"agent": "VisionAgent", "action": "enroll_face"},
-    "RECOGNIZE_FACE": {"agent": "VisionAgent", "action": "recognize_face"},
 }
 
 
@@ -610,7 +549,7 @@ class Brain:
         
         # Response templates for meta-intents
         self._meta_responses: Dict[str, str] = {
-            "greeting": "Hello Sir. I'm FRIDAY, your virtual assistant. How can I help you?",
+            "greeting": "Hello Sir. I'm Vesper, your virtual assistant. How can I help you?",
             "help": "I can help you control your Mac. Try saying things like 'open Safari', 'set volume to 50', or 'take a screenshot'.",
             "status": "All systems are operational. I'm ready to assist.",
             "goodbye": "Goodbye! Have a great day.",
@@ -648,7 +587,7 @@ class Brain:
         """Get uptime in seconds."""
         if self._started_at is None:
             return 0.0
-        return (datetime.utcnow() - self._started_at).total_seconds()
+        return (datetime.now(timezone.utc) - self._started_at).total_seconds()
     
     # =========================================================================
     # Agent Registration
@@ -737,20 +676,15 @@ class Brain:
             )
             
             self._state = BrainState.RUNNING
-            self._started_at = datetime.utcnow()
+            self._started_at = datetime.now(timezone.utc)
             
             logger.info("Brain started successfully")
-            
-            # Announce readiness only when startup face-auth greeting is not enabled.
-            face_auth_enabled = bool(
-                self._config.get("security", {}).get("face_auth", {}).get("enabled", False)
-            )
-            if not face_auth_enabled:
-                await self._event_bus.publish(VoiceOutputEvent(
-                    text="FRIDAY online and ready to assist, Sir.",
-                    source="Brain",
-                ))
-            
+
+            await self._event_bus.publish(VoiceOutputEvent(
+                text="Vesper online and ready to assist, Sir.",
+                source="Brain",
+            ))
+
         except Exception as e:
             self._state = BrainState.ERROR
             logger.error(f"Failed to start brain: {e}", exc_info=True)
@@ -855,7 +789,6 @@ class Brain:
         system_config = self._config.get("system", {})
         memory_config = self._config.get("memory", {})
         vision_config = self._config.get("vision", {})
-        image_config = self._config.get("image", {})
         plugins_config = self._config.get("plugins", {})
         web_search_config = self._config.get("web_search", {})
         security_config = self._config.get("security", {})
@@ -871,16 +804,6 @@ class Brain:
             VoiceAgent(config={"voice": voice_config}),
         ]
 
-        if image_config.get("enabled", True):
-            if IMAGE_AVAILABLE:
-                agents.append(ImageAgent(config={"image": image_config}))
-                logger.info("ImageAgent registered (image generation enabled)")
-            else:
-                logger.warning(
-                    "Image generation is enabled but dependencies are missing. "
-                    "Install with: pip install diffusers transformers accelerate torch"
-                )
-        
         # Conditionally add VisionAgent if enabled and available
         if vision_config.get("enabled", False):
             if VISION_AVAILABLE:
@@ -921,7 +844,7 @@ class Brain:
             try:
                 logger.debug(f"Starting agent: {name}")
                 await info.agent.start()
-                info.started_at = datetime.utcnow()
+                info.started_at = datetime.now(timezone.utc)
             except Exception as e:
                 logger.error(f"Failed to start agent {name}: {e}")
                 raise RuntimeError(f"Agent {name} failed to start") from e
@@ -1035,7 +958,10 @@ class Brain:
         The Brain is a PLANNER - it emits ActionRequestEvents
         instead of executing tasks directly.
         """
-        routing = INTENT_ROUTING.get(intent)
+        # Normalize at the routing boundary so callers can pass either
+        # case; INTENT_ROUTING keys are lowercase-only.
+        normalized_intent = intent.lower()
+        routing = INTENT_ROUTING.get(normalized_intent)
 
         if not routing:
             # Unknown intent - ask for clarification
@@ -1051,7 +977,7 @@ class Brain:
 
         # Meta intents are handled by Brain (response only)
         if target_agent == "Brain":
-            await self._handle_meta_intent(intent, entities, correlation_id)
+            await self._handle_meta_intent(normalized_intent, entities, correlation_id)
             return
 
         # Check if this is a multi-step command
@@ -1497,7 +1423,7 @@ class Brain:
             
             info.restart_count += 1
             info.error_count = 0
-            info.started_at = datetime.utcnow()
+            info.started_at = datetime.now(timezone.utc)
             
             logger.info(f"Agent {agent_name} recovered successfully")
             
@@ -1543,7 +1469,7 @@ class Brain:
             Diagnostic report
         """
         report = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "brain_status": self.get_status(),
             "agent_health": {},
         }

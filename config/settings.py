@@ -20,11 +20,11 @@ DEFAULT_SETTINGS_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 
 
 class GeneralSettings(BaseModel):
-    assistant_name: str = "FRIDAY"
+    assistant_name: str = "VESPER"
     version: str = "0.1.0"
     log_level: str = "INFO"
     log_format: str = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
-    log_file: str = "logs/friday.log"
+    log_file: str = "logs/vesper.log"
     log_rotation: str = "daily"
     log_max_size_mb: int = 10
     log_backup_count: int = 7
@@ -74,7 +74,7 @@ class VoiceTTSSettings(BaseModel):
 
 
 class VoiceSettings(BaseModel):
-    wake_word: str = "friday"
+    wake_word: str = "vesper"
     wake_word_sensitivity: float = 0.5
     vosk: VoiceVoskSettings = Field(default_factory=VoiceVoskSettings)
     whisper: VoiceWhisperSettings = Field(default_factory=VoiceWhisperSettings)
@@ -147,7 +147,7 @@ class MemoryVectorStoreSettings(BaseModel):
     enabled: bool = False
     provider: str = "chroma"
     persist_directory: str = "data/chroma_memory"
-    collection_name: str = "friday_memory"
+    collection_name: str = "vesper_memory"
     embedding_model: Optional[str] = None
     chunk_size_tokens: int = 400
     chunk_overlap_tokens: int = 64
@@ -183,20 +183,10 @@ class SecurityRateLimitSettings(BaseModel):
     max_requests_per_minute: int = 60
 
 
-class SecurityFaceAuthSettings(BaseModel):
-    enabled: bool = True
-    camera_id: int = 0
-    threshold: float = 0.78
-    data_dir: str = "data/face_auth"
-    owner_name: str = "parrv luthra"
-    startup_delay_seconds: float = 1.2
-
-
 class SecuritySettings(BaseModel):
     sandbox_commands: bool = True
     max_command_length: int = 500
     rate_limit: SecurityRateLimitSettings = Field(default_factory=SecurityRateLimitSettings)
-    face_auth: SecurityFaceAuthSettings = Field(default_factory=SecurityFaceAuthSettings)
 
 
 class HUDSettings(BaseModel):
@@ -256,7 +246,7 @@ class VisionPrivacySettings(BaseModel):
 
 
 class VisionSettings(BaseModel):
-    enabled: bool = True
+    enabled: bool = False
     use_gemini: bool = False
     local_ocr_enabled: bool = True
     camera: VisionCameraSettings = Field(default_factory=VisionCameraSettings)
@@ -284,10 +274,6 @@ class WebSearchSettings(BaseModel):
     openrouter: WebSearchOpenRouterSettings = Field(default_factory=WebSearchOpenRouterSettings)
 
 
-class ImageSettings(BaseModel):
-    enabled: bool = True
-
-
 class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
@@ -310,7 +296,6 @@ class AppSettings(BaseSettings):
     ui: UISettings = Field(default_factory=UISettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
-    image: ImageSettings = Field(default_factory=ImageSettings)
 
     @classmethod
     def settings_customise_sources(

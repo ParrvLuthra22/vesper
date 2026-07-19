@@ -34,7 +34,7 @@ import logging
 import threading
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Awaitable, Callable, Dict, Deque, List, Optional, Set, Type, TypeVar
 from uuid import UUID, uuid4
@@ -247,7 +247,7 @@ class EventBus:
     def _record_event_history(self, event: BaseEvent, status: str, handler_name: str = "", error: str = "") -> None:
         """Record an event in the history for debugging/replay."""
         record = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "event_type": event.type,
             "event_id": str(event.event_id),
             "source": event.source,
@@ -422,7 +422,7 @@ class EventBus:
         handler_name = handler.__name__
         event_id = str(event.event_id)
         event_type = event.type
-        start_time = datetime.utcnow()
+        start_time = datetime.now(timezone.utc)
         
         # Record receipt in EventTracer
         if _tracer_available:
@@ -436,7 +436,7 @@ class EventBus:
             await handler(event)
             
             # Calculate processing time
-            processing_time_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            processing_time_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             self._metrics.record_delivery(processing_time_ms)
             
             # Log successful handling
@@ -459,7 +459,7 @@ class EventBus:
             self._record_event_history(event, "handled", handler_name)
             
         except Exception as e:
-            processing_time_ms = (datetime.utcnow() - start_time).total_seconds() * 1000
+            processing_time_ms = (datetime.now(timezone.utc) - start_time).total_seconds() * 1000
             self._metrics.record_failure(event_type)
             
             # Log the failure with full context

@@ -21,10 +21,6 @@ from agents.web_search_agent import WebSearchAgent
 from agents.rag_agent import RAGAgent
 from agents.tool_agent import ToolAgent
 from agents.plugin_agent import PluginAgent
-try:
-    from agents.image_agent import ImageAgent
-except Exception:  # pragma: no cover - optional dependency tree
-    ImageAgent = None  # type: ignore
 
 __all__ = [
     "BaseAgent",
@@ -40,5 +36,4 @@ __all__ = [
     "RAGAgent",
     "ToolAgent",
     "PluginAgent",
-    "ImageAgent",
 ]

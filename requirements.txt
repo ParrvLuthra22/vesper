@@ -49,10 +49,6 @@ langchain-core>=0.3.0        # LangChain core abstractions
 langchain-google-genai>=2.0.0  # Gemini integration for LangChain/LangGraph
 chromadb>=0.5.5              # Local persistent vector DB for semantic memory
 tavily-python>=0.5.0         # Web search API client
-diffusers>=0.30.0            # Stable Diffusion pipelines
-transformers>=4.46.0         # Transformer backbones/tokenizers for diffusion
-accelerate>=0.34.0           # Device placement/runtime optimization
-torch>=2.4.0                 # PyTorch backend (Apple Silicon supports MPS)
 # Optional: Enhanced TTS
 # ------------------------------------------------------------------------------
 # elevenlabs>=0.2.0       # ElevenLabs TTS (high quality voices)

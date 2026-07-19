@@ -12,7 +12,7 @@ import threading
 from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any, Deque, Dict, Optional
@@ -155,7 +155,7 @@ class EventTracer:
     def record_emit(self, event_type: str, event_id: str, source: str) -> None:
         self._append(
             _TraceRecord(
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 phase="emit",
                 event_type=event_type,
                 event_id=event_id,
@@ -166,7 +166,7 @@ class EventTracer:
     def record_receive(self, event_type: str, event_id: str, handler_name: str) -> None:
         self._append(
             _TraceRecord(
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 phase="receive",
                 event_type=event_type,
                 event_id=event_id,
@@ -184,7 +184,7 @@ class EventTracer:
     ) -> None:
         self._append(
             _TraceRecord(
-                timestamp=datetime.utcnow().isoformat(),
+                timestamp=datetime.now(timezone.utc).isoformat(),
                 phase="handle",
                 event_type=event_type,
                 event_id=event_id,

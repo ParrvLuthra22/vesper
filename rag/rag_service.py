@@ -16,7 +16,7 @@ import hashlib
 import math
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from utils.logger import get_logger
@@ -147,7 +147,7 @@ class ChromaRAGMemoryService:
         if not chunks:
             return 0
 
-        now_ts = datetime.utcnow().timestamp()
+        now_ts = datetime.now(timezone.utc).timestamp()
         base_meta = dict(metadata or {})
         base_meta.update(
             {
@@ -206,7 +206,7 @@ class ChromaRAGMemoryService:
         if not docs:
             return []
 
-        now = datetime.utcnow().timestamp()
+        now = datetime.now(timezone.utc).timestamp()
         candidates: List[RetrievedChunk] = []
 
         for doc, meta, dist in zip(docs, metas, dists):

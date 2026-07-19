@@ -78,7 +78,7 @@ class VoiceAgentState(Enum):
 class VoiceConfig:
     """Configuration for VoiceAgent loaded from settings.yaml."""
     # Wake word settings
-    wake_word: str = "friday"
+    wake_word: str = "vesper"
     wake_word_sensitivity: float = 0.5
     
     # Vosk settings
@@ -280,7 +280,7 @@ class VoiceAgent(BaseAgent):
         
         return VoiceConfig(
             # Wake word
-            wake_word=voice_config.get("wake_word", "friday"),
+            wake_word=voice_config.get("wake_word", "vesper"),
             wake_word_sensitivity=voice_config.get("wake_word_sensitivity", 0.5),
             
             # Vosk
@@ -966,7 +966,6 @@ class VoiceAgent(BaseAgent):
         lowered = cleaned.lower()
         if (
             "verification successful" in lowered
-            or lowered.startswith("friday starting verifying for user")
             or lowered.startswith("hello sir")
             or lowered.endswith(" sir")
             or lowered.endswith(" sir.")

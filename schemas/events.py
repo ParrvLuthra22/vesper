@@ -19,7 +19,7 @@ TODO: Add event compression for large payloads
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -83,7 +83,7 @@ class BaseEvent:
     """
     
     event_id: UUID = field(default_factory=uuid4)
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     priority: EventPriority = field(default=EventPriority.NORMAL)
     source: str = field(default="unknown")
     correlation_id: Optional[UUID] = field(default=None)
@@ -135,15 +135,6 @@ class BaseEvent:
         """Serialize the event to a JSON string."""
         import json
         return json.dumps(self.to_dict(), default=str)
-    
-    def with_correlation(self, correlation_id: UUID) -> "BaseEvent":
-        """
-        Create a new event with the specified correlation ID.
-        
-        Note: This returns a new instance since events are frozen.
-        """
-        # Subclasses should override this for proper typing
-        raise NotImplementedError("Subclasses must implement with_correlation")
 
 
 # =============================================================================
@@ -200,14 +191,14 @@ class VoiceOutputEvent(BaseEvent):
 @dataclass(frozen=True)
 class WakeWordDetectedEvent(BaseEvent):
     """
-    Event emitted when wake word (e.g., "Hey FRIDAY") is detected.
-    
+    Event emitted when wake word (e.g., "Hey Vesper") is detected.
+
     Attributes:
         wake_word: The detected wake word
         confidence: Detection confidence
     """
-    
-    wake_word: str = "friday"
+
+    wake_word: str = "vesper"
     confidence: float = 0.0
     source: str = field(default="voice_agent")
 
@@ -702,18 +693,8 @@ class ScreenshotEvent(BaseEvent):
     """
 
     bbox: Optional[tuple[int, int, int, int]] = None
-    save_path: str = "/tmp/friday_screen.png"
+    save_path: str = "/tmp/vesper_screen.png"
     source: str = field(default="orchestrator")
-
-
-@dataclass(frozen=True)
-class ImageGenerationEvent(BaseEvent):
-    """
-    Event to request generation of an image from a prompt.
-    """
-
-    prompt: str = ""
-    source: str = field(default="VisionAgent")
 
 
 @dataclass(frozen=True)
@@ -948,19 +929,6 @@ class HUDSearchResultsEvent(BaseEvent):
 
 
 @dataclass(frozen=True)
-class HUDImageEvent(BaseEvent):
-    """
-    Event for HUD image panel updates.
-
-    Attributes:
-        image_path: Filesystem path to generated image.
-    """
-
-    image_path: str = ""
-    source: str = field(default="ImageAgent")
-
-
-@dataclass(frozen=True)
 class HUDGraphStateEvent(BaseEvent):
     """
     Event for live reasoning graph progress in HUD.
@@ -1004,7 +972,6 @@ EVENT_REGISTRY: Dict[str, type] = {
     "VisionCommandEvent": VisionCommandEvent,
     "VisionCommandResultEvent": VisionCommandResultEvent,
     "ScreenshotEvent": ScreenshotEvent,
-    "ImageGenerationEvent": ImageGenerationEvent,
     "PresenceChangedEvent": PresenceChangedEvent,
     # Memory events
     "MemoryStoreEvent": MemoryStoreEvent,
@@ -1021,7 +988,6 @@ EVENT_REGISTRY: Dict[str, type] = {
     "ResponseGeneratedEvent": ResponseGeneratedEvent,
     "HUDUpdateEvent": HUDUpdateEvent,
     "HUDSearchResultsEvent": HUDSearchResultsEvent,
-    "HUDImageEvent": HUDImageEvent,
     "HUDGraphStateEvent": HUDGraphStateEvent,
     # Orchestrator events
     "ActionRequestEvent": ActionRequestEvent,

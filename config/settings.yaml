@@ -15,7 +15,7 @@
 # -----------------------------------------------------------------------------
 general:
   # Assistant name and personality
-  assistant_name: "FRIDAY"
+  assistant_name: "VESPER"
   version: "0.1.0"
   
   # -------------------------------------------------------------------------
@@ -38,7 +38,7 @@ general:
   
   # Log file path (relative to project root)
   # Set to null/empty to disable file logging
-  log_file: "logs/friday.log"
+  log_file: "logs/vesper.log"
   
   # Log rotation strategy: daily, size, none
   log_rotation: "daily"
@@ -64,7 +64,7 @@ general:
   # Structured Logging (Machine-Readable)
   # -------------------------------------------------------------------------
   # Enable JSON-formatted logs for file output
-  # JSON logs are written to logs/friday.json.log alongside human-readable logs
+  # JSON logs are written to logs/vesper.json.log alongside human-readable logs
   # Useful for log aggregation (ELK, Loki, Splunk, CloudWatch)
   json_logs: false
   
@@ -81,7 +81,7 @@ general:
 # -----------------------------------------------------------------------------
 voice:
   # Wake word settings
-  wake_word: "friday"
+  wake_word: "vesper"
   wake_word_sensitivity: 0.5  # 0.0 to 1.0
   
   # Vosk settings for wake word detection (lightweight, always-on)
@@ -278,7 +278,7 @@ memory:
     enabled: true
     provider: "chroma"  # 'chroma', 'pinecone', 'weaviate'
     persist_directory: "data/chroma_memory"
-    collection_name: "friday_memory"
+    collection_name: "vesper_memory"
     embedding_model: null  # Optional: e.g. sentence-transformers/all-MiniLM-L6-v2
     chunk_size_tokens: 400
     chunk_overlap_tokens: 64
@@ -343,13 +343,6 @@ security:
   rate_limit:
     enabled: true
     max_requests_per_minute: 60
-  face_auth:
-    enabled: true
-    camera_id: 0
-    threshold: 0.78
-    data_dir: "data/face_auth"
-    owner_name: "parrv luthra"
-    startup_delay_seconds: 1.2
 
 # -----------------------------------------------------------------------------
 # UI / HUD Configuration
@@ -383,7 +376,8 @@ ui:
 vision:
   # Enable/disable the VisionAgent
   # Set to true to enable camera-based gesture and face recognition
-  enabled: true
+  # Disabled by default while vision (screen OCR) is being reworked for v2.
+  enabled: false
   # Disable cloud Gemini vision; use local OCR fallback by default.
   use_gemini: false
   local_ocr_enabled: true
@@ -521,10 +515,3 @@ web_search:
     api_key: null
     model: "x-ai/grok-3-mini-beta"
     endpoint: "https://openrouter.ai/api/v1/chat/completions"
-
-
-# -----------------------------------------------------------------------------
-# Image Generation Configuration
-# -----------------------------------------------------------------------------
-image:
-  enabled: true
