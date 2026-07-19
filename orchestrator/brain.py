@@ -486,8 +486,9 @@ class Brain:
 
             logger.info("Brain started successfully")
 
+            greeting = await self._planner.greet()
             await self._event_bus.publish(VoiceOutputEvent(
-                text="Vesper online and ready to assist, Sir.",
+                text=greeting.text,
                 source="Brain",
             ))
 
@@ -698,16 +699,6 @@ class Brain:
     async def _handle_voice_input(self, event: VoiceInputEvent) -> None:
         """Handle voice input event (USER_SPOKE) by feeding the Planner."""
         logger.info(f"User spoke: '{event.text}'")
-
-        self._context.add_turn(user_input=event.text)
-        await self._event_bus.emit(ContextUpdatedEvent(
-            context_type="turn",
-            context_key="user_input",
-            context_value=event.text,
-            turn_number=self._context.turn_count,
-            source="Brain",
-        ))
-
         await self.handle_user_text(event.text, correlation_id=event.event_id)
 
     async def handle_user_text(self, text: str, correlation_id: Optional[UUID] = None) -> PlannerResult:
@@ -717,13 +708,23 @@ class Brain:
 
         This is the single entry point shared by every input surface —
         VoiceInputEvent today, and any future typed-input path (CLI, HUD
-        text box) — so there is exactly one place that decides what to do
-        with user text: the Planner.
+        text box) — so there is exactly one place that reads and writes
+        ConversationContext: here. Recent context is snapshotted BEFORE
+        this turn is added, so the in-progress turn (with no response yet)
+        never leaks into its own history as a duplicate user message.
         """
-        result = await self._planner.run(
-            user_text=text,
-            recent_context=self._context.get_recent_context(num_turns=self._brain_config.max_context_turns),
-        )
+        recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
+
+        self._context.add_turn(user_input=text)
+        await self._event_bus.emit(ContextUpdatedEvent(
+            context_type="turn",
+            context_key="user_input",
+            context_value=text,
+            turn_number=self._context.turn_count,
+            source="Brain",
+        ))
+
+        result = await self._planner.run(user_text=text, recent_context=recent_context)
 
         self._context.update_last_response(result.text, action="planner")
 

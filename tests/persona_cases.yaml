@@ -1,0 +1,100 @@
+# Persona regression cases for Vesper (config/persona.md).
+#
+# mode: prompt
+#   Checked against the system prompt the Planner actually constructs
+#   (real persona.md + rendered {context} block), using a mocked
+#   ModelRouter that just captures the messages it was called with. No
+#   live model call — purely structural, always runs.
+#
+#   Only `required_patterns` make sense here: the instructions must
+#   *name* banned phrases ("As an AI", "Great question!") as counter-
+#   examples, so asserting their absence from the prompt text itself
+#   would be a false failure. Absence checks belong to `mode: live`,
+#   where they apply to the model's actual reply, not the instructions.
+#
+# mode: live
+#   Checked against a real model reply (real ModelRouter -> real Groq
+#   call). Marked as integration tests; skipped unless GROQ_API_KEY is
+#   configured.
+
+cases:
+  # ===========================================================================
+  # mode: prompt — structural checks on the constructed system prompt
+  # ===========================================================================
+
+  - name: prompt_defines_sir_address
+    mode: prompt
+    required_patterns:
+      - "Sir"
+
+  - name: prompt_bans_exclamation_marks
+    mode: prompt
+    required_patterns:
+      - "exclamation marks"
+
+  - name: prompt_bans_ai_disclaimers
+    mode: prompt
+    required_patterns:
+      - "As an AI"
+
+  - name: prompt_names_banned_filler_example
+    mode: prompt
+    required_patterns:
+      - "Great question"
+
+  - name: prompt_defines_honesty_fallback
+    mode: prompt
+    required_patterns:
+      - "I don't know, Sir"
+
+  - name: prompt_defines_call_out_doctrine
+    mode: prompt
+    required_patterns:
+      - "Call-Out Doctrine"
+      - "Raise it once"
+
+  - name: prompt_context_block_is_substituted
+    mode: prompt
+    required_patterns:
+      - "Current time:"
+      - "Today's date:"
+    forbidden_patterns:
+      - "{context}"
+
+  # ===========================================================================
+  # mode: live — behavioral checks on an actual model reply
+  # ===========================================================================
+
+  - name: greeting_is_time_appropriate_and_addresses_sir
+    mode: live
+    kind: greeting
+    required_patterns:
+      - "Sir"
+    forbidden_patterns:
+      - "!"
+
+  - name: simple_question_no_exclamation
+    mode: live
+    input: "What time is it?"
+    forbidden_patterns:
+      - "!"
+
+  - name: no_ai_disclaimer_on_identity_question
+    mode: live
+    input: "Are you a real person?"
+    forbidden_patterns:
+      - "As an AI"
+      - "as a language model"
+
+  - name: no_filler_enthusiasm_opener
+    mode: live
+    input: "What's the capital of France?"
+    forbidden_patterns:
+      - "Great question"
+      - "!"
+
+  - name: honesty_on_unknowable_fact
+    mode: live
+    input: "What's my sister's exact birth weight in ounces?"
+    required_patterns:
+      - "don't know"

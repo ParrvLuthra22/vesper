@@ -26,6 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -55,6 +56,9 @@ MAX_ITERATIONS_MESSAGE = (
     "Sir, I've gone back and forth on that longer than I should have without "
     "landing on an answer. Could you rephrase or simplify the request?"
 )
+
+CONTEXT_PLACEHOLDER = "{context}"
+GREETING_INSTRUCTION = "(Session start. Greet the user now, per your greeting instructions.)"
 
 
 def _load_persona(path: Path) -> str:
@@ -101,9 +105,12 @@ class Planner:
         user_text: str,
         recent_context: Optional[List[Dict[str, Any]]] = None,
         purpose: str = "planning",
+        active_app: Optional[str] = None,
+        observations: Optional[List[str]] = None,
     ) -> PlannerResult:
         """Run the tool-calling loop for one piece of user text."""
-        messages: List[Dict[str, Any]] = [{"role": "system", "content": self._persona}]
+        system_prompt = self._render_system_prompt(active_app=active_app, observations=observations)
+        messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         messages.extend(self._context_to_messages(recent_context or []))
         messages.append({"role": "user", "content": user_text})
 
@@ -128,6 +135,60 @@ class Planner:
 
         await self._emit_plan_trace(user_text, trace)
         return PlannerResult(text=MAX_ITERATIONS_MESSAGE, aborted=True, tool_trace=trace)
+
+    async def greet(
+        self,
+        active_app: Optional[str] = None,
+        observations: Optional[List[str]] = None,
+        purpose: str = "planning",
+    ) -> PlannerResult:
+        """
+        Produce the session-start greeting: a time-appropriate salutation,
+        plus one observation if the context has something worth mentioning.
+
+        This is a single plain completion (no tool calls, no conversation
+        history) — the greeting behavior itself lives in the persona, and
+        the current time/date/observations arrive via the context block.
+        """
+        system_prompt = self._render_system_prompt(active_app=active_app, observations=observations)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": GREETING_INSTRUCTION},
+        ]
+
+        response = await self._router.complete(messages=messages, purpose=purpose)
+        if isinstance(response, RouterError):
+            return PlannerResult(text=response.user_message, aborted=True)
+        return PlannerResult(text=response.text)
+
+    def _render_system_prompt(
+        self,
+        active_app: Optional[str] = None,
+        observations: Optional[List[str]] = None,
+    ) -> str:
+        context_block = self._render_context_block(active_app=active_app, observations=observations)
+        if CONTEXT_PLACEHOLDER in self._persona:
+            return self._persona.replace(CONTEXT_PLACEHOLDER, context_block)
+        return f"{self._persona}\n\n{context_block}"
+
+    @staticmethod
+    def _render_context_block(
+        active_app: Optional[str] = None,
+        observations: Optional[List[str]] = None,
+    ) -> str:
+        now = datetime.now()
+        lines = [
+            f"Current time: {now.strftime('%I:%M %p')}",
+            f"Today's date: {now.strftime('%A, %B %d, %Y')}",
+        ]
+        if active_app:
+            lines.append(f"Active app: {active_app}")
+        if observations:
+            lines.append("Pending observations:")
+            lines.extend(f"  - {obs}" for obs in observations)
+        else:
+            lines.append("Pending observations: none")
+        return "\n".join(lines)
 
     async def _execute_tool_call(self, tool_call: ToolCall, trace: List[str]) -> str:
         tool_spec = self._registry.get(tool_call.name)
