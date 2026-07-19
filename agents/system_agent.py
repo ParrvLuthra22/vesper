@@ -26,11 +26,13 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agents.base_agent import AgentCapability, BaseAgent
 from bus.event_bus import EventBus
 from schemas.events import (
+    ActionRequestEvent,
     ActionResultEvent,
     AgentErrorEvent,
     ApplicationLaunchedEvent,
@@ -45,6 +47,10 @@ from schemas.events import (
 # =============================================================================
 # DATA CLASSES & ENUMS
 # =============================================================================
+
+# Same convention as agents.vision_agent.SCREENSHOT_PATH.
+SCREENSHOT_PATH = Path("/tmp/vesper_screen.png")
+
 
 class CommandStatus(Enum):
     """Status of a system command execution."""
@@ -868,6 +874,12 @@ class SystemAgent(BaseAgent):
         "SEARCH_WEB": "_handle_search_web",
         "open_url": "_handle_open_url",
         "OPEN_URL": "_handle_open_url",
+
+        # Notifications & screen capture
+        "notify": "_handle_notify",
+        "NOTIFY": "_handle_notify",
+        "screenshot": "_handle_screenshot",
+        "SCREENSHOT": "_handle_screenshot",
         
         # Social
         "greeting": "_handle_greeting",
@@ -939,7 +951,8 @@ class SystemAgent(BaseAgent):
         if bool(self._get_config("system.listen_intent_events", False)):
             self._subscribe(IntentRecognizedEvent, self._handle_intent)
         self._subscribe(SystemCommandEvent, self._handle_command)
-        
+        self._subscribe(ActionRequestEvent, self._handle_action_request)
+
         self._logger.info("System agent initialized")
     
     async def _teardown(self) -> None:
@@ -1023,7 +1036,62 @@ class SystemAgent(BaseAgent):
                         intent=command,
                         execution_time=execution_time
                     )
-    
+
+    async def _handle_action_request(self, event: ActionRequestEvent) -> None:
+        """
+        Handle a Planner tool-call routed over the bus.
+
+        Looks up event.action in INTENT_HANDLERS (the same table
+        _handle_intent/_handle_command use), runs it, and emits an
+        ActionResultEvent carrying the same correlation_id so the Planner's
+        waiting future resolves.
+        """
+        if event.target_agent != self.name:
+            return
+
+        start_time = time.perf_counter()
+        handler_name = self.INTENT_HANDLERS.get(event.action)
+        handler = getattr(self, handler_name, None) if handler_name else None
+
+        if not handler or not callable(handler):
+            await self._emit_action_result(
+                event, success=False, error=f"Unknown action '{event.action}'"
+            )
+            return
+
+        try:
+            result = handler(event.parameters, "")
+            execution_time_ms = (time.perf_counter() - start_time) * 1000
+            await self._emit_action_result(
+                event, success=True, result=result, execution_time_ms=execution_time_ms
+            )
+        except Exception as exc:
+            self._logger.error(f"Action error for {event.action}: {exc}")
+            execution_time_ms = (time.perf_counter() - start_time) * 1000
+            await self._emit_action_result(
+                event, success=False, error=str(exc), execution_time_ms=execution_time_ms
+            )
+
+    async def _emit_action_result(
+        self,
+        event: ActionRequestEvent,
+        success: bool,
+        result: Any = None,
+        error: Optional[str] = None,
+        execution_time_ms: float = 0.0,
+    ) -> None:
+        await self.event_bus.emit(ActionResultEvent(
+            source=self.name,
+            action=event.action,
+            success=success,
+            result=result,
+            error=error or "",
+            execution_time_ms=execution_time_ms,
+            plan_id=event.plan_id,
+            step_number=event.step_number,
+            correlation_id=event.correlation_id,
+        ))
+
     async def _emit_result(
         self,
         success: bool,
@@ -1416,12 +1484,34 @@ class SystemAgent(BaseAgent):
             url = f"https://{url}"
         
         success, stdout, stderr = self.executor.run_shell(f'open "{url}"')
-        
+
         if success:
             return f"Opening {url}"
         else:
             return f"I couldn't open that URL. {stderr}"
-    
+
+    def _handle_notify(self, entities: Dict, raw_text: str) -> str:
+        """Show a system notification."""
+        title = entities.get("title", "Vesper")
+        message = entities.get("message", "")
+
+        if not message:
+            return "I didn't catch what the notification should say"
+
+        success, msg = self.executor.show_notification(title=title, message=message)
+        return msg
+
+    def _handle_screenshot(self, entities: Dict, raw_text: str) -> str:
+        """Capture a screenshot of the current screen via macOS's screencapture CLI."""
+        success, stdout, stderr = self.executor.run_shell(
+            f'screencapture -x "{SCREENSHOT_PATH}"'
+        )
+
+        if success and SCREENSHOT_PATH.exists():
+            return f"Screenshot saved to {SCREENSHOT_PATH}"
+        else:
+            return f"I couldn't take a screenshot. {stderr}"
+
     def _handle_greeting(self, entities: Dict, raw_text: str) -> str:
         """Respond to greeting."""
         hour = datetime.now().hour

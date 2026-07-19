@@ -27,7 +27,13 @@ except Exception:  # pragma: no cover - optional dependency import
     TAVILY_AVAILABLE = False
 
 from agents.base_agent import AgentCapability, BaseAgent
-from schemas.events import HUDSearchResultsEvent, IntentRecognizedEvent, VoiceOutputEvent
+from schemas.events import (
+    ActionRequestEvent,
+    ActionResultEvent,
+    HUDSearchResultsEvent,
+    IntentRecognizedEvent,
+    VoiceOutputEvent,
+)
 from utils.applescript import run_applescript
 from utils.api_keys import get_gemini_api_key, get_openrouter_api_key
 
@@ -84,6 +90,7 @@ class WebSearchAgent(BaseAgent):
 
     async def _setup(self) -> None:
         self._subscribe(IntentRecognizedEvent, self._handle_intent)
+        self._subscribe(ActionRequestEvent, self._handle_action_request)
         self._initialize_clients()
 
     async def _teardown(self) -> None:
@@ -330,6 +337,63 @@ class WebSearchAgent(BaseAgent):
         lower = text.lower()
         if ("open" in lower or "show me" in lower) and sources and sources[0].get("url"):
             await self._open_in_safari(sources[0]["url"], event)
+
+    async def _handle_action_request(self, event: ActionRequestEvent) -> None:
+        """
+        Handle a Planner tool-call routed over the bus (the search_web tool).
+
+        Runs the same Tavily+Gemini/OpenRouter search-and-summarize pipeline
+        as _handle_intent, but takes an explicit query parameter and answers
+        with an ActionResultEvent instead of only speaking the result.
+        """
+        if event.target_agent != self.name or event.action != "search_web":
+            return
+
+        query = str(event.parameters.get("query", "")).strip()
+        if not query:
+            await self._emit_action_result(event, success=False, error="Missing 'query' parameter")
+            return
+
+        if not self._has_any_llm():
+            await self._emit_action_result(
+                event, success=False, error="Web search is not configured yet"
+            )
+            return
+
+        try:
+            if self._tavily_client is None:
+                summary = await self._answer_without_tavily(query)
+            else:
+                results = await self._search_tavily(query)
+                if not results.get("results"):
+                    await self._emit_action_result(
+                        event, success=False, error=f"No results found for '{query}'"
+                    )
+                    return
+                summary = await self._summarize(query, results)
+        except Exception as exc:
+            await self._emit_action_result(event, success=False, error=str(exc))
+            return
+
+        await self._emit_action_result(event, success=True, result=summary)
+
+    async def _emit_action_result(
+        self,
+        event: ActionRequestEvent,
+        success: bool,
+        result: Any = None,
+        error: Optional[str] = None,
+    ) -> None:
+        await self._emit(ActionResultEvent(
+            source=self._name,
+            action=event.action,
+            success=success,
+            result=result,
+            error=error or "",
+            plan_id=event.plan_id,
+            step_number=event.step_number,
+            correlation_id=event.correlation_id,
+        ))
 
     async def _extract_query(self, text: str) -> str:
         prompt = f"Extract the search query from: '{text}'. Return only the query string."

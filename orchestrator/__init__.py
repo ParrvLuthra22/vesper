@@ -1,7 +1,9 @@
 """
-JARVIS Virtual Assistant - Orchestrator Package.
+VESPER Virtual Assistant - Orchestrator Package.
 
-This package contains the Brain orchestrator that coordinates all agents.
+This package contains the Brain orchestrator that coordinates all agents
+and the Planner (LLM tool-calling loop) that decides what to do with user
+text.
 """
 
 __all__ = [
@@ -13,7 +15,7 @@ __all__ = [
 
 def __getattr__(name: str):
     if name in {"Brain", "BrainState", "create_brain"}:
-        from orchestrator.langgraph_brain import Brain, BrainState, create_brain
+        from orchestrator.brain import Brain, BrainState, create_brain
 
         mapping = {
             "Brain": Brain,
