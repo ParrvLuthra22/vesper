@@ -397,6 +397,7 @@ class MCPGmailServerSettings(BaseModel):
             "get_message": "safe",
             "search": "safe",
             "summarize_thread": "safe",
+            "unread_count": "safe",
             "draft_reply": "confirm",
             "archive": "confirm",
             "mark_read": "confirm",

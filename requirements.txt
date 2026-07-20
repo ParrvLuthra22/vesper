@@ -118,3 +118,8 @@ pytest-cov>=4.1.0
 # ------------------------------------------------------------------------------
 colorama>=0.4.6          # Cross-platform colored terminal output
 certifi>=2024.8.30       # Reliable CA bundle for TLS API calls (Gemini REST fallback)
+
+# ------------------------------------------------------------------------------
+# CLI (cli/) - rich REPL, Vesper's terminal presence until the HUD ships
+# ------------------------------------------------------------------------------
+rich>=13.7.0             # Styled terminal output, tables, live REPL rendering

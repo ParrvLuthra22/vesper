@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from bus.event_bus import EventBus, get_event_bus
@@ -342,6 +342,7 @@ class Brain:
         self,
         config: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
+        enable_voice_agent: bool = True,
     ):
         """
         Initialize the Brain.
@@ -349,9 +350,14 @@ class Brain:
         Args:
             config: Configuration dictionary (from settings.yaml)
             event_bus: Event bus instance (defaults to global)
+            enable_voice_agent: Whether to register VoiceAgent (microphone
+                capture + TTS). The CLI (cli/app.py) runs with this False —
+                same Brain, no voice I/O; text goes in/out via the terminal
+                instead of VoiceInputEvent/VoiceOutputEvent's audio path.
         """
         self._config = config or {}
         self._event_bus = event_bus or get_event_bus()
+        self._enable_voice_agent = enable_voice_agent
         self._state = BrainState.INITIALIZING
 
         # Parse configuration
@@ -489,6 +495,27 @@ class Brain:
         """Get an agent by name."""
         info = self._agents.get(name)
         return info.agent if info else None
+
+    def get_agents_status(self) -> List[Dict[str, Any]]:
+        """Snapshot of every registered agent's health — for a /status-style display."""
+        statuses: List[Dict[str, Any]] = []
+        for name, info in self._agents.items():
+            try:
+                healthy = bool(info.agent.is_healthy())
+            except Exception:
+                healthy = False
+            statuses.append({
+                "name": name,
+                "healthy": healthy,
+                "started_at": info.started_at,
+                "error_count": info.error_count,
+                "restart_count": info.restart_count,
+            })
+        return statuses
+
+    def get_router(self) -> ModelRouter:
+        """The Planner's ModelRouter — for provider-health displays (e.g. /status)."""
+        return self._router
 
     # =========================================================================
     # Lifecycle Management
@@ -742,8 +769,12 @@ class Brain:
             MacOSControlAgent(config={"system": system_config}),
             WebSearchAgent(config={"web_search": web_search_config, "system": system_config}),
             PluginAgent(config={"plugins": plugins_config}),
-            VoiceAgent(config={"voice": voice_config}),
         ]
+
+        if self._enable_voice_agent:
+            agents.append(VoiceAgent(config={"voice": voice_config}))
+        else:
+            logger.debug("VoiceAgent not registered (enable_voice_agent=False)")
 
         # Conditionally add VisionAgent if enabled and available
         if vision_config.get("enabled", False):
@@ -844,7 +875,12 @@ class Brain:
         logger.info(f"Observation: kind={event.kind} detail={event.detail!r}")
         self._context.add_observation(kind=event.kind, detail=event.detail, observation_id=event.observation_id)
 
-    async def handle_user_text(self, text: str, correlation_id: Optional[UUID] = None) -> PlannerResult:
+    async def handle_user_text(
+        self,
+        text: str,
+        correlation_id: Optional[UUID] = None,
+        on_token: Optional[Callable[[str], None]] = None,
+    ) -> PlannerResult:
         """
         Run one piece of user text (voice or typed) through the Planner and
         speak the result.
@@ -860,6 +896,11 @@ class Brain:
         the Planner's {context} block and then consumed, win or lose — an
         observation is only ever offered once, regardless of whether the
         model chose to voice it.
+
+        `on_token`, if given, is forwarded to the Planner for live text
+        streaming (see Planner.run) — callers that use it should treat
+        the still-emitted VoiceOutputEvent as informational only, since
+        they've already rendered the reply as it streamed in.
         """
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
@@ -877,6 +918,7 @@ class Brain:
             user_text=text,
             recent_context=recent_context,
             observations=pending_observations,
+            on_token=on_token,
         )
         self._context.consume_observations()
 

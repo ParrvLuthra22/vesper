@@ -29,17 +29,23 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from bus.event_bus import EventBus, get_event_bus
 from guardian.gate import Guardian, VerdictType
 from llm.router import ModelRouter
 from llm.types import LLMResponse, RouterError, ToolCall
-from schemas.events import ActionRequestEvent, ActionResultEvent, PlanCreatedEvent
+from schemas.events import (
+    ActionRequestEvent,
+    ActionResultEvent,
+    PlanCreatedEvent,
+    ToolCallFinishedEvent,
+    ToolCallStartedEvent,
+)
 from tasks.queue import TaskQueue
 from tools.registry import ToolRegistry, ToolSpec, get_registry
-from tracing.tracer import IterationTrace, Tracer, TurnTrace
+from tracing.tracer import IterationTrace, ToolTrace, Tracer, TurnTrace
 from utils.logger import get_logger
 
 # Importing for its registration side effect: populates the default
@@ -118,8 +124,16 @@ class Planner:
         purpose: str = "planning",
         active_app: Optional[str] = None,
         observations: Optional[List[str]] = None,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> PlannerResult:
-        """Run the tool-calling loop for one piece of user text."""
+        """
+        Run the tool-calling loop for one piece of user text.
+
+        `on_token`, if given, is forwarded to the router on every
+        iteration so a caller (e.g. the CLI) can render Vesper's final
+        text reply as it streams in — iterations that end up calling a
+        tool instead simply have little or no text to stream.
+        """
         turn_start = time.monotonic()
         turn_trace = self._tracer.start_turn(user_text)
         turn_trace.mark_observations_injected(observations or [])
@@ -134,7 +148,9 @@ class Planner:
 
         for iteration in range(self._max_iterations):
             iteration_trace = turn_trace.start_iteration(iteration, list(messages), purpose)
-            response = await self._router.complete(messages=messages, tools=tools_schema, purpose=purpose)
+            response = await self._router.complete(
+                messages=messages, tools=tools_schema, purpose=purpose, on_token=on_token
+            )
             iteration_trace.end(response)
 
             if isinstance(response, RouterError):
@@ -226,11 +242,18 @@ class Planner:
         tool_trace = iteration_trace.start_tool(tool_call.name, tool_call.arguments)
         start = time.monotonic()
 
+        # Live signal for a terminal/HUD to render immediately — fires
+        # before the Guardian check so a confirm-tier call shows up right
+        # away rather than only after the user approves it.
+        await self._event_bus.emit(
+            ToolCallStartedEvent(tool_name=tool_call.name, arguments=tool_call.arguments, source="Planner")
+        )
+
         if tool_spec is None or not tool_spec.enabled:
             trace.append(f"{tool_call.name}:unknown_tool")
             error = f"no such tool '{tool_call.name}'"
-            tool_trace.end(
-                guardian_verdict="n/a", result=f"Error: {error}",
+            await self._finish_tool_call(
+                tool_trace, tool_call.name, guardian_verdict="n/a", result=f"Error: {error}",
                 latency_ms=_elapsed_ms(start), success=False, error=error,
             )
             return f"Error: {error}"
@@ -242,8 +265,8 @@ class Planner:
         if verdict.outcome != VerdictType.ALLOW:
             trace.append(f"{tool_call.name}:denied")
             result_text = f"Denied: {verdict.reason}"
-            tool_trace.end(
-                guardian_verdict=verdict.outcome.value, result=result_text,
+            await self._finish_tool_call(
+                tool_trace, tool_call.name, guardian_verdict=verdict.outcome.value, result=result_text,
                 latency_ms=_elapsed_ms(start), success=False,
             )
             return result_text
@@ -251,26 +274,50 @@ class Planner:
         try:
             result_text = await self._run_tool(tool_spec, tool_call.arguments)
             trace.append(f"{tool_call.name}:ok")
-            tool_trace.end(
-                guardian_verdict=verdict.outcome.value, result=result_text,
+            await self._finish_tool_call(
+                tool_trace, tool_call.name, guardian_verdict=verdict.outcome.value, result=result_text,
                 latency_ms=_elapsed_ms(start), success=True,
             )
             return result_text
         except asyncio.TimeoutError:
             trace.append(f"{tool_call.name}:timeout")
             error = f"'{tool_call.name}' timed out after {self._tool_timeout_seconds:.0f}s"
-            tool_trace.end(
-                guardian_verdict=verdict.outcome.value, result=f"Error: {error}",
+            await self._finish_tool_call(
+                tool_trace, tool_call.name, guardian_verdict=verdict.outcome.value, result=f"Error: {error}",
                 latency_ms=_elapsed_ms(start), success=False, error=error,
             )
             return f"Error: {error}"
         except Exception as exc:
             trace.append(f"{tool_call.name}:error")
-            tool_trace.end(
-                guardian_verdict=verdict.outcome.value, result=f"Error: {exc}",
+            await self._finish_tool_call(
+                tool_trace, tool_call.name, guardian_verdict=verdict.outcome.value, result=f"Error: {exc}",
                 latency_ms=_elapsed_ms(start), success=False, error=str(exc),
             )
             return f"Error: {exc}"
+
+    async def _finish_tool_call(
+        self,
+        tool_trace: ToolTrace,
+        tool_name: str,
+        guardian_verdict: str,
+        result: str,
+        latency_ms: float,
+        success: bool,
+        error: Optional[str] = None,
+    ) -> None:
+        """End the tracer's tool_execution run and emit the matching live
+        ToolCallFinishedEvent — the same data, one for later inspection
+        (/trace), one for live display (CLI/HUD)."""
+        tool_trace.end(
+            guardian_verdict=guardian_verdict, result=result,
+            latency_ms=latency_ms, success=success, error=error,
+        )
+        await self._event_bus.emit(
+            ToolCallFinishedEvent(
+                tool_name=tool_name, success=success, guardian_verdict=guardian_verdict,
+                result=result, error=error, latency_ms=latency_ms, source="Planner",
+            )
+        )
 
     async def _run_tool(self, tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
         if tool_spec.slow:

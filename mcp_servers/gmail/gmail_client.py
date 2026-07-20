@@ -238,33 +238,51 @@ def _unread_count_sync() -> int:
 # Public async API
 # =============================================================================
 
+# googleapiclient/httplib2 share one underlying HTTP/credentials object
+# (see _get_service_sync's module-level cache) that is not safe for truly
+# concurrent requests from multiple threads — e.g. InboxSensor's poll
+# landing at the same moment as a user-initiated call reliably produced
+# "SSL record layer failure". Serializing every call through one lock
+# costs nothing observable (individual Gmail calls are already sequential
+# from the caller's point of view) and removes the race entirely.
+_api_lock = asyncio.Lock()
+
+
 async def list_unread(max_n: int = 10) -> List[Dict[str, Any]]:
-    return await asyncio.to_thread(_list_unread_sync, max_n)
+    async with _api_lock:
+        return await asyncio.to_thread(_list_unread_sync, max_n)
 
 
 async def get_message(message_id: str) -> Dict[str, Any]:
-    return await asyncio.to_thread(_get_message_sync, message_id)
+    async with _api_lock:
+        return await asyncio.to_thread(_get_message_sync, message_id)
 
 
 async def thread_text(thread_id: str) -> str:
-    return await asyncio.to_thread(_thread_text_sync, thread_id)
+    async with _api_lock:
+        return await asyncio.to_thread(_thread_text_sync, thread_id)
 
 
 async def search(query: str, max_n: int = 20) -> List[Dict[str, Any]]:
-    return await asyncio.to_thread(_search_sync, query, max_n)
+    async with _api_lock:
+        return await asyncio.to_thread(_search_sync, query, max_n)
 
 
 async def draft_reply(message_id: str, instruction: str) -> str:
-    return await asyncio.to_thread(_draft_reply_sync, message_id, instruction)
+    async with _api_lock:
+        return await asyncio.to_thread(_draft_reply_sync, message_id, instruction)
 
 
 async def archive(message_id: str) -> None:
-    await asyncio.to_thread(_archive_sync, message_id)
+    async with _api_lock:
+        await asyncio.to_thread(_archive_sync, message_id)
 
 
 async def mark_read(message_id: str) -> None:
-    await asyncio.to_thread(_mark_read_sync, message_id)
+    async with _api_lock:
+        await asyncio.to_thread(_mark_read_sync, message_id)
 
 
 async def unread_count() -> int:
-    return await asyncio.to_thread(_unread_count_sync)
+    async with _api_lock:
+        return await asyncio.to_thread(_unread_count_sync)

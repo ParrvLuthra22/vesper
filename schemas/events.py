@@ -373,6 +373,53 @@ class PlanCreatedEvent(BaseEvent):
 
 
 @dataclass(frozen=True)
+class ToolCallStartedEvent(BaseEvent):
+    """
+    Event emitted live by the Planner the instant it begins executing one
+    tool call — before the Guardian tier check, so a confirm-tier call
+    shows up immediately rather than only after approval.
+
+    This is the live signal a terminal/HUD renders as an in-progress
+    step; it is independent of tracing/tracer.py's TurnTrace (which
+    records the same execution for later inspection via /trace, not for
+    live display).
+
+    Attributes:
+        tool_name: Name of the tool being called.
+        arguments: The tool call's arguments.
+    """
+
+    tool_name: str = ""
+    arguments: Dict[str, Any] = field(default_factory=dict)
+    source: str = field(default="Planner")
+
+
+@dataclass(frozen=True)
+class ToolCallFinishedEvent(BaseEvent):
+    """
+    Event emitted live by the Planner when a tool call started by a
+    matching ToolCallStartedEvent finishes (successfully, denied, timed
+    out, or errored).
+
+    Attributes:
+        tool_name: Name of the tool that finished.
+        success: Whether the call completed without error.
+        guardian_verdict: "allow" / "deny" / "n/a" (unknown tool).
+        result: Result text (or the rendered error/denial message).
+        error: Error message, if any.
+        latency_ms: Wall-clock time for the call.
+    """
+
+    tool_name: str = ""
+    success: bool = False
+    guardian_verdict: str = ""
+    result: str = ""
+    error: Optional[str] = None
+    latency_ms: float = 0.0
+    source: str = field(default="Planner")
+
+
+@dataclass(frozen=True)
 class PlanStepCompletedEvent(BaseEvent):
     """
     Event emitted when a step in a multi-step plan completes.
@@ -1104,6 +1151,8 @@ EVENT_REGISTRY: Dict[str, type] = {
     "ActionRequestEvent": ActionRequestEvent,
     "ActionResultEvent": ActionResultEvent,
     "PlanCreatedEvent": PlanCreatedEvent,
+    "ToolCallStartedEvent": ToolCallStartedEvent,
+    "ToolCallFinishedEvent": ToolCallFinishedEvent,
     "PlanStepCompletedEvent": PlanStepCompletedEvent,
     "PlanCompletedEvent": PlanCompletedEvent,
     "ContextUpdatedEvent": ContextUpdatedEvent,

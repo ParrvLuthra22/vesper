@@ -4,20 +4,20 @@ ObservationEvent(kind="inbox_surge") when a lot of new mail arrives at
 once (self-contained: threshold and cooldown are enforced here, not by a
 separate ProactiveEngine rule).
 
-Reuses the "list_unread" tool the Gmail MCP bridge registers (see
+Reuses the "unread_count" tool the Gmail MCP bridge registers (see
 tools/mcp_bridge.py) rather than talking to Gmail directly — if the
 Gmail server isn't connected (disabled, or still mid-OAuth-consent),
-list_unread simply isn't in the registry yet and this sensor no-ops.
+unread_count simply isn't in the registry yet and this sensor no-ops.
 
-list_unread is sampled up to UNREAD_SAMPLE_SIZE per poll as a count
-proxy (Gmail's own tool doesn't expose a separate lightweight count
-endpoint here) — fine for surge detection, since we only care about a
-jump of a few messages, not an exact count above that ceiling.
+unread_count is a single cheap Gmail API call (no per-message detail
+fetches) — this sensor only needs a number, never the messages
+themselves, so it never uses list_unread (whose N+1 per-message fetches
+made this poll take 20-30+ seconds against a real inbox and starved the
+user's own concurrent Gmail tool calls behind gmail_client's API lock).
 """
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
@@ -27,7 +27,6 @@ from tools.registry import ToolRegistry, get_registry
 
 DEFAULT_SURGE_THRESHOLD = 5
 DEFAULT_SURGE_COOLDOWN_MINUTES = 60.0
-UNREAD_SAMPLE_SIZE = 50
 
 Clock = Callable[[], datetime]
 
@@ -94,13 +93,12 @@ class InboxSensor(BaseSensor):
         )
 
     async def _fetch_unread_count(self) -> Optional[int]:
-        tool_spec = self._registry.get("list_unread")
+        tool_spec = self._registry.get("unread_count")
         if tool_spec is None or tool_spec.handler is None:
             return None
         try:
-            raw = await tool_spec.handler({"max_n": UNREAD_SAMPLE_SIZE}, {})
-            messages = json.loads(raw)
+            raw = await tool_spec.handler({}, {})
+            return int(raw)
         except Exception as exc:
-            self._logger.debug(f"InboxSensor: list_unread failed (non-fatal): {exc}")
+            self._logger.debug(f"InboxSensor: unread_count failed (non-fatal): {exc}")
             return None
-        return len(messages)

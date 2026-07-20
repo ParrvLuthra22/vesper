@@ -356,3 +356,149 @@ async def test_ollama_provider_translates_connection_error(monkeypatch: pytest.M
 
     with pytest.raises(ProviderError):
         await provider.complete(messages=[{"role": "user", "content": "hi"}], model="qwen3.5:latest")
+
+
+# =============================================================================
+# Token streaming (on_token) — P08
+# =============================================================================
+
+async def _async_stream(chunks: List[Any]):
+    for chunk in chunks:
+        yield chunk
+
+
+def _groq_stream_chunk(
+    content: Optional[str] = None,
+    tool_call_deltas: Optional[List[Any]] = None,
+    usage: Optional[Dict[str, int]] = None,
+) -> SimpleNamespace:
+    delta = SimpleNamespace(content=content, tool_calls=tool_call_deltas)
+    choice = SimpleNamespace(delta=delta)
+    usage_obj = SimpleNamespace(**usage) if usage else None
+    return SimpleNamespace(choices=[choice], usage=usage_obj)
+
+
+def _tool_call_delta(
+    index: int, id_: Optional[str] = None, name: Optional[str] = None, arguments: Optional[str] = None
+) -> SimpleNamespace:
+    function = SimpleNamespace(name=name, arguments=arguments) if (name or arguments) else None
+    return SimpleNamespace(index=index, id=id_, function=function)
+
+
+def _patch_groq_stream(monkeypatch: pytest.MonkeyPatch, chunks: List[Any]) -> AsyncMock:
+    fake_create = AsyncMock(return_value=_async_stream(chunks))
+    fake_client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=fake_create)))
+    monkeypatch.setattr("llm.providers.groq_provider.AsyncGroq", MagicMock(return_value=fake_client))
+    return fake_create
+
+
+@pytest.mark.asyncio
+async def test_streaming_calls_on_token_and_returns_full_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_create = _patch_groq_stream(
+        monkeypatch,
+        [
+            _groq_stream_chunk(content="Hello"),
+            _groq_stream_chunk(content=", Sir."),
+            _groq_stream_chunk(usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}),
+        ],
+    )
+    router = _make_router(monkeypatch)
+
+    received: List[str] = []
+    result = await router.complete(
+        messages=[{"role": "user", "content": "hi"}], purpose="planning", on_token=received.append
+    )
+
+    assert isinstance(result, LLMResponse)
+    assert result.text == "Hello, Sir."
+    assert result.provider == "groq"
+    assert received == ["Hello", ", Sir."]
+    assert result.usage == {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
+    assert fake_create.call_args.kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_accumulates_tool_call_deltas(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_groq_stream(
+        monkeypatch,
+        [
+            _groq_stream_chunk(
+                tool_call_deltas=[_tool_call_delta(0, id_="call_1", name="get_weather", arguments='{"ci')]
+            ),
+            _groq_stream_chunk(tool_call_deltas=[_tool_call_delta(0, arguments='ty": "SF"}')]),
+        ],
+    )
+    router = _make_router(monkeypatch)
+
+    result = await router.complete(
+        messages=[{"role": "user", "content": "weather?"}],
+        tools=[{"type": "function", "function": {"name": "get_weather"}}],
+        on_token=lambda _t: None,
+    )
+
+    assert isinstance(result, LLMResponse)
+    assert result.tool_calls == [ToolCall(name="get_weather", arguments={"city": "SF"}, id="call_1")]
+
+
+@pytest.mark.asyncio
+async def test_on_token_ignored_for_provider_without_streaming_support(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A third-party provider predating on_token has no obligation to accept it
+    (see test_dummy_third_provider_requires_no_router_changes) — the router
+    must silently skip streaming for it rather than raising a TypeError."""
+
+    @register_provider("dummy_no_stream")
+    class DummyProvider(LLMProvider):
+        async def complete(
+            self,
+            messages: List[Dict[str, str]],
+            model: str,
+            tools: Optional[List[Dict[str, Any]]] = None,
+            tool_choice: str = "auto",
+            temperature: float = 0.3,
+        ) -> LLMResponse:
+            return LLMResponse(text="no stream here", provider="dummy_no_stream", model=model, latency_ms=1.0)
+
+    config = {
+        "llm": {
+            "primary": {"provider": "dummy_no_stream", "model": "m1"},
+            "fallback": {"provider": "ollama", "model": "qwen3.5:latest"},
+        }
+    }
+    router = _make_router(monkeypatch, config=config)
+
+    received: List[str] = []
+    result = await router.complete(messages=[{"role": "user", "content": "hi"}], on_token=received.append)
+
+    assert isinstance(result, LLMResponse)
+    assert result.text == "no stream here"
+    assert received == []
+
+
+# =============================================================================
+# Provider health snapshot (/status) — P08
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_provider_status_reports_tier_and_availability(monkeypatch: pytest.MonkeyPatch) -> None:
+    router = _make_router(monkeypatch)  # groq primary (API key set via fixture), ollama fallback
+
+    statuses = await router.provider_status(purpose="planning")
+
+    assert [s["tier"] for s in statuses] == ["primary", "fallback"]
+    assert statuses[0]["provider"] == "groq"
+    assert statuses[0]["model"] == "openai/gpt-oss-120b"
+    assert statuses[0]["available"] is True
+    assert statuses[1]["provider"] == "ollama"
+    assert statuses[1]["model"] == "qwen3.5:latest"
+
+
+@pytest.mark.asyncio
+async def test_provider_status_unconfigured_tier() -> None:
+    router = ModelRouter(config={"llm": {"primary": {"provider": "groq", "model": "m1"}}})
+
+    statuses = await router.provider_status(purpose="planning")
+
+    fallback = statuses[1]
+    assert fallback["tier"] == "fallback"
+    assert fallback["available"] is False
+    assert fallback["provider"] == "(not configured)"

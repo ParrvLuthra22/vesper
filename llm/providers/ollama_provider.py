@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import uuid4
 
 from llm.errors import ProviderError, RateLimitError
@@ -53,7 +53,11 @@ class OllamaProvider(LLMProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
         temperature: float = 0.3,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> LLMResponse:
+        # Streaming isn't implemented for this provider yet; on_token is
+        # accepted for interface parity with GroqProvider and simply unused
+        # — the router/caller still gets a complete LLMResponse as normal.
         client = self._get_client()
 
         if tools and tool_choice not in ("auto", None):

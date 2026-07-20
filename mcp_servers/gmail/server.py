@@ -100,5 +100,17 @@ async def mark_read(id: str) -> str:
     return "Marked as read."
 
 
+@mcp.tool()
+async def unread_count() -> str:
+    """Get just the number of unread emails, cheaply (no per-message detail fetches).
+
+    Use for surge/volume checks where you only need a count, not the
+    messages themselves — list_unread is the right tool once you need
+    sender/subject/snippet.
+    """
+    count = await gmail_client.unread_count()
+    return str(count)
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

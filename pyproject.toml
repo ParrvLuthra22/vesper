@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vesper"
+version = "0.8.0"
+description = "Vesper — a macOS AI voice/text assistant"
+requires-python = ">=3.9"
+dynamic = ["dependencies"]
+
+[project.scripts]
+vesper = "cli.app:run"
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+[tool.setuptools.packages.find]
+include = [
+    "agents*",
+    "api*",
+    "bus*",
+    "cli*",
+    "config*",
+    "guardian*",
+    "llm*",
+    "orchestrator*",
+    "plugins*",
+    "proactive*",
+    "rag*",
+    "schemas*",
+    "sensors*",
+    "tasks*",
+    "tools*",
+    "tracing*",
+    "ui*",
+    "utils*",
+    "vesper*",
+]

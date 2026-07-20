@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List
 
@@ -33,15 +32,15 @@ class FakeClock:
 
 
 def _registry_with_unread_count(counts: List[int]) -> ToolRegistry:
-    """Each call to list_unread returns the next count in `counts` as that many fake messages."""
+    """Each call to unread_count returns the next count in `counts`."""
     registry = ToolRegistry()
     remaining = list(counts)
 
     async def handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
         n = remaining.pop(0) if remaining else counts[-1]
-        return json.dumps([{"id": str(i)} for i in range(n)])
+        return str(n)
 
-    registry.register(ToolSpec(name="list_unread", description="d", handler=handler, tier="safe"))
+    registry.register(ToolSpec(name="unread_count", description="d", handler=handler, tier="safe"))
     return registry
 
 
@@ -121,10 +120,10 @@ async def test_surge_cooldown_suppresses_repeat_then_fires_again() -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_op_when_list_unread_not_registered() -> None:
+async def test_no_op_when_unread_count_not_registered() -> None:
     bus = EventBus()
     observations = _observation_collector(bus)
-    registry = ToolRegistry()  # Gmail not enabled -> no list_unread tool
+    registry = ToolRegistry()  # Gmail not enabled -> no unread_count tool
     sensor = InboxSensor(event_bus=bus, config=CONFIG, registry=registry)
 
     await sensor.poll()

@@ -16,7 +16,8 @@ Not wired into the Brain yet — see P03.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Dict, List, Optional, Union
+import inspect
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from llm.errors import ProviderError, RateLimitError
 from llm.providers import get_provider_class
@@ -75,6 +76,34 @@ class ModelRouter:
             self._provider_instances[name] = provider_cls(config=self._config)
         return self._provider_instances[name]
 
+    async def provider_status(self, purpose: str = "planning") -> List[Dict[str, Any]]:
+        """
+        Cheap health snapshot of the primary/fallback providers configured
+        for `purpose` — for a /status-style display, not for routing
+        decisions. Each entry's `available` comes from the provider's own
+        `is_available()` (API key present / SDK installed / etc.), not a
+        live network call.
+        """
+        statuses: List[Dict[str, Any]] = []
+        for tier_label in ("primary", "fallback"):
+            tier = self._resolve_tier(purpose, tier_label)
+            provider_name = tier.get("provider")
+            model = tier.get("model")
+            entry: Dict[str, Any] = {
+                "tier": tier_label,
+                "provider": provider_name or "(not configured)",
+                "model": model or "(not configured)",
+                "available": False,
+            }
+            if provider_name and model:
+                try:
+                    provider = self._get_provider_instance(provider_name)
+                    entry["available"] = await provider.is_available()
+                except Exception as exc:
+                    logger.debug(f"[ROUTE] provider_status could not load '{provider_name}': {exc}")
+            statuses.append(entry)
+        return statuses
+
     async def complete(
         self,
         messages: List[Dict[str, str]],
@@ -82,6 +111,7 @@ class ModelRouter:
         tool_choice: str = "auto",
         temperature: float = 0.3,
         purpose: str = "planning",
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> Union[LLMResponse, RouterError]:
         """
         Perform a chat/tool-calling completion, routing per config.
@@ -90,6 +120,10 @@ class ModelRouter:
         fallback providers fail, returns a `RouterError` instead of raising —
         callers should check `isinstance(result, RouterError)` and surface
         `result.user_message` gracefully.
+
+        `on_token`, if given, streams text deltas as they arrive (only
+        providers that support it will actually stream; others ignore it
+        and return the complete response as usual).
         """
         primary_tier = self._resolve_tier(purpose, "primary")
         fallback_tier = self._resolve_tier(purpose, "fallback")
@@ -103,6 +137,7 @@ class ModelRouter:
             temperature=temperature,
             purpose=purpose,
             max_retries=self.PRIMARY_MAX_RETRIES,
+            on_token=on_token,
         )
         if isinstance(primary_result, LLMResponse):
             return primary_result
@@ -121,6 +156,7 @@ class ModelRouter:
             temperature=temperature,
             purpose=purpose,
             max_retries=0,
+            on_token=on_token,
         )
         if isinstance(fallback_result, LLMResponse):
             return fallback_result
@@ -145,6 +181,7 @@ class ModelRouter:
         temperature: float,
         purpose: str,
         max_retries: int,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> Union[LLMResponse, str]:
         """
         Try one tier (primary or fallback), retrying on rate limits up to
@@ -164,6 +201,15 @@ class ModelRouter:
             logger.error(f"[ROUTE] could not load provider '{provider_name}': {exc}")
             return f"could not load provider '{provider_name}': {exc}"
 
+        # Providers are extended purely by @register_provider (see
+        # test_dummy_third_provider_requires_no_router_changes) — a
+        # third-party provider predating on_token has no obligation to
+        # accept it, so only pass it through when the provider actually
+        # declares the parameter.
+        extra_kwargs: Dict[str, Any] = {}
+        if on_token is not None and "on_token" in inspect.signature(provider.complete).parameters:
+            extra_kwargs["on_token"] = on_token
+
         last_error = ""
         for attempt in range(max_retries + 1):
             try:
@@ -173,6 +219,7 @@ class ModelRouter:
                     tools=tools,
                     tool_choice=tool_choice,
                     temperature=temperature,
+                    **extra_kwargs,
                 )
                 self._log_success(tier_label, provider_name, model, purpose, response)
                 return response

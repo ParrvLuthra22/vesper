@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from llm.errors import ProviderError, RateLimitError
 from llm.json_repair import parse_tool_arguments
@@ -63,6 +63,7 @@ class GroqProvider(LLMProvider):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
         temperature: float = 0.3,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> LLMResponse:
         client = self._get_client()
 
@@ -77,6 +78,8 @@ class GroqProvider(LLMProvider):
 
         start = time.monotonic()
         try:
+            if on_token is not None:
+                return await self._complete_streamed(client, kwargs, model, on_token, start)
             response = await client.chat.completions.create(**kwargs)
         except _GroqRateLimitError as exc:
             raise RateLimitError(f"Groq rate limit: {exc}") from exc
@@ -112,6 +115,73 @@ class GroqProvider(LLMProvider):
             text=text,
             tool_calls=tool_calls,
             raw=response,
+            provider="groq",
+            model=model,
+            latency_ms=latency_ms,
+            usage=usage,
+        )
+
+    async def _complete_streamed(
+        self,
+        client: "AsyncGroq",
+        kwargs: Dict[str, Any],
+        model: str,
+        on_token: Callable[[str], None],
+        start: float,
+    ) -> LLMResponse:
+        """
+        Stream the completion, calling `on_token` per text delta as it
+        arrives, while accumulating any tool_calls deltas in parallel —
+        models occasionally emit a short preamble before deciding to call a
+        tool, so this can't assume "streaming means no tool calls."
+        Exceptions during the request or mid-stream propagate to the
+        caller's except clauses unchanged (raised inside this same await).
+        """
+        # Unlike OpenAI's SDK, Groq's create() has no stream_options param —
+        # usage simply isn't reported for streamed responses.
+        stream = await client.chat.completions.create(**kwargs, stream=True)
+
+        text_parts: List[str] = []
+        tool_call_parts: Dict[int, Dict[str, str]] = {}
+        usage: Dict[str, int] = {}
+        last_response: Any = None
+
+        async for chunk in stream:
+            last_response = chunk
+            raw_usage = getattr(chunk, "usage", None)
+            if raw_usage is not None:
+                usage = {
+                    "prompt_tokens": getattr(raw_usage, "prompt_tokens", 0) or 0,
+                    "completion_tokens": getattr(raw_usage, "completion_tokens", 0) or 0,
+                    "total_tokens": getattr(raw_usage, "total_tokens", 0) or 0,
+                }
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text_parts.append(delta.content)
+                on_token(delta.content)
+            for tc_delta in delta.tool_calls or []:
+                slot = tool_call_parts.setdefault(tc_delta.index, {"id": "", "name": "", "arguments": ""})
+                if tc_delta.id:
+                    slot["id"] = tc_delta.id
+                if tc_delta.function is not None:
+                    if tc_delta.function.name:
+                        slot["name"] = tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        slot["arguments"] += tc_delta.function.arguments
+
+        latency_ms = (time.monotonic() - start) * 1000
+
+        tool_calls: List[ToolCall] = []
+        for _, slot in sorted(tool_call_parts.items()):
+            arguments = parse_tool_arguments(slot["arguments"]) if slot["arguments"] else {}
+            tool_calls.append(ToolCall(name=slot["name"], arguments=arguments, id=slot["id"] or ""))
+
+        return LLMResponse(
+            text="".join(text_parts),
+            tool_calls=tool_calls,
+            raw=last_response,
             provider="groq",
             model=model,
             latency_ms=latency_ms,

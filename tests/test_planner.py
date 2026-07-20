@@ -18,7 +18,14 @@ from bus.event_bus import EventBus
 from guardian.gate import Guardian
 from llm.types import LLMResponse, RouterError, ToolCall
 from orchestrator.planner import MAX_ITERATIONS_MESSAGE, Planner
-from schemas.events import ActionRequestEvent, ActionResultEvent, ConfirmationRequestedEvent, ConfirmationResponseEvent
+from schemas.events import (
+    ActionRequestEvent,
+    ActionResultEvent,
+    ConfirmationRequestedEvent,
+    ConfirmationResponseEvent,
+    ToolCallFinishedEvent,
+    ToolCallStartedEvent,
+)
 from tools.registry import ToolRegistry, ToolSpec
 from tracing.tracer import Tracer
 
@@ -336,3 +343,137 @@ async def test_router_error_returns_graceful_message() -> None:
 
     assert result.aborted
     assert result.text == "Sir, I'm having trouble thinking right now."
+
+
+# =============================================================================
+# Live tool-call events (ToolCallStartedEvent / ToolCallFinishedEvent) — P08
+#
+# These are the events a terminal/HUD renders live, distinct from
+# tracing/tracer.py's TurnTrace (which records the same execution for
+# later /trace inspection, not for live display).
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_tool_call_events_emitted_on_success() -> None:
+    bus = EventBus()
+    registry = ToolRegistry()
+
+    async def do_thing_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
+        return "did it"
+
+    registry.register(ToolSpec(name="do_thing", description="d", handler=do_thing_handler, tier="safe"))
+
+    started: List[ToolCallStartedEvent] = []
+    finished: List[ToolCallFinishedEvent] = []
+
+    async def on_started(event: ToolCallStartedEvent) -> None:
+        started.append(event)
+
+    async def on_finished(event: ToolCallFinishedEvent) -> None:
+        finished.append(event)
+
+    bus.subscribe(ToolCallStartedEvent, on_started)
+    bus.subscribe(ToolCallFinishedEvent, on_finished)
+
+    router = _mock_router([
+        LLMResponse(tool_calls=[ToolCall(name="do_thing", arguments={"x": 1}, id="call_1")]),
+        LLMResponse(text="Done, Sir."),
+    ])
+
+    planner = _make_planner(router, registry, bus)
+    await planner.run(user_text="do the thing")
+
+    assert len(started) == 1
+    assert started[0].tool_name == "do_thing"
+    assert started[0].arguments == {"x": 1}
+
+    assert len(finished) == 1
+    assert finished[0].tool_name == "do_thing"
+    assert finished[0].success is True
+    assert finished[0].guardian_verdict == "allow"
+    assert finished[0].result == "did it"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_finished_event_for_unknown_tool() -> None:
+    bus = EventBus()
+    registry = ToolRegistry()  # nothing registered
+
+    finished: List[ToolCallFinishedEvent] = []
+
+    async def on_finished(event: ToolCallFinishedEvent) -> None:
+        finished.append(event)
+
+    bus.subscribe(ToolCallFinishedEvent, on_finished)
+
+    router = _mock_router([
+        LLMResponse(tool_calls=[ToolCall(name="ghost_tool", arguments={}, id="call_1")]),
+        LLMResponse(text="Sorry, Sir."),
+    ])
+
+    planner = _make_planner(router, registry, bus)
+    await planner.run(user_text="do the ghost thing")
+
+    assert len(finished) == 1
+    assert finished[0].tool_name == "ghost_tool"
+    assert finished[0].success is False
+    assert finished[0].guardian_verdict == "n/a"
+
+
+@pytest.mark.asyncio
+async def test_tool_call_started_fires_before_confirmation_resolves() -> None:
+    """A confirm-tier call must show up live immediately, not only after approval."""
+    bus = EventBus()
+    registry = ToolRegistry()
+
+    async def close_app_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
+        return f"Closed {arguments.get('app_name')}"
+
+    registry.register(ToolSpec(name="close_app", description="d", handler=close_app_handler, tier="confirm"))
+
+    started: List[ToolCallStartedEvent] = []
+    requested: List[ConfirmationRequestedEvent] = []
+
+    async def on_started(event: ToolCallStartedEvent) -> None:
+        started.append(event)
+
+    async def on_confirmation_requested(event: ConfirmationRequestedEvent) -> None:
+        requested.append(event)
+
+    bus.subscribe(ToolCallStartedEvent, on_started)
+    bus.subscribe(ConfirmationRequestedEvent, on_confirmation_requested)
+
+    router = _mock_router([
+        LLMResponse(tool_calls=[ToolCall(name="close_app", arguments={"app_name": "Safari"}, id="call_1")]),
+        LLMResponse(text="Closed Safari, Sir."),
+    ])
+
+    planner = _make_planner(router, registry, bus)
+    task = asyncio.create_task(planner.run(user_text="close safari"))
+
+    await _wait_until(lambda: len(requested) == 1)
+    assert len(started) == 1  # already fired, before the confirmation was resolved
+    assert started[0].tool_name == "close_app"
+
+    await bus.emit(
+        ConfirmationResponseEvent(request_id=requested[0].request_id, approved=True, source="voice_agent")
+    )
+    await task
+
+
+# =============================================================================
+# on_token streaming pass-through — P08
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_on_token_passed_through_to_router() -> None:
+    bus = EventBus()
+    registry = ToolRegistry()
+    router = _mock_router([LLMResponse(text="Good evening, Sir.")])
+
+    planner = _make_planner(router, registry, bus)
+    received: List[str] = []
+
+    await planner.run(user_text="hi", on_token=received.append)
+
+    assert router.complete.call_args.kwargs["on_token"] == received.append

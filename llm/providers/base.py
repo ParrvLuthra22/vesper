@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from llm.types import LLMResponse
 
@@ -46,6 +46,7 @@ class LLMProvider(ABC):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: str = "auto",
         temperature: float = 0.3,
+        on_token: Optional[Callable[[str], None]] = None,
     ) -> LLMResponse:
         """
         Perform one completion call and return a normalized LLMResponse.
@@ -54,6 +55,11 @@ class LLMProvider(ABC):
         responses, and `llm.errors.ProviderError` for any other failure
         (network error, misconfiguration, bad response) so ModelRouter can
         decide whether to retry-then-fallback or fall back immediately.
+
+        `on_token`, if given, is called with each text delta as it arrives
+        (token streaming). Providers that don't support streaming may
+        simply ignore it and return the complete response as usual — the
+        caller still gets a normal, fully-populated LLMResponse either way.
         """
         raise NotImplementedError
 
