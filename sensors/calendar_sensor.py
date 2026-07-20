@@ -17,7 +17,7 @@ import asyncio
 import re
 import subprocess
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from schemas.events import UpcomingMeetingEvent
@@ -61,7 +61,8 @@ class CalendarSensor(BaseSensor):
         return float(self._get_config(f"{self.config_key}.lookahead_minutes", 120))
 
     async def poll(self) -> None:
-        events = await self._fetch_upcoming_events()
+        end = datetime.now() + timedelta(minutes=self.lookahead_minutes)
+        events = await self._fetch_upcoming_events(end)
         now = datetime.now(timezone.utc)
 
         for title, start_time in events:
@@ -82,19 +83,24 @@ class CalendarSensor(BaseSensor):
                     )
                 )
 
+    async def fetch_todays_events(self) -> List[Tuple[str, datetime]]:
+        """All of today's events from now until midnight — for the morning briefing."""
+        end = datetime.combine(date.today(), dt_time.max)
+        return await self._fetch_upcoming_events(end)
+
     # =========================================================================
     # Backend selection
     # =========================================================================
 
-    async def _fetch_upcoming_events(self) -> List[Tuple[str, datetime]]:
+    async def _fetch_upcoming_events(self, end: datetime) -> List[Tuple[str, datetime]]:
         if EVENTKIT_AVAILABLE:
             try:
-                return await self._fetch_via_eventkit()
+                return await self._fetch_via_eventkit(end)
             except Exception as exc:
                 self._logger.warning(f"EventKit lookup failed: {exc}")
 
         try:
-            return await self._fetch_via_icalbuddy()
+            return await self._fetch_via_icalbuddy(end)
         except FileNotFoundError:
             self._logger.debug("icalBuddy not installed; no calendar backend available")
         except Exception as exc:
@@ -106,11 +112,11 @@ class CalendarSensor(BaseSensor):
     # EventKit backend
     # =========================================================================
 
-    async def _fetch_via_eventkit(self) -> List[Tuple[str, datetime]]:
+    async def _fetch_via_eventkit(self, end: datetime) -> List[Tuple[str, datetime]]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._fetch_via_eventkit_sync)
+        return await loop.run_in_executor(None, self._fetch_via_eventkit_sync, end)
 
-    def _fetch_via_eventkit_sync(self) -> List[Tuple[str, datetime]]:
+    def _fetch_via_eventkit_sync(self, end: datetime) -> List[Tuple[str, datetime]]:
         if self._event_store is None:
             self._event_store = EventKit.EKEventStore.alloc().init()
 
@@ -120,7 +126,6 @@ class CalendarSensor(BaseSensor):
                 return []
 
         now = datetime.now()
-        end = now + timedelta(minutes=self.lookahead_minutes)
 
         start_date = Foundation.NSDate.dateWithTimeIntervalSince1970_(now.timestamp())
         end_date = Foundation.NSDate.dateWithTimeIntervalSince1970_(end.timestamp())
@@ -159,12 +164,13 @@ class CalendarSensor(BaseSensor):
     # icalBuddy backend (fallback)
     # =========================================================================
 
-    async def _fetch_via_icalbuddy(self) -> List[Tuple[str, datetime]]:
+    async def _fetch_via_icalbuddy(self, end: datetime) -> List[Tuple[str, datetime]]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._fetch_via_icalbuddy_sync)
+        return await loop.run_in_executor(None, self._fetch_via_icalbuddy_sync, end)
 
-    def _fetch_via_icalbuddy_sync(self) -> List[Tuple[str, datetime]]:
-        days_ahead = max(1, int(self.lookahead_minutes // (24 * 60)) + 1)
+    def _fetch_via_icalbuddy_sync(self, end: datetime) -> List[Tuple[str, datetime]]:
+        minutes_ahead = max(1.0, (end - datetime.now()).total_seconds() / 60.0)
+        days_ahead = max(1, int(minutes_ahead // (24 * 60)) + 1)
         result = subprocess.run(
             ["icalBuddy", *_ICALBUDDY_ARGS, f"eventsToday+{days_ahead}"],
             capture_output=True,

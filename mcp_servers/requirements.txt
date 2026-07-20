@@ -1,0 +1,19 @@
+# ==============================================================================
+# MCP servers — dedicated Python 3.10+ environment
+# ==============================================================================
+# The official `mcp` SDK requires Python >=3.10; the main app runs on 3.9
+# (pyobjc/langgraph/chromadb are pinned against it), so every server under
+# mcp_servers/ runs as its own subprocess in this separate virtualenv:
+#
+#   cd mcp_servers && python3.11 -m venv .venv
+#   source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# tools/mcp_bridge.py (in the main app) talks to these servers over stdio
+# using the plain MCP wire protocol — it does not import this package.
+# ==============================================================================
+
+mcp>=1.28.0                      # MCP server SDK (FastMCP, stdio transport)
+google-api-python-client>=2.198.0  # Gmail API client
+google-auth-oauthlib>=1.0.0        # InstalledAppFlow: first-run browser consent
+google-auth-httplib2>=0.3.0         # httplib2 transport for google-api-python-client

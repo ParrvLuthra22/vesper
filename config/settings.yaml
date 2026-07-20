@@ -574,9 +574,14 @@ sensors:
     # How far ahead to look for upcoming meetings, in minutes.
     lookahead_minutes: 120
 
-  # Email-based sensing arrives in P07 — no config yet, sensor is a stub.
+  # Requires mcp.servers.gmail to be enabled — polls via the "list_unread"
+  # tool the Gmail MCP bridge registers, not a direct Gmail connection.
   inbox:
-    enabled: false
+    enabled: true
+    poll_interval_seconds: 600
+    # A jump of at least this many unread since the last poll is a "surge".
+    surge_threshold: 5
+    surge_cooldown_min: 60
 
 
 # -----------------------------------------------------------------------------
@@ -625,3 +630,35 @@ tracing:
   enabled: true
   project_name: "vesper"
   local_dir: "data/traces"
+
+
+# -----------------------------------------------------------------------------
+# MCP servers (P07) — tools/mcp_bridge.py connects to each enabled server at
+# startup and auto-registers its tools into the ToolRegistry. Adding a new
+# server needs only a new entry here (command/args/tiers/slow_tools) — no
+# bridge code changes.
+# -----------------------------------------------------------------------------
+mcp:
+  servers:
+    gmail:
+      # Requires a one-time Google OAuth consent (see
+      # mcp_servers/gmail/gmail_client.py, token cached at
+      # data/google_token.json) and its own Python 3.10+ virtualenv at
+      # mcp_servers/.venv (the official mcp SDK needs 3.10+; the main app
+      # runs on 3.9). Paths below are relative to the project root
+      # regardless of where the app was launched from.
+      enabled: true
+      command: "mcp_servers/.venv/bin/python3"
+      args: ["mcp_servers/gmail/server.py"]
+      tiers:
+        list_unread: safe
+        get_message: safe
+        search: safe
+        summarize_thread: safe
+        draft_reply: confirm
+        archive: confirm
+        mark_read: confirm
+      # Runs in the background task queue instead of blocking the turn —
+      # fetching a whole thread can take a few seconds.
+      slow_tools:
+        - summarize_thread

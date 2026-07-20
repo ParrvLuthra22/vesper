@@ -37,6 +37,7 @@ from guardian.gate import Guardian, VerdictType
 from llm.router import ModelRouter
 from llm.types import LLMResponse, RouterError, ToolCall
 from schemas.events import ActionRequestEvent, ActionResultEvent, PlanCreatedEvent
+from tasks.queue import TaskQueue
 from tools.registry import ToolRegistry, ToolSpec, get_registry
 from tracing.tracer import IterationTrace, Tracer, TurnTrace
 from utils.logger import get_logger
@@ -95,6 +96,7 @@ class Planner:
         guardian: Optional[Guardian] = None,
         event_bus: Optional[EventBus] = None,
         tracer: Optional[Tracer] = None,
+        task_queue: Optional[TaskQueue] = None,
         persona_path: Path = DEFAULT_PERSONA_PATH,
         max_iterations: int = MAX_ITERATIONS,
         tool_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
@@ -104,6 +106,7 @@ class Planner:
         self._event_bus = event_bus or get_event_bus()
         self._guardian = guardian or Guardian(event_bus=self._event_bus)
         self._tracer = tracer or Tracer()
+        self._task_queue = task_queue or TaskQueue(event_bus=self._event_bus)
         self._persona = _load_persona(persona_path)
         self._max_iterations = max_iterations
         self._tool_timeout_seconds = tool_timeout_seconds
@@ -270,10 +273,29 @@ class Planner:
             return f"Error: {exc}"
 
     async def _run_tool(self, tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
+        if tool_spec.slow:
+            return await self._run_slow_tool(tool_spec, arguments)
         if tool_spec.handler is not None:
             result = await tool_spec.handler(arguments, {})
             return str(result)
         return await self._run_bus_routed_tool(tool_spec, arguments)
+
+    async def _run_slow_tool(self, tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
+        """
+        Tools marked slow=True never block the current turn: submit the
+        actual execution to the TaskQueue and reply immediately. The real
+        result surfaces later as a pending observation (ObservationEvent
+        kind="task_done"), same as any other call-out.
+        """
+
+        async def _job() -> Any:
+            if tool_spec.handler is not None:
+                return await tool_spec.handler(arguments, {})
+            return await self._run_bus_routed_tool(tool_spec, arguments)
+
+        description = tool_spec.name.replace("_", " ")
+        await self._task_queue.submit(_job(), description=description)
+        return f"Started '{description}' in the background — it'll be ready shortly."
 
     async def _run_bus_routed_tool(self, tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
         correlation_id = uuid4()

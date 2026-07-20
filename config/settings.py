@@ -318,9 +318,13 @@ class SensorCalendarSettings(BaseModel):
 
 
 class SensorInboxSettings(BaseModel):
-    """Stub — email-based sensing arrives in P07."""
+    """Polls unread count via the Gmail MCP bridge's list_unread tool —
+    requires mcp.servers.gmail.enabled, not a direct Gmail connection."""
 
     enabled: bool = False
+    poll_interval_seconds: float = 600.0
+    surge_threshold: int = 5
+    surge_cooldown_min: int = 60
 
 
 class SensorsSettings(BaseModel):
@@ -381,6 +385,34 @@ class TracingSettings(BaseModel):
     local_dir: str = "data/traces"
 
 
+class MCPGmailServerSettings(BaseModel):
+    """See mcp_servers/gmail/ — runs under its own Python 3.10+ venv."""
+
+    enabled: bool = False
+    command: str = "mcp_servers/.venv/bin/python3"
+    args: List[str] = Field(default_factory=lambda: ["mcp_servers/gmail/server.py"])
+    tiers: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "list_unread": "safe",
+            "get_message": "safe",
+            "search": "safe",
+            "summarize_thread": "safe",
+            "draft_reply": "confirm",
+            "archive": "confirm",
+            "mark_read": "confirm",
+        }
+    )
+    slow_tools: List[str] = Field(default_factory=lambda: ["summarize_thread"])
+
+
+class MCPServersSettings(BaseModel):
+    gmail: MCPGmailServerSettings = Field(default_factory=MCPGmailServerSettings)
+
+
+class MCPSettings(BaseModel):
+    servers: MCPServersSettings = Field(default_factory=MCPServersSettings)
+
+
 class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
@@ -407,6 +439,7 @@ class AppSettings(BaseSettings):
     sensors: SensorsSettings = Field(default_factory=SensorsSettings)
     proactive: ProactiveSettings = Field(default_factory=ProactiveSettings)
     tracing: TracingSettings = Field(default_factory=TracingSettings)
+    mcp: MCPSettings = Field(default_factory=MCPSettings)
 
     @classmethod
     def settings_customise_sources(

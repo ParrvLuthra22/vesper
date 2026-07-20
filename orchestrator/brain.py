@@ -54,9 +54,14 @@ from api.health import HealthServer
 from guardian.gate import Guardian
 from llm.router import ModelRouter
 from orchestrator.planner import Planner, PlannerResult
+from proactive.briefing import deliver_scheduled_briefing, make_get_daily_briefing_handler
 from proactive.engine import ProactiveEngine
 from sensors.calendar_sensor import CalendarSensor
 from sensors.focus_sensor import FocusSensor
+from sensors.inbox_sensor import InboxSensor
+from tasks.queue import TaskQueue
+from tools.mcp_bridge import MCPBridge
+from tools.registry import ToolSpec, get_registry
 from tracing.tracer import Tracer
 
 # VisionAgent is optional - only import if vision dependencies are available
@@ -71,6 +76,7 @@ from schemas.events import (
     AgentHealthCheckEvent,
     AgentStartedEvent,
     AgentStoppedEvent,
+    BriefingRequestedEvent,
     ContextUpdatedEvent,
     ObservationEvent,
     ShutdownRequestedEvent,
@@ -388,17 +394,26 @@ class Brain:
         self._guardian = Guardian(event_bus=self._event_bus)
         self._router = ModelRouter(config=self._config)
         self._tracer = Tracer(config=self._config)
+        self._task_queue = TaskQueue(event_bus=self._event_bus)
         self._planner = Planner(
             router=self._router,
             guardian=self._guardian,
             event_bus=self._event_bus,
             tracer=self._tracer,
+            task_queue=self._task_queue,
         )
 
-        # Sensors (P05) — local-only observation, individually toggleable
+        # MCP bridge (P07): connects to configured MCP servers (Gmail, ...)
+        # and auto-registers their tools into the ToolRegistry.
+        self._mcp_bridge = MCPBridge(config=self._config)
+
+        # Sensors (P05/P07) — local-only observation, individually toggleable
         # via config; start() no-ops for any sensor that's disabled.
         self._focus_sensor = FocusSensor(event_bus=self._event_bus, config=self._config)
         self._calendar_sensor = CalendarSensor(event_bus=self._event_bus, config=self._config)
+        # Polls via the Gmail MCP bridge's list_unread tool, so it must start
+        # after self._mcp_bridge (see start()).
+        self._inbox_sensor = InboxSensor(event_bus=self._event_bus, config=self._config)
 
         # Proactive Engine (P05): scheduled jobs + cooldown-gated call-out rules.
         self._proactive_engine = ProactiveEngine(event_bus=self._event_bus, config=self._config)
@@ -522,11 +537,19 @@ class Brain:
                 self._health_check_loop()
             )
 
+            # Connect to configured MCP servers (Gmail, ...) and register
+            # their tools before anything that depends on those tools
+            # existing (the on-demand briefing tool, the inbox sensor).
+            await self._mcp_bridge.start()
+            self._register_briefing_tool()
+
             # Start sensors and the Proactive Engine. Sensors no-op if
             # disabled by config; the engine always starts (its scheduled
-            # jobs and rules are individually config-gated).
+            # jobs and rules are individually config-gated). inbox_sensor
+            # starts after the MCP bridge since it polls list_unread.
             await self._focus_sensor.start()
             await self._calendar_sensor.start()
+            await self._inbox_sensor.start()
             await self._proactive_engine.start()
 
             self._state = BrainState.RUNNING
@@ -570,10 +593,13 @@ class Brain:
             except asyncio.CancelledError:
                 pass
 
-        # Stop sensors and the Proactive Engine before agents/event bus.
+        # Stop sensors, the Proactive Engine, and the MCP bridge before
+        # agents/event bus.
         await self._proactive_engine.stop()
+        await self._inbox_sensor.stop()
         await self._calendar_sensor.stop()
         await self._focus_sensor.stop()
+        await self._mcp_bridge.stop()
 
         # Announce shutdown
         await self._event_bus.publish(ShutdownRequestedEvent(
@@ -636,6 +662,57 @@ class Brain:
         """Handle system signals."""
         logger.info(f"Received signal {sig.name}")
         await self.stop(f"Received {sig.name}")
+
+    # =========================================================================
+    # Briefing
+    # =========================================================================
+
+    def _register_briefing_tool(self) -> None:
+        """
+        Register get_daily_briefing: the on-demand "brief me" tool.
+
+        Its handler just gathers the same raw data
+        (proactive/briefing.assemble_briefing_text) the scheduled
+        BriefingRequestedEvent handler uses — the calling Planner turn's
+        model renders the actual structured reply on its next iteration,
+        exactly like any other tool result.
+        """
+        memory_agent = self.get_agent("MemoryAgent")
+        registry = get_registry()
+        if registry.get("get_daily_briefing") is not None:
+            return  # already registered (e.g. brain restarted without a fresh process)
+
+        registry.register(
+            ToolSpec(
+                name="get_daily_briefing",
+                description=(
+                    "Gather today's briefing data: unread email triage, today's "
+                    "remaining calendar events, and any carried-over items from "
+                    "yesterday's briefing. Use when the user asks to be briefed "
+                    "— \"brief me\", \"what's my day look like\", a status update."
+                ),
+                parameters={"type": "object", "properties": {}},
+                tier="safe",
+                handler=make_get_daily_briefing_handler(
+                    registry=registry,
+                    calendar_sensor=self._calendar_sensor,
+                    memory_agent=memory_agent,
+                ),
+                category="briefing",
+            )
+        )
+
+    async def _handle_briefing_requested(self, event: BriefingRequestedEvent) -> None:
+        """Scheduled path (ProactiveEngine's morning_briefing cron job) — no
+        ongoing turn to attach to, so start a fresh one and speak the result."""
+        logger.info(f"Delivering scheduled briefing: {event.schedule_name}")
+        memory_agent = self.get_agent("MemoryAgent")
+        result = await deliver_scheduled_briefing(
+            planner=self._planner,
+            calendar_sensor=self._calendar_sensor,
+            memory_agent=memory_agent,
+        )
+        await self._event_bus.emit(VoiceOutputEvent(text=result.text, source="Brain"))
 
     # =========================================================================
     # Agent Lifecycle
@@ -746,11 +823,14 @@ class Brain:
         - VoiceInputEvent: When user speaks (USER_SPOKE) — feeds the Planner
         - ObservationEvent: Proactive Engine call-outs — queued as pending
           observations for the Planner's {context} block to surface once
+        - BriefingRequestedEvent: ProactiveEngine's morning_briefing job —
+          assembles and delivers the scheduled briefing
         - AgentErrorEvent: When an agent has an error
         - AgentStoppedEvent: When an agent stops
         """
         self._event_bus.subscribe(VoiceInputEvent, self._handle_voice_input)
         self._event_bus.subscribe(ObservationEvent, self._handle_observation)
+        self._event_bus.subscribe(BriefingRequestedEvent, self._handle_briefing_requested)
         self._event_bus.subscribe(AgentErrorEvent, self._handle_agent_error)
         self._event_bus.subscribe(AgentStoppedEvent, self._handle_agent_stopped)
 
