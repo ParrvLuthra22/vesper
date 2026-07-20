@@ -454,6 +454,81 @@ class ClarificationNeededEvent(BaseEvent):
 
 
 # =============================================================================
+# Sensor & Proactive Events - local-only sensing and rule-driven call-outs
+# =============================================================================
+
+@dataclass(frozen=True)
+class AppFocusChangedEvent(BaseEvent):
+    """
+    Event emitted by FocusSensor when the frontmost macOS application
+    changes.
+
+    Attributes:
+        app_name: Name of the newly-focused application.
+        previous_app: Name of the previously-focused application (empty
+            if this is the very first observation, i.e. not a real switch).
+    """
+
+    app_name: str = ""
+    previous_app: str = ""
+    source: str = field(default="FocusSensor")
+
+
+@dataclass(frozen=True)
+class UpcomingMeetingEvent(BaseEvent):
+    """
+    Event emitted by CalendarSensor as a meeting approaches (at the 15-
+    and 5-minute checkpoints).
+
+    Attributes:
+        title: Meeting title.
+        start_time: When the meeting starts.
+        minutes_until: Minutes remaining until start_time.
+    """
+
+    title: str = ""
+    start_time: Optional[datetime] = None
+    minutes_until: int = 0
+    source: str = field(default="CalendarSensor")
+
+
+@dataclass(frozen=True)
+class ObservationEvent(BaseEvent):
+    """
+    Event emitted by the Proactive Engine's rule evaluator when a rule
+    fires (subject to its cooldown). Flows into ConversationContext as a
+    pending observation for the Planner's {context} block to surface —
+    the Planner may voice it once, passively, per the call-out doctrine
+    in config/persona.md.
+
+    Attributes:
+        kind: Rule identifier, e.g. "context_switch", "meeting_soon".
+        detail: Human-readable observation text for the Planner's context.
+        observation_id: Unique id; used to track consumption once voiced.
+    """
+
+    kind: str = ""
+    detail: str = ""
+    observation_id: str = field(default_factory=lambda: str(uuid4()))
+    source: str = field(default="ProactiveEngine")
+
+
+@dataclass(frozen=True)
+class BriefingRequestedEvent(BaseEvent):
+    """
+    Event emitted by a scheduled Proactive Engine job requesting a
+    briefing. Minimal for now — P07 turns this into a rich briefing
+    pipeline.
+
+    Attributes:
+        schedule_name: Which scheduled job fired this, e.g. "morning_briefing".
+    """
+
+    schedule_name: str = "morning_briefing"
+    source: str = field(default="ProactiveEngine")
+
+
+# =============================================================================
 # System Events - macOS system interactions
 # =============================================================================
 
@@ -1033,6 +1108,11 @@ EVENT_REGISTRY: Dict[str, type] = {
     "PlanCompletedEvent": PlanCompletedEvent,
     "ContextUpdatedEvent": ContextUpdatedEvent,
     "ClarificationNeededEvent": ClarificationNeededEvent,
+    # Sensor & proactive events
+    "AppFocusChangedEvent": AppFocusChangedEvent,
+    "UpcomingMeetingEvent": UpcomingMeetingEvent,
+    "ObservationEvent": ObservationEvent,
+    "BriefingRequestedEvent": BriefingRequestedEvent,
 }
 
 

@@ -306,6 +306,71 @@ class LLMSettings(BaseModel):
     ollama: LLMOllamaSettings = Field(default_factory=LLMOllamaSettings)
 
 
+class SensorFocusSettings(BaseModel):
+    enabled: bool = False
+    poll_interval_seconds: float = 5.0
+
+
+class SensorCalendarSettings(BaseModel):
+    enabled: bool = False
+    poll_interval_seconds: float = 300.0
+    lookahead_minutes: int = 120
+
+
+class SensorInboxSettings(BaseModel):
+    """Stub — email-based sensing arrives in P07."""
+
+    enabled: bool = False
+
+
+class SensorsSettings(BaseModel):
+    focus: SensorFocusSettings = Field(default_factory=SensorFocusSettings)
+    calendar: SensorCalendarSettings = Field(default_factory=SensorCalendarSettings)
+    inbox: SensorInboxSettings = Field(default_factory=SensorInboxSettings)
+
+
+class ProactiveContextSwitchRuleSettings(BaseModel):
+    enabled: bool = True
+    threshold: int = 3
+    window_min: int = 30
+    cooldown_min: int = 90
+    work_apps: List[str] = Field(
+        default_factory=lambda: [
+            "Visual Studio Code", "Terminal", "Xcode", "Slack", "Safari", "Google Chrome", "Mail",
+        ]
+    )
+
+
+class ProactiveMeetingReminderRuleSettings(BaseModel):
+    enabled: bool = True
+    cooldown_min: int = 10
+
+
+class ProactiveRulesSettings(BaseModel):
+    context_switch: ProactiveContextSwitchRuleSettings = Field(
+        default_factory=ProactiveContextSwitchRuleSettings
+    )
+    meeting_reminder: ProactiveMeetingReminderRuleSettings = Field(
+        default_factory=ProactiveMeetingReminderRuleSettings
+    )
+
+
+class ProactiveMorningBriefingScheduleSettings(BaseModel):
+    enabled: bool = True
+    time: str = "08:30"
+
+
+class ProactiveScheduleSettings(BaseModel):
+    morning_briefing: ProactiveMorningBriefingScheduleSettings = Field(
+        default_factory=ProactiveMorningBriefingScheduleSettings
+    )
+
+
+class ProactiveSettings(BaseModel):
+    rules: ProactiveRulesSettings = Field(default_factory=ProactiveRulesSettings)
+    schedule: ProactiveScheduleSettings = Field(default_factory=ProactiveScheduleSettings)
+
+
 class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
@@ -329,6 +394,8 @@ class AppSettings(BaseSettings):
     vision: VisionSettings = Field(default_factory=VisionSettings)
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    sensors: SensorsSettings = Field(default_factory=SensorsSettings)
+    proactive: ProactiveSettings = Field(default_factory=ProactiveSettings)
 
     @classmethod
     def settings_customise_sources(

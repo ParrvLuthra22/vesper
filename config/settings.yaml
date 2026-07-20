@@ -555,3 +555,60 @@ llm:
     # 110-160s end to end across runs, so 60s was clipping real (non-hung)
     # responses. 240s gives headroom above the observed worst case.
     timeout_seconds: 240
+
+
+# -----------------------------------------------------------------------------
+# Sensors (P05) — local-only observation of machine state.
+# -----------------------------------------------------------------------------
+# Nothing a sensor observes ever leaves the machine except as short context
+# lines handed to the LLM planner. Each sensor is individually toggleable;
+# disabled by default until the user opts in.
+sensors:
+  focus:
+    enabled: false
+    poll_interval_seconds: 5
+
+  calendar:
+    enabled: false
+    poll_interval_seconds: 300
+    # How far ahead to look for upcoming meetings, in minutes.
+    lookahead_minutes: 120
+
+  # Email-based sensing arrives in P07 — no config yet, sensor is a stub.
+  inbox:
+    enabled: false
+
+
+# -----------------------------------------------------------------------------
+# Proactive Engine (P05) — scheduled jobs + cooldown-gated call-out rules.
+# -----------------------------------------------------------------------------
+proactive:
+  rules:
+    context_switch:
+      enabled: true
+      # Fire once >= `threshold` distinct work apps have been switched into
+      # within the trailing `window_min` minutes.
+      threshold: 3
+      window_min: 30
+      # Never raise this observation again within `cooldown_min` of the
+      # last time it fired — mechanically enforces the passive call-out
+      # doctrine (config/persona.md) so Vesper never nags.
+      cooldown_min: 90
+      work_apps:
+        - "Visual Studio Code"
+        - "Terminal"
+        - "Xcode"
+        - "Slack"
+        - "Safari"
+        - "Google Chrome"
+        - "Mail"
+
+    meeting_reminder:
+      enabled: true
+      cooldown_min: 10
+
+  schedule:
+    morning_briefing:
+      enabled: true
+      # 24-hour HH:MM, local time.
+      time: "08:30"

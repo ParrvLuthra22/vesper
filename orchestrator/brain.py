@@ -54,6 +54,9 @@ from api.health import HealthServer
 from guardian.gate import Guardian
 from llm.router import ModelRouter
 from orchestrator.planner import Planner, PlannerResult
+from proactive.engine import ProactiveEngine
+from sensors.calendar_sensor import CalendarSensor
+from sensors.focus_sensor import FocusSensor
 
 # VisionAgent is optional - only import if vision dependencies are available
 try:
@@ -68,6 +71,7 @@ from schemas.events import (
     AgentStartedEvent,
     AgentStoppedEvent,
     ContextUpdatedEvent,
+    ObservationEvent,
     ShutdownRequestedEvent,
     VoiceInputEvent,
     VoiceOutputEvent,
@@ -159,6 +163,10 @@ class ConversationContext:
     entities: Dict[str, Any] = field(default_factory=dict)
     pending_clarification: bool = False
     clarification_context: Dict[str, Any] = field(default_factory=dict)
+    # Observations from the Proactive Engine (P05), pending until the
+    # Planner has been given one chance to voice them (see add_observation
+    # / get_pending_observations / consume_observations below).
+    pending_observations: List[Dict[str, str]] = field(default_factory=list)
 
     @property
     def turn_count(self) -> int:
@@ -249,6 +257,28 @@ class ConversationContext:
         self.entities.clear()
         self.pending_clarification = False
         self.clarification_context.clear()
+        self.pending_observations.clear()
+
+    def add_observation(self, kind: str, detail: str, observation_id: str) -> None:
+        """Queue an observation from the Proactive Engine (ObservationEvent)."""
+        self.pending_observations.append(
+            {"kind": kind, "detail": detail, "observation_id": observation_id}
+        )
+
+    def get_pending_observations(self) -> List[str]:
+        """Detail strings for observations not yet offered to the Planner."""
+        return [obs["detail"] for obs in self.pending_observations]
+
+    def consume_observations(self) -> None:
+        """
+        Mark all currently-pending observations as offered.
+
+        Called once per turn, right after the Planner has been given the
+        chance to voice them — mechanically enforcing "raise it once": an
+        observation is only ever included in the Planner's context a
+        single time, regardless of whether the model chose to mention it.
+        """
+        self.pending_observations.clear()
 
 
 # =============================================================================
@@ -361,6 +391,14 @@ class Brain:
             guardian=self._guardian,
             event_bus=self._event_bus,
         )
+
+        # Sensors (P05) — local-only observation, individually toggleable
+        # via config; start() no-ops for any sensor that's disabled.
+        self._focus_sensor = FocusSensor(event_bus=self._event_bus, config=self._config)
+        self._calendar_sensor = CalendarSensor(event_bus=self._event_bus, config=self._config)
+
+        # Proactive Engine (P05): scheduled jobs + cooldown-gated call-out rules.
+        self._proactive_engine = ProactiveEngine(event_bus=self._event_bus, config=self._config)
 
         logger.info(f"Brain initialized (session={self._session_id})")
 
@@ -481,12 +519,21 @@ class Brain:
                 self._health_check_loop()
             )
 
+            # Start sensors and the Proactive Engine. Sensors no-op if
+            # disabled by config; the engine always starts (its scheduled
+            # jobs and rules are individually config-gated).
+            await self._focus_sensor.start()
+            await self._calendar_sensor.start()
+            await self._proactive_engine.start()
+
             self._state = BrainState.RUNNING
             self._started_at = datetime.now(timezone.utc)
 
             logger.info("Brain started successfully")
 
-            greeting = await self._planner.greet()
+            pending_observations = self._context.get_pending_observations()
+            greeting = await self._planner.greet(observations=pending_observations)
+            self._context.consume_observations()
             await self._event_bus.publish(VoiceOutputEvent(
                 text=greeting.text,
                 source="Brain",
@@ -519,6 +566,11 @@ class Brain:
                 await self._health_check_task
             except asyncio.CancelledError:
                 pass
+
+        # Stop sensors and the Proactive Engine before agents/event bus.
+        await self._proactive_engine.stop()
+        await self._calendar_sensor.stop()
+        await self._focus_sensor.stop()
 
         # Announce shutdown
         await self._event_bus.publish(ShutdownRequestedEvent(
@@ -689,10 +741,13 @@ class Brain:
 
         The Brain subscribes to:
         - VoiceInputEvent: When user speaks (USER_SPOKE) — feeds the Planner
+        - ObservationEvent: Proactive Engine call-outs — queued as pending
+          observations for the Planner's {context} block to surface once
         - AgentErrorEvent: When an agent has an error
         - AgentStoppedEvent: When an agent stops
         """
         self._event_bus.subscribe(VoiceInputEvent, self._handle_voice_input)
+        self._event_bus.subscribe(ObservationEvent, self._handle_observation)
         self._event_bus.subscribe(AgentErrorEvent, self._handle_agent_error)
         self._event_bus.subscribe(AgentStoppedEvent, self._handle_agent_stopped)
 
@@ -700,6 +755,11 @@ class Brain:
         """Handle voice input event (USER_SPOKE) by feeding the Planner."""
         logger.info(f"User spoke: '{event.text}'")
         await self.handle_user_text(event.text, correlation_id=event.event_id)
+
+    async def _handle_observation(self, event: ObservationEvent) -> None:
+        """Queue a Proactive Engine call-out as a pending observation."""
+        logger.info(f"Observation: kind={event.kind} detail={event.detail!r}")
+        self._context.add_observation(kind=event.kind, detail=event.detail, observation_id=event.observation_id)
 
     async def handle_user_text(self, text: str, correlation_id: Optional[UUID] = None) -> PlannerResult:
         """
@@ -712,8 +772,14 @@ class Brain:
         ConversationContext: here. Recent context is snapshotted BEFORE
         this turn is added, so the in-progress turn (with no response yet)
         never leaks into its own history as a duplicate user message.
+
+        Any pending observations (from the Proactive Engine) are handed to
+        the Planner's {context} block and then consumed, win or lose — an
+        observation is only ever offered once, regardless of whether the
+        model chose to voice it.
         """
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
+        pending_observations = self._context.get_pending_observations()
 
         self._context.add_turn(user_input=text)
         await self._event_bus.emit(ContextUpdatedEvent(
@@ -724,7 +790,12 @@ class Brain:
             source="Brain",
         ))
 
-        result = await self._planner.run(user_text=text, recent_context=recent_context)
+        result = await self._planner.run(
+            user_text=text,
+            recent_context=recent_context,
+            observations=pending_observations,
+        )
+        self._context.consume_observations()
 
         self._context.update_last_response(result.text, action="planner")
 

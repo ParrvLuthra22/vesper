@@ -55,6 +55,13 @@ tavily-python>=0.5.0         # Web search API client
 # ------------------------------------------------------------------------------
 groq>=1.0.0                  # Groq chat completions + tool calling SDK
 ollama>=0.6.2                # Local Ollama chat completions + tools API client
+
+# ------------------------------------------------------------------------------
+# Sensors & Proactive Engine (sensors/, proactive/) - local-only sensing
+# ------------------------------------------------------------------------------
+apscheduler>=3.10.0             # Cron-style scheduled jobs (morning briefing, etc.)
+pyobjc-framework-Cocoa>=11.1    # NSWorkspace: frontmost-app polling (FocusSensor)
+pyobjc-framework-EventKit>=11.1 # EventKit: calendar polling (CalendarSensor)
 # Optional: Enhanced TTS
 # ------------------------------------------------------------------------------
 # elevenlabs>=0.2.0       # ElevenLabs TTS (high quality voices)
