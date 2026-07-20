@@ -17,3 +17,6 @@ mcp>=1.28.0                      # MCP server SDK (FastMCP, stdio transport)
 google-api-python-client>=2.198.0  # Gmail API client
 google-auth-oauthlib>=1.0.0        # InstalledAppFlow: first-run browser consent
 google-auth-httplib2>=0.3.0         # httplib2 transport for google-api-python-client
+pyobjc-framework-Cocoa>=11.1        # apple_pim: EventKit's Foundation dependencies
+pyobjc-framework-EventKit>=11.1     # apple_pim: Calendar + Reminders access
+httpx>=0.28.0                       # notion: async HTTP client for the Notion REST API

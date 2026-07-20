@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional
 
 from agents.memory_agent import MemoryAgent
 from orchestrator.planner import Planner, PlannerResult
+from proactive.day_planner import DEFAULT_NOTION_TASKS_DB, assemble_day_plan_text
 from sensors.calendar_sensor import CalendarSensor
 from tools.registry import ToolRegistry, get_registry
 from utils.logger import get_logger
@@ -40,7 +41,8 @@ INBOX_TRIAGE_MAX_MESSAGES = 20
 BRIEFING_STYLE_NOTE = (
     "(Deliver the requested briefing now. This is a status briefing, not idle "
     "chat — structure it clearly: inbox, then today's calendar, then any "
-    "carried-over items — but stay as concise as the content honestly allows.)"
+    "carried-over items, then a time-blocked day plan if day-plan inputs are "
+    "present below — but stay as concise as the content honestly allows.)"
 )
 
 
@@ -130,8 +132,12 @@ async def assemble_briefing_text(
     registry: Optional[ToolRegistry] = None,
     calendar_sensor: Optional[CalendarSensor] = None,
     memory_agent: Optional[MemoryAgent] = None,
+    include_day_plan: bool = False,
+    notion_db: str = DEFAULT_NOTION_TASKS_DB,
 ) -> str:
-    """Gather inbox triage + today's calendar + carried-over note, as raw text."""
+    """Gather inbox triage + today's calendar + carried-over note, as raw
+    text, plus an optional day-plan section (calendar + reminders + Notion
+    tasks + email pressure + protected-time memories, from day_planner.py)."""
     registry = registry or get_registry()
 
     inbox = await gather_inbox_triage(registry)
@@ -141,7 +147,13 @@ async def assemble_briefing_text(
     carried_over = _carried_over_ids(memory_agent, today_ids)
     _save_today_ids(memory_agent, today_ids)
 
-    return render_briefing_data(inbox, calendar_events, len(carried_over))
+    text = render_briefing_data(inbox, calendar_events, len(carried_over))
+
+    if include_day_plan:
+        day_plan_text = await assemble_day_plan_text(registry, memory_agent, notion_db)
+        text = f"{text}\n\n{day_plan_text}"
+
+    return text
 
 
 def make_get_daily_briefing_handler(
@@ -163,8 +175,12 @@ async def deliver_scheduled_briefing(
     registry: Optional[ToolRegistry] = None,
     calendar_sensor: Optional[CalendarSensor] = None,
     memory_agent: Optional[MemoryAgent] = None,
+    include_day_plan: bool = False,
+    notion_db: str = DEFAULT_NOTION_TASKS_DB,
 ) -> PlannerResult:
     """Scheduled path: no ongoing turn to attach to, so start a fresh one."""
-    data_text = await assemble_briefing_text(registry, calendar_sensor, memory_agent)
+    data_text = await assemble_briefing_text(
+        registry, calendar_sensor, memory_agent, include_day_plan=include_day_plan, notion_db=notion_db
+    )
     prompt = f"{BRIEFING_STYLE_NOTE}\n\n{data_text}"
     return await planner.run(user_text=prompt, purpose="planning")

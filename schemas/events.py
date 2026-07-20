@@ -575,6 +575,22 @@ class BriefingRequestedEvent(BaseEvent):
     source: str = field(default="ProactiveEngine")
 
 
+@dataclass(frozen=True)
+class ReflectionRequestedEvent(BaseEvent):
+    """
+    Event emitted by a scheduled Proactive Engine job (daily at midnight)
+    requesting a memory-reflection pass over the day's conversation —
+    see proactive/reflection.py. The same reflection also runs directly
+    (no event needed) when Brain.stop() ends a session.
+
+    Attributes:
+        schedule_name: Which scheduled job fired this, e.g. "midnight_reflection".
+    """
+
+    schedule_name: str = "midnight_reflection"
+    source: str = field(default="ProactiveEngine")
+
+
 # =============================================================================
 # System Events - macOS system interactions
 # =============================================================================
@@ -1162,6 +1178,7 @@ EVENT_REGISTRY: Dict[str, type] = {
     "UpcomingMeetingEvent": UpcomingMeetingEvent,
     "ObservationEvent": ObservationEvent,
     "BriefingRequestedEvent": BriefingRequestedEvent,
+    "ReflectionRequestedEvent": ReflectionRequestedEvent,
 }
 
 

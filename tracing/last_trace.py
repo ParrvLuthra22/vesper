@@ -57,6 +57,8 @@ def _print_run(records: List[Dict[str, Any]], run: Dict[str, Any], indent: int) 
         print(f"{detail_prefix}final_reply: {outputs.get('final_reply', '')!r}")
         if metadata.get("observation_injected"):
             print(f"{detail_prefix}observation_injected: {metadata.get('observations')}")
+        if metadata.get("memory_injected"):
+            print(f"{detail_prefix}memory_injected: {metadata.get('memories')}")
     elif run["name"] == "plan_iteration":
         print(
             f"{detail_prefix}provider={metadata.get('provider')} model={metadata.get('model')} "

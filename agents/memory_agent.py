@@ -813,3 +813,19 @@ class MemoryAgent(BaseAgent):
             metadata=metadata,
             salience=salience,
         )
+
+    async def forget(self, query: str, top_k: int = 5) -> List[str]:
+        """
+        Delete semantic memories matching `query` (the "forget X" tool).
+
+        Returns the text of each deleted memory, so the caller can tell
+        the user exactly what was forgotten.
+        """
+        if not self._rag_service:
+            return []
+        matches = await self._rag_service.retrieve(query=query, top_k=top_k)
+        if not matches:
+            return []
+        ids = [m["id"] for m in matches]
+        await self._rag_service.delete(ids)
+        return [m["text"] for m in matches]

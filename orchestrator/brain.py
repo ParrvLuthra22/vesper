@@ -55,7 +55,9 @@ from guardian.gate import Guardian
 from llm.router import ModelRouter
 from orchestrator.planner import Planner, PlannerResult
 from proactive.briefing import deliver_scheduled_briefing, make_get_daily_briefing_handler
+from proactive.day_planner import make_plan_my_day_handler
 from proactive.engine import ProactiveEngine
+from proactive.reflection import run_reflection
 from sensors.calendar_sensor import CalendarSensor
 from sensors.focus_sensor import FocusSensor
 from sensors.inbox_sensor import InboxSensor
@@ -79,6 +81,7 @@ from schemas.events import (
     BriefingRequestedEvent,
     ContextUpdatedEvent,
     ObservationEvent,
+    ReflectionRequestedEvent,
     ShutdownRequestedEvent,
     VoiceInputEvent,
     VoiceOutputEvent,
@@ -88,6 +91,11 @@ from utils.logger import get_logger
 
 
 logger = get_logger(__name__)
+
+#: How many semantic-memory matches to surface per turn (see
+#: _retrieve_relevant_memories) — small on purpose, this rides alongside
+#: the {context} block on every single turn.
+MEMORY_RETRIEVAL_TOP_K = 3
 
 
 # =============================================================================
@@ -564,11 +572,14 @@ class Brain:
                 self._health_check_loop()
             )
 
-            # Connect to configured MCP servers (Gmail, ...) and register
-            # their tools before anything that depends on those tools
-            # existing (the on-demand briefing tool, the inbox sensor).
+            # Connect to configured MCP servers (Gmail, apple_pim, Notion,
+            # ...) and register their tools before anything that depends
+            # on those tools existing (the briefing/day-plan tools, the
+            # inbox sensor).
             await self._mcp_bridge.start()
             self._register_briefing_tool()
+            self._register_day_planner_tool()
+            self._register_memory_tools()
 
             # Start sensors and the Proactive Engine. Sensors no-op if
             # disabled by config; the engine always starts (its scheduled
@@ -627,6 +638,12 @@ class Brain:
         await self._calendar_sensor.stop()
         await self._focus_sensor.stop()
         await self._mcp_bridge.stop()
+
+        # Extract and store durable memories from this session (see
+        # proactive/reflection.py) — MUST run before ShutdownRequestedEvent
+        # is announced: agents (including MemoryAgent) tear themselves down
+        # in response to it, same as the explicit _stop_agents() pass below.
+        await self._run_reflection(reason="session_end")
 
         # Announce shutdown
         await self._event_bus.publish(ShutdownRequestedEvent(
@@ -738,8 +755,130 @@ class Brain:
             planner=self._planner,
             calendar_sensor=self._calendar_sensor,
             memory_agent=memory_agent,
+            include_day_plan=bool(
+                self._config.get("proactive", {})
+                .get("schedule", {})
+                .get("morning_briefing", {})
+                .get("include_day_plan", True)
+            ),
         )
         await self._event_bus.emit(VoiceOutputEvent(text=result.text, source="Brain"))
+
+    # =========================================================================
+    # Day planning (P09)
+    # =========================================================================
+
+    def _register_day_planner_tool(self) -> None:
+        """
+        Register plan_my_day: the on-demand "plan my day" tool.
+
+        Its handler just gathers the raw data (calendar, reminders,
+        Notion tasks, email pressure, protected-time memories) — the
+        calling Planner turn's model renders the actual time-blocked plan
+        on its next iteration, exactly like get_daily_briefing.
+        """
+        memory_agent = self.get_agent("MemoryAgent")
+        registry = get_registry()
+        if registry.get("plan_my_day") is not None:
+            return  # already registered (e.g. brain restarted without a fresh process)
+
+        registry.register(
+            ToolSpec(
+                name="plan_my_day",
+                description=(
+                    "Gather everything needed for a realistic, time-blocked day "
+                    "plan: today's calendar, reminders due, Notion tasks, and "
+                    "unread-email pressure — plus any remembered protected/sacred "
+                    "time blocks to route around. Use when the user asks "
+                    "\"plan my day\" / \"what should my day look like\" / "
+                    "\"help me schedule today\"."
+                ),
+                parameters={"type": "object", "properties": {}},
+                tier="safe",
+                handler=make_plan_my_day_handler(registry=registry, memory_agent=memory_agent),
+                category="day_planning",
+            )
+        )
+
+    # =========================================================================
+    # Memory (P09)
+    # =========================================================================
+
+    def _register_memory_tools(self) -> None:
+        """Register forget_memory: deletes semantic memories matching a query."""
+        registry = get_registry()
+        if registry.get("forget_memory") is not None:
+            return
+
+        registry.register(
+            ToolSpec(
+                name="forget_memory",
+                description=(
+                    "Permanently delete remembered facts/preferences/patterns "
+                    "matching a description. Use when the user says \"forget "
+                    "that I...\" / \"forget the X preference\" / \"you don't "
+                    "need to remember Y anymore\". This cannot be undone."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "What to forget, described the way you'd search for it.",
+                        }
+                    },
+                    "required": ["query"],
+                },
+                tier="confirm",
+                handler=self._make_forget_memory_handler(),
+                category="memory",
+            )
+        )
+
+    def _make_forget_memory_handler(self):
+        async def handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
+            memory_agent = self.get_agent("MemoryAgent")
+            if not isinstance(memory_agent, MemoryAgent):
+                return "Memory isn't available right now, Sir."
+            query = str(arguments.get("query", "")).strip()
+            if not query:
+                return "I need something to search for before I can forget it, Sir."
+            forgotten = await memory_agent.forget(query=query)
+            if not forgotten:
+                return f"I couldn't find anything matching {query!r} to forget, Sir."
+            return "Forgotten: " + "; ".join(forgotten)
+
+        return handler
+
+    async def _run_reflection(self, reason: str) -> None:
+        """
+        Extract and store durable memories from this session's conversation
+        (see proactive/reflection.py), then clear the conversation context
+        — a fresh day starts a fresh short-term topic/entity state, and
+        the next reflection shouldn't re-summarize turns already reflected
+        on. Never raises: reflection is a background nicety.
+        """
+        turns = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
+        if not turns:
+            return
+
+        memory_agent = self.get_agent("MemoryAgent")
+        if not isinstance(memory_agent, MemoryAgent):
+            return
+
+        try:
+            items = await run_reflection(turns=turns, router=self._router, memory_agent=memory_agent)
+        except Exception as exc:
+            logger.warning(f"Reflection failed ({reason}), non-fatal: {exc}")
+            return
+
+        if items:
+            logger.info(f"Reflection ({reason}) stored {len(items)} memory item(s)")
+            self._context.clear()
+
+    async def _handle_reflection_requested(self, event: ReflectionRequestedEvent) -> None:
+        """Scheduled path (ProactiveEngine's midnight_reflection cron job)."""
+        await self._run_reflection(reason=event.schedule_name)
 
     # =========================================================================
     # Agent Lifecycle
@@ -856,12 +995,15 @@ class Brain:
           observations for the Planner's {context} block to surface once
         - BriefingRequestedEvent: ProactiveEngine's morning_briefing job —
           assembles and delivers the scheduled briefing
+        - ReflectionRequestedEvent: ProactiveEngine's midnight_reflection
+          job — extracts and stores durable memories from the day so far
         - AgentErrorEvent: When an agent has an error
         - AgentStoppedEvent: When an agent stops
         """
         self._event_bus.subscribe(VoiceInputEvent, self._handle_voice_input)
         self._event_bus.subscribe(ObservationEvent, self._handle_observation)
         self._event_bus.subscribe(BriefingRequestedEvent, self._handle_briefing_requested)
+        self._event_bus.subscribe(ReflectionRequestedEvent, self._handle_reflection_requested)
         self._event_bus.subscribe(AgentErrorEvent, self._handle_agent_error)
         self._event_bus.subscribe(AgentStoppedEvent, self._handle_agent_stopped)
 
@@ -904,6 +1046,7 @@ class Brain:
         """
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
+        relevant_memories = await self._retrieve_relevant_memories(text)
 
         self._context.add_turn(user_input=text)
         await self._event_bus.emit(ContextUpdatedEvent(
@@ -918,6 +1061,7 @@ class Brain:
             user_text=text,
             recent_context=recent_context,
             observations=pending_observations,
+            memories=relevant_memories,
             on_token=on_token,
         )
         self._context.consume_observations()
@@ -931,6 +1075,21 @@ class Brain:
         ))
 
         return result
+
+    async def _retrieve_relevant_memories(self, text: str) -> List[str]:
+        """Top-k semantic memory matches for `text`, for the Planner's
+        {context} block — e.g. a previously stated "always protect the gym
+        slot" preference surfacing on a day-planning request. Empty (not an
+        error) when MemoryAgent/semantic memory isn't available."""
+        memory_agent = self.get_agent("MemoryAgent")
+        if not isinstance(memory_agent, MemoryAgent):
+            return []
+        try:
+            matches = await memory_agent.semantic_retrieve(query=text, top_k=MEMORY_RETRIEVAL_TOP_K)
+        except Exception as exc:
+            logger.debug(f"Semantic memory retrieval failed (non-fatal): {exc}")
+            return []
+        return [m["text"] for m in matches]
 
     async def _handle_agent_error(self, event: AgentErrorEvent) -> None:
         """Handle agent error events."""

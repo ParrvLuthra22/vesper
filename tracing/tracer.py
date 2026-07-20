@@ -144,6 +144,15 @@ class TurnTrace:
         except Exception as exc:
             logger.debug(f"[Tracer] mark_observations_injected failed (non-fatal): {exc}")
 
+    def mark_memories_injected(self, memories: List[str]) -> None:
+        """Attach memory_injected metadata when semantic memory matched this turn's input."""
+        if not memories or self._run is None:
+            return
+        try:
+            self._run.add_metadata({"memory_injected": True, "memories": memories})
+        except Exception as exc:
+            logger.debug(f"[Tracer] mark_memories_injected failed (non-fatal): {exc}")
+
     def start_iteration(
         self, iteration: int, messages_in: List[Dict[str, Any]], purpose: str
     ) -> "IterationTrace":

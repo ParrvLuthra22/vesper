@@ -63,6 +63,7 @@ class _HashEmbeddingFunction:
 
 @dataclass
 class RetrievedChunk:
+    id: str
     text: str
     metadata: Dict[str, Any]
     similarity: float
@@ -209,7 +210,9 @@ class ChromaRAGMemoryService:
         now = datetime.now(timezone.utc).timestamp()
         candidates: List[RetrievedChunk] = []
 
-        for doc, meta, dist in zip(docs, metas, dists):
+        ids = (raw.get("ids") or [[]])[0]
+
+        for doc_id, doc, meta, dist in zip(ids, docs, metas, dists):
             meta = dict(meta or {})
             similarity = max(0.0, 1.0 - float(dist or 1.0))
             salience = float(meta.get("salience", 0.5))
@@ -226,6 +229,7 @@ class ChromaRAGMemoryService:
 
             candidates.append(
                 RetrievedChunk(
+                    id=doc_id,
                     text=doc,
                     metadata=meta,
                     similarity=similarity,
@@ -239,6 +243,7 @@ class ChromaRAGMemoryService:
 
         return [
             {
+                "id": item.id,
                 "text": item.text,
                 "metadata": item.metadata,
                 "similarity": item.similarity,
@@ -246,6 +251,13 @@ class ChromaRAGMemoryService:
             }
             for item in diversified
         ]
+
+    async def delete(self, ids: List[str]) -> int:
+        """Delete specific chunks by id (see the "id" field `retrieve()` returns)."""
+        if not ids or self._collection is None:
+            return 0
+        self._collection.delete(ids=ids)
+        return len(ids)
 
     async def assemble_context(
         self,

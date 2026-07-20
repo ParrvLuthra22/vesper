@@ -124,10 +124,17 @@ class Planner:
         purpose: str = "planning",
         active_app: Optional[str] = None,
         observations: Optional[List[str]] = None,
+        memories: Optional[List[str]] = None,
         on_token: Optional[Callable[[str], None]] = None,
     ) -> PlannerResult:
         """
         Run the tool-calling loop for one piece of user text.
+
+        `memories`, if given, are semantic-memory matches for `user_text`
+        (see MemoryAgent.semantic_retrieve) — rendered into the {context}
+        block as "Relevant memories" so the model can use them without
+        needing a tool call (e.g. a previously stated "always protect the
+        gym slot" preference informing a day plan).
 
         `on_token`, if given, is forwarded to the router on every
         iteration so a caller (e.g. the CLI) can render Vesper's final
@@ -137,8 +144,11 @@ class Planner:
         turn_start = time.monotonic()
         turn_trace = self._tracer.start_turn(user_text)
         turn_trace.mark_observations_injected(observations or [])
+        turn_trace.mark_memories_injected(memories or [])
 
-        system_prompt = self._render_system_prompt(active_app=active_app, observations=observations)
+        system_prompt = self._render_system_prompt(
+            active_app=active_app, observations=observations, memories=memories
+        )
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         messages.extend(self._context_to_messages(recent_context or []))
         messages.append({"role": "user", "content": user_text})
@@ -210,8 +220,11 @@ class Planner:
         self,
         active_app: Optional[str] = None,
         observations: Optional[List[str]] = None,
+        memories: Optional[List[str]] = None,
     ) -> str:
-        context_block = self._render_context_block(active_app=active_app, observations=observations)
+        context_block = self._render_context_block(
+            active_app=active_app, observations=observations, memories=memories
+        )
         if CONTEXT_PLACEHOLDER in self._persona:
             return self._persona.replace(CONTEXT_PLACEHOLDER, context_block)
         return f"{self._persona}\n\n{context_block}"
@@ -220,12 +233,16 @@ class Planner:
     def _render_context_block(
         active_app: Optional[str] = None,
         observations: Optional[List[str]] = None,
+        memories: Optional[List[str]] = None,
     ) -> str:
         now = datetime.now()
         lines = [
             f"Current time: {now.strftime('%I:%M %p')}",
             f"Today's date: {now.strftime('%A, %B %d, %Y')}",
         ]
+        if memories:
+            lines.append("Relevant memories:")
+            lines.extend(f"  - {m}" for m in memories)
         if active_app:
             lines.append(f"Active app: {active_app}")
         if observations:

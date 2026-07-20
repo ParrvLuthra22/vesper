@@ -617,6 +617,17 @@ proactive:
       enabled: true
       # 24-hour HH:MM, local time.
       time: "08:30"
+      # P09: also gather a day-plan section (calendar + reminders + Notion
+      # tasks + email pressure) for the same planner.run() call to render.
+      include_day_plan: true
+
+    # P09: daily memory-reflection pass (proactive/reflection.py) — extracts
+    # up to 5 durable facts/preferences/patterns from the day's conversation
+    # and writes them to semantic memory. Also runs directly (no schedule
+    # needed) whenever a session ends via Brain.stop().
+    midnight_reflection:
+      enabled: true
+      time: "00:00"
 
 
 # -----------------------------------------------------------------------------
@@ -663,3 +674,31 @@ mcp:
       # fetching a whole thread can take a few seconds.
       slow_tools:
         - summarize_thread
+
+    # Calendar + Reminders via EventKit (AppleScript fallback for reads).
+    # Reads permission is a one-time macOS system prompt on first use, not
+    # OAuth — no token file, nothing to configure beyond enabling it.
+    apple_pim:
+      enabled: true
+      command: "mcp_servers/.venv/bin/python3"
+      args: ["mcp_servers/apple_pim/server.py"]
+      tiers:
+        today_events: safe
+        upcoming: safe
+        reminders_due: safe
+        add_reminder: confirm
+        create_event: confirm
+
+    # Read-only Notion access. Requires NOTION_API_KEY (an internal
+    # integration token) in the environment/.env; NOTION_DATABASES
+    # optionally maps friendly names (e.g. "projects", "tasks") to
+    # database ids as a JSON object, also via the environment — see
+    # mcp_servers/notion/notion_client.py.
+    notion:
+      enabled: false
+      command: "mcp_servers/.venv/bin/python3"
+      args: ["mcp_servers/notion/server.py"]
+      tiers:
+        notion_search: safe
+        notion_get_page: safe
+        notion_get_database_rows: safe

@@ -477,3 +477,37 @@ async def test_on_token_passed_through_to_router() -> None:
     await planner.run(user_text="hi", on_token=received.append)
 
     assert router.complete.call_args.kwargs["on_token"] == received.append
+
+
+# =============================================================================
+# Relevant memories in the {context} block — P09
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_memories_rendered_in_context_block() -> None:
+    bus = EventBus()
+    registry = ToolRegistry()
+    router = _mock_router([LLMResponse(text="Understood, Sir.")])
+
+    planner = _make_planner(router, registry, bus)
+    await planner.run(
+        user_text="plan my day",
+        memories=["The gym slot is non-negotiable, always protect it."],
+    )
+
+    system_prompt = router.complete.call_args.kwargs["messages"][0]["content"]
+    assert "Relevant memories:" in system_prompt
+    assert "The gym slot is non-negotiable, always protect it." in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_no_memories_section_when_none_given() -> None:
+    bus = EventBus()
+    registry = ToolRegistry()
+    router = _mock_router([LLMResponse(text="Good evening, Sir.")])
+
+    planner = _make_planner(router, registry, bus)
+    await planner.run(user_text="hi")
+
+    system_prompt = router.complete.call_args.kwargs["messages"][0]["content"]
+    assert "Relevant memories:" not in system_prompt

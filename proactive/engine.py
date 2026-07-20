@@ -27,6 +27,7 @@ from schemas.events import (
     AppFocusChangedEvent,
     BriefingRequestedEvent,
     ObservationEvent,
+    ReflectionRequestedEvent,
     UpcomingMeetingEvent,
 )
 from utils.logger import get_logger
@@ -38,6 +39,7 @@ DEFAULT_CONTEXT_SWITCH_WINDOW_MIN = 30
 DEFAULT_CONTEXT_SWITCH_COOLDOWN_MIN = 90
 DEFAULT_MEETING_REMINDER_COOLDOWN_MIN = 10
 DEFAULT_MORNING_BRIEFING_TIME = "08:30"
+DEFAULT_MIDNIGHT_REFLECTION_TIME = "00:00"
 #: Above this many minutes-until-start, a meeting reminder is the sensor's
 #: 15-minute checkpoint, not the near-term one this rule calls out on.
 _MEETING_CALLOUT_MAX_MINUTES = 7
@@ -116,32 +118,57 @@ class ProactiveEngine:
     def _register_scheduled_jobs(self) -> None:
         if self._scheduler is None:
             return
-        if not self._get_config("proactive.schedule.morning_briefing.enabled", True):
+        # Each job's enabled flag is independent — one being off must never
+        # skip registering the others.
+        self._register_cron_job(
+            job_id="morning_briefing",
+            enabled_key="proactive.schedule.morning_briefing.enabled",
+            time_key="proactive.schedule.morning_briefing.time",
+            default_time=DEFAULT_MORNING_BRIEFING_TIME,
+            callback=self._fire_morning_briefing,
+        )
+        self._register_cron_job(
+            job_id="midnight_reflection",
+            enabled_key="proactive.schedule.midnight_reflection.enabled",
+            time_key="proactive.schedule.midnight_reflection.time",
+            default_time=DEFAULT_MIDNIGHT_REFLECTION_TIME,
+            callback=self._fire_midnight_reflection,
+        )
+
+    def _register_cron_job(
+        self,
+        job_id: str,
+        enabled_key: str,
+        time_key: str,
+        default_time: str,
+        callback: Callable[[], Any],
+    ) -> None:
+        if self._scheduler is None or not self._get_config(enabled_key, True):
             return
 
-        time_str = str(
-            self._get_config("proactive.schedule.morning_briefing.time", DEFAULT_MORNING_BRIEFING_TIME)
-        )
+        time_str = str(self._get_config(time_key, default_time))
         try:
             hour_str, minute_str = time_str.split(":")
             hour, minute = int(hour_str), int(minute_str)
         except ValueError:
-            logger.warning(
-                f"Invalid proactive.schedule.morning_briefing.time={time_str!r}; "
-                f"using default {DEFAULT_MORNING_BRIEFING_TIME}"
-            )
-            hour, minute = 8, 30
+            logger.warning(f"Invalid {time_key}={time_str!r}; using default {default_time}")
+            hour, minute = (int(p) for p in default_time.split(":"))
 
         self._scheduler.add_job(
-            self._fire_morning_briefing,
+            callback,
             CronTrigger(hour=hour, minute=minute),
-            id="morning_briefing",
+            id=job_id,
             replace_existing=True,
         )
 
     async def _fire_morning_briefing(self) -> None:
         await self._event_bus.emit(
             BriefingRequestedEvent(schedule_name="morning_briefing", source="ProactiveEngine")
+        )
+
+    async def _fire_midnight_reflection(self) -> None:
+        await self._event_bus.emit(
+            ReflectionRequestedEvent(schedule_name="midnight_reflection", source="ProactiveEngine")
         )
 
     # =========================================================================

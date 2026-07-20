@@ -362,11 +362,25 @@ class ProactiveRulesSettings(BaseModel):
 class ProactiveMorningBriefingScheduleSettings(BaseModel):
     enabled: bool = True
     time: str = "08:30"
+    # P09: whether the briefing also gathers a day-plan section (calendar +
+    # reminders + Notion tasks + email pressure) for the same planner.run()
+    # call to render alongside inbox/calendar triage.
+    include_day_plan: bool = True
+
+
+class ProactiveMidnightReflectionScheduleSettings(BaseModel):
+    """Daily memory-reflection pass — see proactive/reflection.py."""
+
+    enabled: bool = True
+    time: str = "00:00"
 
 
 class ProactiveScheduleSettings(BaseModel):
     morning_briefing: ProactiveMorningBriefingScheduleSettings = Field(
         default_factory=ProactiveMorningBriefingScheduleSettings
+    )
+    midnight_reflection: ProactiveMidnightReflectionScheduleSettings = Field(
+        default_factory=ProactiveMidnightReflectionScheduleSettings
     )
 
 
@@ -406,8 +420,44 @@ class MCPGmailServerSettings(BaseModel):
     slow_tools: List[str] = Field(default_factory=lambda: ["summarize_thread"])
 
 
+class MCPAppleServerSettings(BaseModel):
+    """See mcp_servers/apple_pim/ — Calendar + Reminders via EventKit."""
+
+    enabled: bool = False
+    command: str = "mcp_servers/.venv/bin/python3"
+    args: List[str] = Field(default_factory=lambda: ["mcp_servers/apple_pim/server.py"])
+    tiers: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "today_events": "safe",
+            "upcoming": "safe",
+            "reminders_due": "safe",
+            "add_reminder": "confirm",
+            "create_event": "confirm",
+        }
+    )
+    slow_tools: List[str] = Field(default_factory=list)
+
+
+class MCPNotionServerSettings(BaseModel):
+    """See mcp_servers/notion/ — read-only, requires NOTION_API_KEY in the environment."""
+
+    enabled: bool = False
+    command: str = "mcp_servers/.venv/bin/python3"
+    args: List[str] = Field(default_factory=lambda: ["mcp_servers/notion/server.py"])
+    tiers: Dict[str, str] = Field(
+        default_factory=lambda: {
+            "notion_search": "safe",
+            "notion_get_page": "safe",
+            "notion_get_database_rows": "safe",
+        }
+    )
+    slow_tools: List[str] = Field(default_factory=list)
+
+
 class MCPServersSettings(BaseModel):
     gmail: MCPGmailServerSettings = Field(default_factory=MCPGmailServerSettings)
+    apple_pim: MCPAppleServerSettings = Field(default_factory=MCPAppleServerSettings)
+    notion: MCPNotionServerSettings = Field(default_factory=MCPNotionServerSettings)
 
 
 class MCPSettings(BaseModel):
