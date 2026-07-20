@@ -371,6 +371,16 @@ class ProactiveSettings(BaseModel):
     schedule: ProactiveScheduleSettings = Field(default_factory=ProactiveScheduleSettings)
 
 
+class TracingSettings(BaseModel):
+    """LangSmith instrumentation, with an always-on local JSONL fallback
+    (see tracing/tracer.py). LANGSMITH_API_KEY comes from the environment,
+    not this config — if unset, tracing degrades to local-only."""
+
+    enabled: bool = True
+    project_name: str = "vesper"
+    local_dir: str = "data/traces"
+
+
 class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
@@ -396,6 +406,7 @@ class AppSettings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     sensors: SensorsSettings = Field(default_factory=SensorsSettings)
     proactive: ProactiveSettings = Field(default_factory=ProactiveSettings)
+    tracing: TracingSettings = Field(default_factory=TracingSettings)
 
     @classmethod
     def settings_customise_sources(

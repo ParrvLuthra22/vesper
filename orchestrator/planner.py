@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -37,6 +38,7 @@ from llm.router import ModelRouter
 from llm.types import LLMResponse, RouterError, ToolCall
 from schemas.events import ActionRequestEvent, ActionResultEvent, PlanCreatedEvent
 from tools.registry import ToolRegistry, ToolSpec, get_registry
+from tracing.tracer import IterationTrace, Tracer, TurnTrace
 from utils.logger import get_logger
 
 # Importing for its registration side effect: populates the default
@@ -59,6 +61,10 @@ MAX_ITERATIONS_MESSAGE = (
 
 CONTEXT_PLACEHOLDER = "{context}"
 GREETING_INSTRUCTION = "(Session start. Greet the user now, per your greeting instructions.)"
+
+
+def _elapsed_ms(start: float) -> float:
+    return (time.monotonic() - start) * 1000
 
 
 def _load_persona(path: Path) -> str:
@@ -88,6 +94,7 @@ class Planner:
         registry: Optional[ToolRegistry] = None,
         guardian: Optional[Guardian] = None,
         event_bus: Optional[EventBus] = None,
+        tracer: Optional[Tracer] = None,
         persona_path: Path = DEFAULT_PERSONA_PATH,
         max_iterations: int = MAX_ITERATIONS,
         tool_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
@@ -96,6 +103,7 @@ class Planner:
         self._registry = registry or get_registry()
         self._event_bus = event_bus or get_event_bus()
         self._guardian = guardian or Guardian(event_bus=self._event_bus)
+        self._tracer = tracer or Tracer()
         self._persona = _load_persona(persona_path)
         self._max_iterations = max_iterations
         self._tool_timeout_seconds = tool_timeout_seconds
@@ -109,6 +117,10 @@ class Planner:
         observations: Optional[List[str]] = None,
     ) -> PlannerResult:
         """Run the tool-calling loop for one piece of user text."""
+        turn_start = time.monotonic()
+        turn_trace = self._tracer.start_turn(user_text)
+        turn_trace.mark_observations_injected(observations or [])
+
         system_prompt = self._render_system_prompt(active_app=active_app, observations=observations)
         messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         messages.extend(self._context_to_messages(recent_context or []))
@@ -117,24 +129,38 @@ class Planner:
         tools_schema = self._registry.to_llm_schema()
         trace: List[str] = []
 
-        for _ in range(self._max_iterations):
+        for iteration in range(self._max_iterations):
+            iteration_trace = turn_trace.start_iteration(iteration, list(messages), purpose)
             response = await self._router.complete(messages=messages, tools=tools_schema, purpose=purpose)
+            iteration_trace.end(response)
 
             if isinstance(response, RouterError):
                 await self._emit_plan_trace(user_text, trace)
-                return PlannerResult(text=response.user_message, aborted=True, tool_trace=trace)
+                result = PlannerResult(text=response.user_message, aborted=True, tool_trace=trace)
+                return self._finish_turn(turn_trace, turn_start, result)
 
             if not response.tool_calls:
                 await self._emit_plan_trace(user_text, trace)
-                return PlannerResult(text=response.text, tool_trace=trace)
+                result = PlannerResult(text=response.text, tool_trace=trace)
+                return self._finish_turn(turn_trace, turn_start, result)
 
             messages.append(self._assistant_tool_call_message(response))
             for tool_call in response.tool_calls:
-                result_text = await self._execute_tool_call(tool_call, trace)
+                result_text = await self._execute_tool_call(tool_call, trace, iteration_trace)
                 messages.append(self._tool_result_message(tool_call, result_text))
 
         await self._emit_plan_trace(user_text, trace)
-        return PlannerResult(text=MAX_ITERATIONS_MESSAGE, aborted=True, tool_trace=trace)
+        result = PlannerResult(text=MAX_ITERATIONS_MESSAGE, aborted=True, tool_trace=trace)
+        return self._finish_turn(turn_trace, turn_start, result)
+
+    @staticmethod
+    def _finish_turn(turn_trace: TurnTrace, turn_start: float, result: PlannerResult) -> PlannerResult:
+        turn_trace.end(
+            final_reply=result.text,
+            aborted=result.aborted,
+            total_latency_ms=_elapsed_ms(turn_start),
+        )
+        return result
 
     async def greet(
         self,
@@ -190,11 +216,21 @@ class Planner:
             lines.append("Pending observations: none")
         return "\n".join(lines)
 
-    async def _execute_tool_call(self, tool_call: ToolCall, trace: List[str]) -> str:
+    async def _execute_tool_call(
+        self, tool_call: ToolCall, trace: List[str], iteration_trace: IterationTrace
+    ) -> str:
         tool_spec = self._registry.get(tool_call.name)
+        tool_trace = iteration_trace.start_tool(tool_call.name, tool_call.arguments)
+        start = time.monotonic()
+
         if tool_spec is None or not tool_spec.enabled:
             trace.append(f"{tool_call.name}:unknown_tool")
-            return f"Error: no such tool '{tool_call.name}'"
+            error = f"no such tool '{tool_call.name}'"
+            tool_trace.end(
+                guardian_verdict="n/a", result=f"Error: {error}",
+                latency_ms=_elapsed_ms(start), success=False, error=error,
+            )
+            return f"Error: {error}"
 
         verdict = await self._guardian.check(tool_spec, tool_call.arguments, context={})
         if verdict.outcome == VerdictType.NEEDS_CONFIRMATION:
@@ -202,17 +238,35 @@ class Planner:
 
         if verdict.outcome != VerdictType.ALLOW:
             trace.append(f"{tool_call.name}:denied")
-            return f"Denied: {verdict.reason}"
+            result_text = f"Denied: {verdict.reason}"
+            tool_trace.end(
+                guardian_verdict=verdict.outcome.value, result=result_text,
+                latency_ms=_elapsed_ms(start), success=False,
+            )
+            return result_text
 
         try:
             result_text = await self._run_tool(tool_spec, tool_call.arguments)
             trace.append(f"{tool_call.name}:ok")
+            tool_trace.end(
+                guardian_verdict=verdict.outcome.value, result=result_text,
+                latency_ms=_elapsed_ms(start), success=True,
+            )
             return result_text
         except asyncio.TimeoutError:
             trace.append(f"{tool_call.name}:timeout")
-            return f"Error: '{tool_call.name}' timed out after {self._tool_timeout_seconds:.0f}s"
+            error = f"'{tool_call.name}' timed out after {self._tool_timeout_seconds:.0f}s"
+            tool_trace.end(
+                guardian_verdict=verdict.outcome.value, result=f"Error: {error}",
+                latency_ms=_elapsed_ms(start), success=False, error=error,
+            )
+            return f"Error: {error}"
         except Exception as exc:
             trace.append(f"{tool_call.name}:error")
+            tool_trace.end(
+                guardian_verdict=verdict.outcome.value, result=f"Error: {exc}",
+                latency_ms=_elapsed_ms(start), success=False, error=str(exc),
+            )
             return f"Error: {exc}"
 
     async def _run_tool(self, tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:

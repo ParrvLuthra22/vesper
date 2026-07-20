@@ -612,3 +612,16 @@ proactive:
       enabled: true
       # 24-hour HH:MM, local time.
       time: "08:30"
+
+
+# -----------------------------------------------------------------------------
+# Tracing (P06) — LangSmith instrumentation over the Planner's tool-calling
+# loop, with an always-on local JSONL fallback.
+# -----------------------------------------------------------------------------
+# LANGSMITH_API_KEY comes from the environment (.env supported). If unset,
+# tracing degrades to local JSONL only at tracing.local_dir — the app never
+# breaks because of tracing either way.
+tracing:
+  enabled: true
+  project_name: "vesper"
+  local_dir: "data/traces"

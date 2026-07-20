@@ -20,6 +20,12 @@ from llm.types import LLMResponse, RouterError, ToolCall
 from orchestrator.planner import MAX_ITERATIONS_MESSAGE, Planner
 from schemas.events import ActionRequestEvent, ActionResultEvent, ConfirmationRequestedEvent, ConfirmationResponseEvent
 from tools.registry import ToolRegistry, ToolSpec
+from tracing.tracer import Tracer
+
+#: These tests aren't exercising tracing itself (see test_tracer.py for
+#: that) -- disable it so test runs never write to the real
+#: data/traces/traces.jsonl.
+_NO_TRACING = {"tracing": {"enabled": False}}
 
 
 @pytest.fixture(autouse=True)
@@ -64,7 +70,8 @@ def _make_planner(
     **kwargs: Any,
 ) -> Planner:
     guardian = Guardian(event_bus=bus)
-    return Planner(router=router, registry=registry, guardian=guardian, event_bus=bus, **kwargs)
+    tracer = Tracer(config=_NO_TRACING)
+    return Planner(router=router, registry=registry, guardian=guardian, event_bus=bus, tracer=tracer, **kwargs)
 
 
 async def _wait_until(predicate, attempts: int = 100) -> None:

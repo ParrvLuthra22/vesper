@@ -57,6 +57,7 @@ from orchestrator.planner import Planner, PlannerResult
 from proactive.engine import ProactiveEngine
 from sensors.calendar_sensor import CalendarSensor
 from sensors.focus_sensor import FocusSensor
+from tracing.tracer import Tracer
 
 # VisionAgent is optional - only import if vision dependencies are available
 try:
@@ -386,10 +387,12 @@ class Brain:
         # routing. Built once at startup (router + guardian + persona load).
         self._guardian = Guardian(event_bus=self._event_bus)
         self._router = ModelRouter(config=self._config)
+        self._tracer = Tracer(config=self._config)
         self._planner = Planner(
             router=self._router,
             guardian=self._guardian,
             event_bus=self._event_bus,
+            tracer=self._tracer,
         )
 
         # Sensors (P05) — local-only observation, individually toggleable

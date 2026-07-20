@@ -57,6 +57,11 @@ groq>=1.0.0                  # Groq chat completions + tool calling SDK
 ollama>=0.6.2                # Local Ollama chat completions + tools API client
 
 # ------------------------------------------------------------------------------
+# Tracing (tracing/) - LangSmith over the Planner, with a local JSONL fallback
+# ------------------------------------------------------------------------------
+langsmith>=0.4.0             # LangSmith tracing client (RunTree)
+
+# ------------------------------------------------------------------------------
 # Sensors & Proactive Engine (sensors/, proactive/) - local-only sensing
 # ------------------------------------------------------------------------------
 apscheduler>=3.10.0             # Cron-style scheduled jobs (morning briefing, etc.)

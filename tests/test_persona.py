@@ -34,6 +34,7 @@ from llm.router import ModelRouter
 from llm.types import LLMResponse
 from orchestrator.planner import Planner
 from tools.registry import ToolRegistry
+from tracing.tracer import Tracer
 from config.settings import load_config_dict
 
 CASES_PATH = Path(__file__).parent / "persona_cases.yaml"
@@ -61,7 +62,11 @@ def _fresh_planner(router: Any) -> Planner:
     bus = EventBus()
     guardian = Guardian(event_bus=bus)
     registry = ToolRegistry()
-    return Planner(router=router, registry=registry, guardian=guardian, event_bus=bus)
+    # This mode checks the constructed prompt, not tracing itself -- disable
+    # it so the (fast, no-network) default test run never writes to the
+    # real data/traces/traces.jsonl.
+    tracer = Tracer(config={"tracing": {"enabled": False}})
+    return Planner(router=router, registry=registry, guardian=guardian, event_bus=bus, tracer=tracer)
 
 
 # =============================================================================

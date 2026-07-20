@@ -103,6 +103,43 @@ def get_groq_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional[s
     return None
 
 
+def get_langsmith_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional[str]:
+    """
+    Resolve a LangSmith key from common env/config locations.
+
+    Priority:
+    1. Environment variables (LANGSMITH_API_KEY, legacy LANGCHAIN_API_KEY)
+    2. Optional config getter (dot-path lookups)
+
+    Returns None if unset — tracing.Tracer treats that as "degrade to
+    local-only tracing," never as an error.
+    """
+    env_key = get_env_value(
+        "LANGSMITH_API_KEY",
+        "langsmith_api_key",
+        "LANGCHAIN_API_KEY",
+        "langchain_api_key",
+    )
+    if env_key:
+        return env_key
+
+    if config_getter is None:
+        return None
+
+    for key in (
+        "tracing.api_key",
+        "general.langsmith_api_key",
+    ):
+        try:
+            value = _clean(config_getter(key))
+        except Exception:
+            value = None
+        if value:
+            return value
+
+    return None
+
+
 def get_openrouter_api_key(config_getter: Optional[ConfigGetter] = None) -> Optional[str]:
     """
     Resolve OpenRouter key from common env/config locations.
