@@ -502,3 +502,85 @@ async def test_provider_status_unconfigured_tier() -> None:
     assert fallback["tier"] == "fallback"
     assert fallback["available"] is False
     assert fallback["provider"] == "(not configured)"
+
+
+# =============================================================================
+# Ollama message normalization (P10) — a prior assistant tool-call message
+# (built by Planner._assistant_tool_call_message in OpenAI/Groq's wire
+# format, arguments as a JSON string) must not reach Ollama's SDK as-is:
+# it validates function.arguments as a dict and raises otherwise. This is
+# the exact bug that repeatedly broke the "Groq down -> falls back to
+# Ollama" failure drill whenever the turn already involved a tool call.
+# =============================================================================
+
+def test_normalize_messages_for_ollama_converts_stringified_arguments() -> None:
+    from llm.providers.ollama_provider import _normalize_messages_for_ollama
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": '{"tz": "UTC"}'}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00 UTC"},
+    ]
+
+    normalized = _normalize_messages_for_ollama(messages)
+
+    assert normalized[0] == messages[0]
+    assert normalized[1]["tool_calls"][0]["function"]["arguments"] == {"tz": "UTC"}
+    assert normalized[2] == messages[2]
+    # The original list/dicts must not be mutated in place.
+    assert messages[1]["tool_calls"][0]["function"]["arguments"] == '{"tz": "UTC"}'
+
+
+def test_normalize_messages_for_ollama_leaves_dict_arguments_untouched() -> None:
+    from llm.providers.ollama_provider import _normalize_messages_for_ollama
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": {"tz": "UTC"}}}
+            ],
+        },
+    ]
+
+    normalized = _normalize_messages_for_ollama(messages)
+
+    assert normalized[0]["tool_calls"][0]["function"]["arguments"] == {"tz": "UTC"}
+
+
+def test_normalize_messages_for_ollama_leaves_plain_messages_untouched() -> None:
+    from llm.providers.ollama_provider import _normalize_messages_for_ollama
+
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello, Sir."}]
+    assert _normalize_messages_for_ollama(messages) == messages
+
+
+@pytest.mark.asyncio
+async def test_ollama_provider_normalizes_stringified_tool_call_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    from llm.providers.ollama_provider import OllamaProvider
+
+    fake_chat = _patch_ollama_client(monkeypatch, _ollama_response(content="ok"))
+    provider = OllamaProvider(config=BASE_CONFIG)
+
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "get_time", "arguments": '{"tz": "UTC"}'}}
+            ],
+        },
+    ]
+
+    await provider.complete(messages=messages, model="qwen3.5:latest")
+
+    sent_messages = fake_chat.call_args.kwargs["messages"]
+    assert sent_messages[1]["tool_calls"][0]["function"]["arguments"] == {"tz": "UTC"}

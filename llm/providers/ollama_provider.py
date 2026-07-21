@@ -26,6 +26,41 @@ except Exception:  # pragma: no cover - optional dependency
     OLLAMA_SDK_AVAILABLE = False
 
 
+def _normalize_messages_for_ollama(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """
+    The Planner builds message history in OpenAI/Groq's wire format, where
+    an assistant tool-call's function.arguments is always a JSON-encoded
+    *string* (see Planner._assistant_tool_call_message) — that's fine for
+    Groq, but Ollama's SDK validates it as a dict and raises a pydantic
+    ValidationError otherwise. Rather than making the Planner's
+    message-building provider-aware, repair it back to a dict here, right
+    before it reaches Ollama's client.
+
+    This matters most on the exact path this bug hid on for several
+    phases: a mid-turn Groq rate limit falling back to Ollama *after* a
+    tool has already been called this turn, so the history being replayed
+    already contains one of these assistant tool-call messages.
+    """
+    normalized: List[Dict[str, Any]] = []
+    for message in messages:
+        tool_calls = message.get("tool_calls")
+        if not tool_calls:
+            normalized.append(message)
+            continue
+
+        new_tool_calls = []
+        for tc in tool_calls:
+            function = tc.get("function", {})
+            arguments = function.get("arguments")
+            if isinstance(arguments, str):
+                new_tc = {**tc, "function": {**function, "arguments": parse_tool_arguments(arguments)}}
+                new_tool_calls.append(new_tc)
+            else:
+                new_tool_calls.append(tc)
+        normalized.append({**message, "tool_calls": new_tool_calls})
+    return normalized
+
+
 @register_provider("ollama")
 class OllamaProvider(LLMProvider):
     """Routes completions through a local (or remote) Ollama server."""
@@ -72,7 +107,7 @@ class OllamaProvider(LLMProvider):
         try:
             response = await client.chat(
                 model=model,
-                messages=messages,
+                messages=_normalize_messages_for_ollama(messages),
                 tools=tools or None,
                 options={"temperature": temperature},
             )

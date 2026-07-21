@@ -7,6 +7,7 @@ venv.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -17,6 +18,14 @@ from tools.mcp_bridge import DEFAULT_UNMAPPED_TIER, MCPBridge
 from tools.registry import ToolRegistry
 
 FAKE_SERVER_PATH = Path(__file__).parent / "fixtures" / "fake_mcp_server.py"
+
+
+async def _wait_until(predicate, attempts: int = 200, interval: float = 0.02) -> None:
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError("condition not met in time")
 
 
 def _config(**server_overrides: Any) -> Dict[str, Any]:
@@ -127,3 +136,87 @@ async def test_bad_command_does_not_raise_and_registers_nothing() -> None:
     await bridge.start()  # must not raise
     assert registry.list_all() == []
     await bridge.stop()
+
+
+# =============================================================================
+# Crash detection + reconnect with backoff (P10)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_crash_marks_tools_unavailable_then_reconnects(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A subprocess crash must never leave a dead tool silently in the LLM's
+    schema — it should disappear (enabled=False) until reconnected."""
+    monkeypatch.setattr("tools.mcp_bridge.RECONNECT_BASE_DELAY_SECONDS", 0.02)
+    monkeypatch.setattr("tools.mcp_bridge.RECONNECT_MAX_DELAY_SECONDS", 0.02)
+
+    registry = ToolRegistry()
+    bridge = MCPBridge(config=_config(), registry=registry)
+    await bridge.start()
+    try:
+        assert registry.get("echo").enabled is True
+
+        # Simulate a crash: kill the subprocess out from under the connection.
+        connection = bridge._connections["fake"]
+        connection._process.kill()
+        await connection._process.wait()
+
+        await _wait_until(lambda: registry.get("echo").enabled is False)
+        assert "fake" not in bridge._connections
+
+        # The backoff loop should bring it back on its own.
+        await _wait_until(lambda: registry.get("echo").enabled is True)
+
+        # And the tool must actually work again, through the new connection.
+        result = await registry.get("echo").handler({"text": "back online"}, {})
+        assert result == "back online"
+    finally:
+        await bridge.stop()
+
+
+@pytest.mark.asyncio
+async def test_handler_raises_clearly_while_disconnected() -> None:
+    registry = ToolRegistry()
+    bridge = MCPBridge(config=_config(), registry=registry)
+    await bridge.start()
+    try:
+        connection = bridge._connections["fake"]
+        connection._process.kill()
+        await connection._process.wait()
+        await _wait_until(lambda: "fake" not in bridge._connections)
+
+        with pytest.raises(RuntimeError, match="not connected"):
+            await registry.get("echo").handler({"text": "hi"}, {})
+    finally:
+        await bridge.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconnect_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If the server keeps failing to (re)start, stop retrying and leave its
+    tools disabled for the rest of the session rather than looping forever."""
+    monkeypatch.setattr("tools.mcp_bridge.RECONNECT_BASE_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr("tools.mcp_bridge.RECONNECT_MAX_DELAY_SECONDS", 0.01)
+    monkeypatch.setattr("tools.mcp_bridge.RECONNECT_MAX_ATTEMPTS", 2)
+
+    registry = ToolRegistry()
+    bridge = MCPBridge(config=_config(), registry=registry)
+    await bridge.start()
+    try:
+        connection = bridge._connections["fake"]
+
+        # After the crash, reconnects will target this now-bad command, so
+        # every attempt fails and the loop must give up cleanly.
+        bridge._server_configs["fake"]["command"] = "/no/such/executable"
+
+        connection._process.kill()
+        await connection._process.wait()
+
+        await _wait_until(lambda: registry.get("echo").enabled is False)
+
+        reconnect_task = bridge._reconnect_tasks["fake"]
+        await asyncio.wait_for(reconnect_task, timeout=5.0)
+
+        assert registry.get("echo").enabled is False
+        assert "fake" not in bridge._connections
+    finally:
+        await bridge.stop()

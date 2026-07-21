@@ -511,3 +511,66 @@ async def test_no_memories_section_when_none_given() -> None:
 
     system_prompt = router.complete.call_args.kwargs["messages"][0]["content"]
     assert "Relevant memories:" not in system_prompt
+
+
+# =============================================================================
+# Malformed tool arguments — failure drill (P10)
+# =============================================================================
+
+@pytest.mark.asyncio
+async def test_malformed_arguments_retry_then_succeed() -> None:
+    """A tool handler raising on bad arguments must feed the error back to
+    the model as a normal tool result -- never a raw exception -- giving
+    the model a real chance to retry with corrected arguments."""
+    bus = EventBus()
+    registry = ToolRegistry()
+
+    async def add_reminder_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
+        if "title" not in arguments:
+            raise TypeError("missing required argument: 'title'")
+        return f"Reminder '{arguments['title']}' created."
+
+    registry.register(ToolSpec(name="add_reminder", description="d", handler=add_reminder_handler, tier="safe"))
+
+    router = _mock_router([
+        LLMResponse(tool_calls=[ToolCall(name="add_reminder", arguments={}, id="call_1")]),
+        LLMResponse(tool_calls=[ToolCall(name="add_reminder", arguments={"title": "Buy milk"}, id="call_2")]),
+        LLMResponse(text="Done, Sir -- I've added the reminder."),
+    ])
+
+    planner = _make_planner(router, registry, bus)
+    result = await planner.run(user_text="remind me to buy milk")
+
+    assert result.text == "Done, Sir -- I've added the reminder."
+    assert result.tool_trace == ["add_reminder:error", "add_reminder:ok"]
+    assert router.complete.call_count == 3
+
+    # The failure must have reached the model as a normal tool message, not
+    # a raised exception, so it could see it and retry.
+    second_call_messages = router.complete.call_args_list[1].kwargs["messages"]
+    tool_messages = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert "missing required argument" in tool_messages[0]["content"]
+
+
+@pytest.mark.asyncio
+async def test_malformed_arguments_gives_up_gracefully_after_max_iterations() -> None:
+    """If the model can never correct the arguments, the existing
+    max-iteration cutoff still produces a graceful apology -- never a raw
+    exception reaching the user."""
+    bus = EventBus()
+    registry = ToolRegistry()
+
+    async def always_fails_handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
+        raise TypeError("missing required argument: 'title'")
+
+    registry.register(ToolSpec(name="add_reminder", description="d", handler=always_fails_handler, tier="safe"))
+
+    always_malformed = LLMResponse(tool_calls=[ToolCall(name="add_reminder", arguments={}, id="call_1")])
+    router = _mock_router([always_malformed] * 10)
+
+    planner = _make_planner(router, registry, bus, max_iterations=3)
+    result = await planner.run(user_text="remind me to buy milk")
+
+    assert result.aborted
+    assert result.text == MAX_ITERATIONS_MESSAGE
+    assert result.tool_trace == ["add_reminder:error", "add_reminder:error", "add_reminder:error"]
