@@ -12,8 +12,9 @@ pyyaml>=6.0              # Configuration file parsing
 python-dotenv>=1.0.0     # Load environment variables from .env file
 pydantic>=2.7.0          # Typed validation models
 pydantic-settings>=2.2.1 # BaseSettings + YAML-backed settings source
-fastapi>=0.110.0         # Health API for observability
-uvicorn>=0.27.0          # ASGI server for health API
+fastapi>=0.110.0         # Health API + API gateway (gateway/server.py)
+uvicorn>=0.27.0          # ASGI server for the health API and gateway
+websockets>=12.0         # Gateway WebSocket server + --remote CLI client
 
 # ------------------------------------------------------------------------------
 # Voice & Speech - FREE, LOCAL options

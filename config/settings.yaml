@@ -345,6 +345,25 @@ security:
     max_requests_per_minute: 60
 
 # -----------------------------------------------------------------------------
+# API Gateway (PV0) — WebSocket + REST surface over the event bus
+# -----------------------------------------------------------------------------
+# Runs in-process with the Brain (python -m gateway.server). Additive: the CLI
+# still works standalone. Clients attach over ws://host:port/ws (bearer token)
+# or the REST endpoints /message, /status, /confirm.
+#
+# LOCALHOST ONLY IN v2. `host` must stay 127.0.0.1 — the server refuses to bind
+# anything else. The bearer token gates LOCAL access only; it is not real auth.
+# Exposing this gateway beyond localhost is a v3 decision that first requires
+# real auth (per-user credentials, TLS, rate limiting), none of which exists
+# here.
+gateway:
+  host: "127.0.0.1"   # LOCAL ONLY — never 0.0.0.0 in v2
+  port: 8760
+  # Prefer the env var VESPER_GATEWAY_TOKEN over putting a secret in this file.
+  # Empty => fail closed (every connection is rejected).
+  token: ""
+
+# -----------------------------------------------------------------------------
 # UI / HUD Configuration
 # -----------------------------------------------------------------------------
 ui:

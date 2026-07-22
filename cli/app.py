@@ -21,9 +21,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional, Tuple
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -300,10 +302,144 @@ async def _main() -> int:
     return 0
 
 
-def run() -> None:
-    """Entry point for `python -m vesper` / the `vesper` console script."""
+# =====================================================================
+# Remote mode (--remote): the SAME REPL, driven through a running
+# gateway's WebSocket instead of an in-process Brain. This proves the
+# client contract end-to-end; in-process mode above stays the default and
+# is completely unchanged.
+# =====================================================================
+
+def _parse_remote_args(argv: List[str]) -> Optional[Dict[str, Any]]:
+    """Return {host, port, token} overrides if --remote is present, else None."""
+    if "--remote" not in argv:
+        return None
+    opts: Dict[str, Any] = {"host": None, "port": None, "token": None}
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--host" and i + 1 < len(argv):
+            opts["host"] = argv[i + 1]; i += 2; continue
+        if arg == "--port" and i + 1 < len(argv):
+            opts["port"] = int(argv[i + 1]); i += 2; continue
+        if arg == "--token" and i + 1 < len(argv):
+            opts["token"] = argv[i + 1]; i += 2; continue
+        i += 1
+    return opts
+
+
+def _resolve_remote_target(opts: Dict[str, Any]) -> Tuple[str, int, str]:
+    """CLI flags win, then config gateway.*, then the VESPER_GATEWAY_TOKEN env."""
+    gw = load_config_dict().get("gateway", {}) or {}
+    host = opts.get("host") or gw.get("host", "127.0.0.1")
+    port = opts.get("port") or int(gw.get("port", 8760))
+    token = opts.get("token") or os.getenv("VESPER_GATEWAY_TOKEN") or gw.get("token", "")
+    return host, int(port), token
+
+
+def _print_vesper(console: Console, style: str, text: str) -> None:
+    console.print("Vesper: ", style=style, markup=False, highlight=False, end="")
+    console.print(text, style=style, markup=False, highlight=False)
+
+
+def _render_wire(console: Console, style: str, msg: Dict[str, Any], pending: Dict[str, Any]) -> None:
+    """Render one inbound wire event — the client-side counterpart to the
+    in-process CLI's event-bus subscriptions."""
+    kind = msg.get("type")
+    if kind == "snapshot":
+        greeting = msg.get("greeting")
+        if greeting:
+            _print_vesper(console, style, greeting)
+    elif kind == "reply":
+        _print_vesper(console, style, msg.get("text", ""))
+    elif kind == "tool_started":
+        console.print(
+            f"▸ {msg.get('tool')}({_format_arguments(msg.get('arguments', {}) or {})})",
+            style="dim", markup=False, highlight=False,
+        )
+    elif kind == "tool_finished":
+        mark = "✓" if msg.get("success") else "✗"
+        line = f"  {mark} {msg.get('tool')} [{(msg.get('latency_ms') or 0):.0f}ms]"
+        if not msg.get("success") and (msg.get("error") or msg.get("result")):
+            line += f" — {msg.get('error') or msg.get('result')}"
+        console.print(line, style="dim", markup=False, highlight=False)
+    elif kind == "observation":
+        console.print(f"○ {msg.get('detail')}", style="italic cyan", markup=False, highlight=False)
+    elif kind == "confirmation_requested":
+        pending["id"] = msg.get("request_id")
+        console.print(
+            f"⚠  {msg.get('summary')}  [reply y/n]",
+            style="bold yellow", markup=False, highlight=False,
+        )
+    elif kind == "briefing_requested":
+        console.print("○ (briefing requested)", style="dim", markup=False, highlight=False)
+
+
+async def _run_remote(host: str, port: int, token: str) -> int:
+    import websockets
+
+    console = Console()
+    style = _vesper_style(console)
+    uri = f"ws://{host}:{port}/ws"
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     try:
-        exit_code = asyncio.run(_main())
+        ws = await websockets.connect(uri, additional_headers=headers)
+    except Exception as exc:
+        console.print(f"[bold red]Could not connect to gateway at {uri}:[/bold red] {exc}")
+        return 1
+
+    pending: Dict[str, Any] = {"id": None}
+
+    async def receiver() -> None:
+        try:
+            async for raw in ws:
+                _render_wire(console, style, json.loads(raw), pending)
+        except Exception:
+            pass
+
+    recv_task = asyncio.create_task(receiver())
+    loop = asyncio.get_running_loop()
+    console.print(f"[dim]Connected to {uri} (--remote). Type /quit to exit.[/dim]")
+    try:
+        while True:
+            try:
+                text = await loop.run_in_executor(None, lambda: console.input("You: "))
+            except (EOFError, KeyboardInterrupt):
+                console.print()
+                break
+            text = text.strip()
+            if not text:
+                continue
+            if text == "/quit":
+                break
+            # While a confirmation is pending, y/n answers it instead of
+            # starting a new turn.
+            if pending["id"] and text.lower() in ("y", "yes", "n", "no"):
+                approved = text.lower() in ("y", "yes")
+                await ws.send(json.dumps({"type": "confirm", "request_id": pending["id"], "approved": approved}))
+                pending["id"] = None
+                continue
+            await ws.send(json.dumps({"type": "message", "text": text}))
+    finally:
+        recv_task.cancel()
+        await ws.close()
+    return 0
+
+
+def run() -> None:
+    """Entry point for `python -m vesper` / the `vesper` console script.
+
+    Default: in-process mode (owns its Brain). With ``--remote`` (optionally
+    ``--host``/``--port``/``--token``), drive the SAME REPL through a running
+    gateway's WebSocket instead — proving the client contract — while
+    in-process mode stays the default and is unchanged.
+    """
+    remote = _parse_remote_args(sys.argv[1:])
+    try:
+        if remote is not None:
+            host, port, token = _resolve_remote_target(remote)
+            exit_code = asyncio.run(_run_remote(host, port, token))
+        else:
+            exit_code = asyncio.run(_main())
     except KeyboardInterrupt:
         print("\nInterrupted.")
         exit_code = 130

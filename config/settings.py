@@ -189,6 +189,18 @@ class SecuritySettings(BaseModel):
     rate_limit: SecurityRateLimitSettings = Field(default_factory=SecurityRateLimitSettings)
 
 
+class GatewaySettings(BaseModel):
+    """API Gateway (PV0). LOCALHOST ONLY in v2 — see settings.yaml notes.
+
+    The token is read at runtime from env VESPER_GATEWAY_TOKEN (preferred),
+    falling back to `token` here. An empty token fails closed (rejects all).
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8760
+    token: str = ""
+
+
 class HUDSettings(BaseModel):
     enabled: bool = True
     width: int = 620
@@ -483,6 +495,7 @@ class AppSettings(BaseSettings):
     orchestrator: OrchestratorSettings = Field(default_factory=OrchestratorSettings)
     event_bus: EventBusSettings = Field(default_factory=EventBusSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
+    gateway: GatewaySettings = Field(default_factory=GatewaySettings)
     ui: UISettings = Field(default_factory=UISettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)

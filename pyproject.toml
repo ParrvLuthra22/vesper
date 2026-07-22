@@ -11,6 +11,7 @@ dynamic = ["dependencies"]
 
 [project.scripts]
 vesper = "cli.app:run"
+vesper-gateway = "gateway.server:main"
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
