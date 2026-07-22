@@ -1,5 +1,5 @@
 """
-Speech Recognition Providers for JARVIS Virtual Assistant.
+Speech Recognition Providers for VESPER Virtual Assistant.
 
 This module provides:
 - VoskWakeWordDetector: Lightweight wake word detection using Vosk
@@ -89,7 +89,7 @@ class VoskWakeWordDetector:
     Usage:
         detector = VoskWakeWordDetector(
             model_path="models/vosk-model-small-en-us",
-            wake_word="jarvis",
+            wake_word="vesper",
             on_wake_word=lambda: print("Wake word detected!"),
         )
         detector.start()
@@ -100,7 +100,7 @@ class VoskWakeWordDetector:
     def __init__(
         self,
         model_path: str,
-        wake_word: str = "jarvis",
+        wake_word: str = "vesper",
         sample_rate: int = DEFAULT_SAMPLE_RATE,
         sensitivity: float = 0.5,
         on_wake_word: Optional[Callable[[], None]] = None,
@@ -142,18 +142,18 @@ class VoskWakeWordDetector:
         word = wake_word.lower()
         variants = [word]
         
-        # Common mishearings for "jarvis"
-        if word == "jarvis":
+        # Common mishearings for "vesper"
+        if word == "vesper":
             variants.extend([
-                "jarvis",
+                "vesper",
                 "travis",
                 "jervis",
                 "service",
                 "jarvus",
                 "charvis",
-                "hey jarvis",
+                "hey vesper",
                 "hey travis",
-                "ok jarvis",
+                "ok vesper",
             ])
         
         return variants
@@ -171,7 +171,7 @@ class VoskWakeWordDetector:
             # Check model path exists
             model_path = Path(self._model_path)
             if not model_path.exists():
-                logger.error(f"Vosk model not found at: {model_path}")
+                logger.warning(f"Vosk model not found at: {model_path}")
                 logger.info("Download from: https://alphacephei.com/vosk/models")
                 self._state = WakeWordState.ERROR
                 return False
@@ -186,7 +186,7 @@ class VoskWakeWordDetector:
             return True
             
         except ImportError:
-            logger.error("Vosk not installed. Run: pip install vosk")
+            logger.warning("Vosk not installed. Run: pip install vosk")
             self._state = WakeWordState.ERROR
             return False
         except Exception as e:
@@ -371,14 +371,14 @@ class WhisperTranscriber:
         # Check binary
         binary = Path(self._binary_path)
         if not binary.exists():
-            logger.error(f"whisper.cpp binary not found at: {binary}")
+            logger.warning(f"whisper.cpp binary not found at: {binary}")
             logger.info("Build from: https://github.com/ggerganov/whisper.cpp")
             return False
         
         # Check model
         model = Path(self._model_path)
         if not model.exists():
-            logger.error(f"Whisper model not found at: {model}")
+            logger.warning(f"Whisper model not found at: {model}")
             logger.info("Download from: https://huggingface.co/ggerganov/whisper.cpp")
             return False
         
@@ -606,7 +606,7 @@ class SpeechRecognitionTranscriber:
             logger.info("SpeechRecognition fallback initialized")
             return True
         except ImportError:
-            logger.error("SpeechRecognition not installed. Run: pip install SpeechRecognition")
+            logger.warning("SpeechRecognition not installed. Run: pip install SpeechRecognition")
             return False
     
     async def transcribe(

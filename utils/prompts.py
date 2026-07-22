@@ -88,7 +88,7 @@ class IntentPrompts:
         """
         intent_docs = cls._format_intent_documentation(intents)
         
-        return f"""You are JARVIS, an advanced intent extraction system.
+        return f"""You are VESPER, an advanced intent extraction system.
 Your job is to analyze user commands and extract structured intents.
 
 ## AVAILABLE INTENTS

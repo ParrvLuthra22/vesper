@@ -468,7 +468,7 @@ class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
     model_config = SettingsConfigDict(
-        env_prefix="JARVIS_",
+        env_prefix="VESPER_",
         env_nested_delimiter="__",
         extra="allow",
     )
@@ -501,7 +501,7 @@ class AppSettings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        yaml_file = os.getenv("JARVIS_CONFIG", str(DEFAULT_SETTINGS_PATH))
+        yaml_file = os.getenv("VESPER_CONFIG", str(DEFAULT_SETTINGS_PATH))
         return (
             init_settings,
             env_settings,
@@ -519,7 +519,7 @@ class AppSettings(BaseSettings):
 
 def load_settings(config_path: Optional[str] = None) -> AppSettings:
     """Load settings, honoring explicit path, env override, and defaults."""
-    path = config_path or os.getenv("JARVIS_CONFIG") or str(DEFAULT_SETTINGS_PATH)
+    path = config_path or os.getenv("VESPER_CONFIG") or str(DEFAULT_SETTINGS_PATH)
     return AppSettings(settings_file=path)
 
 

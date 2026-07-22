@@ -1,5 +1,5 @@
 """
-JARVIS Virtual Assistant - Config Package.
+VESPER Virtual Assistant - Config Package.
 
 This package handles configuration loading and validation.
 """

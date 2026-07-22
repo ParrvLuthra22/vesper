@@ -1,5 +1,5 @@
 """
-JARVIS Virtual Assistant - Utils Package.
+VESPER Virtual Assistant - Utils Package.
 
 This package contains utility modules for logging, configuration, etc.
 """

@@ -1,4 +1,4 @@
-"""LangGraph-based reasoning engine for complex multi-tool JARVIS tasks."""
+"""LangGraph-based reasoning engine for complex multi-tool VESPER tasks."""
 
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ except Exception:  # pragma: no cover - optional dependency
 logger = get_logger(__name__)
 
 
-class JARVISState(TypedDict):
+class VesperState(TypedDict):
     user_input: str
     plan: List[str]
     current_step: int
@@ -72,9 +72,9 @@ class ReasoningEngine:
     def is_available(self) -> bool:
         return self._graph is not None
 
-    async def run(self, user_input: str, correlation_id: Optional[UUID] = None) -> JARVISState:
+    async def run(self, user_input: str, correlation_id: Optional[UUID] = None) -> VesperState:
         """Execute the reasoning graph for one complex user request."""
-        initial_state: JARVISState = {
+        initial_state: VesperState = {
             "user_input": user_input,
             "plan": [],
             "current_step": 0,
@@ -146,7 +146,7 @@ class ReasoningEngine:
             logger.warning("langgraph not installed; ReasoningEngine graph disabled")
             return None
 
-        graph = StateGraph(JARVISState)
+        graph = StateGraph(VesperState)
         graph.add_node("planner", self.planner_node)
         graph.add_node("tool_selector", self.tool_selector_node)
         graph.add_node("executor", self.executor_node)
@@ -168,7 +168,7 @@ class ReasoningEngine:
         graph.add_edge("responder", END)
         return graph.compile()
 
-    async def planner_node(self, state: JARVISState) -> JARVISState:
+    async def planner_node(self, state: VesperState) -> VesperState:
         """
         Break user request into atomic steps.
         Expected output format:
@@ -209,7 +209,7 @@ class ReasoningEngine:
         await self._emit_hud_state("planner", state)
         return state
 
-    async def tool_selector_node(self, state: JARVISState) -> JARVISState:
+    async def tool_selector_node(self, state: VesperState) -> VesperState:
         """Select tool based on current plan action."""
         steps: List[Dict[str, Any]] = state.get("plan_objects", [])  # type: ignore[assignment]
         idx = int(state.get("current_step", 0))
@@ -230,7 +230,7 @@ class ReasoningEngine:
         await self._emit_hud_state("tool_selector", state)
         return state
 
-    async def executor_node(self, state: JARVISState) -> JARVISState:
+    async def executor_node(self, state: VesperState) -> VesperState:
         """Emit event for selected tool and wait for result via asyncio.Event."""
         steps: List[Dict[str, Any]] = state.get("plan_objects", [])  # type: ignore[assignment]
         idx = int(state.get("current_step", 0))
@@ -258,7 +258,7 @@ class ReasoningEngine:
         await self._emit_hud_state("executor", state)
         return state
 
-    async def verifier_node(self, state: JARVISState) -> JARVISState:
+    async def verifier_node(self, state: VesperState) -> VesperState:
         """Verify whether task is complete."""
         if state.get("needs_clarification"):
             state["complete"] = True  # type: ignore[index]
@@ -290,7 +290,7 @@ class ReasoningEngine:
         await self._emit_hud_state("verifier", state)
         return state
 
-    async def responder_node(self, state: JARVISState) -> JARVISState:
+    async def responder_node(self, state: VesperState) -> VesperState:
         """Create final spoken response and emit VoiceOutputEvent."""
         if state.get("needs_clarification"):
             final_response = state.get("clarification_question") or (
@@ -383,7 +383,7 @@ class ReasoningEngine:
         )
         await self._event_bus.emit(event)
 
-    async def _emit_hud_state(self, node_name: str, state: JARVISState) -> None:
+    async def _emit_hud_state(self, node_name: str, state: VesperState) -> None:
         plan_steps = []
         current_step = int(state.get("current_step", 0))
         for idx, step in enumerate(state.get("plan", [])):

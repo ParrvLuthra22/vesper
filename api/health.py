@@ -1,4 +1,4 @@
-"""Health check API for JARVIS."""
+"""Health check API for VESPER."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ AgentsProvider = Callable[[], Dict[str, BaseAgent]]
 
 def create_app(agents_provider: AgentsProvider) -> FastAPI:
     """Create a FastAPI app that exposes a /health endpoint."""
-    app = FastAPI(title="JARVIS Health", version="1.0.0")
+    app = FastAPI(title="VESPER Health", version="1.0.0")
 
     @app.get("/health")
     async def health() -> Dict[str, Dict[str, str]]:

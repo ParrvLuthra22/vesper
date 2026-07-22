@@ -1,5 +1,5 @@
 """
-macOS HUD overlay for JARVIS.
+macOS HUD overlay for VESPER.
 
 Design goals:
 - Runs in its own thread (non-blocking to orchestrator/event loop)
@@ -380,7 +380,7 @@ class HUDModel:
     )
 
 
-class JarvisHUDOverlay:
+class VesperHUDOverlay:
     """Tkinter-based always-on-top HUD overlay running in a dedicated thread."""
 
     def __init__(
@@ -431,7 +431,7 @@ class JarvisHUDOverlay:
             return
 
         self._stop_requested.clear()
-        self._thread = threading.Thread(target=self._run_ui, name="JarvisHUD", daemon=True)
+        self._thread = threading.Thread(target=self._run_ui, name="VesperHUD", daemon=True)
         self._thread.start()
 
     def stop(self) -> None:
@@ -882,7 +882,7 @@ class HUDOverlayController:
         self._event_bus = event_bus or get_event_bus()
         self._config = config or {}
         self._tokens: List[SubscriptionToken] = []
-        self._hud: Optional[JarvisHUDOverlay] = None
+        self._hud: Optional[VesperHUDOverlay] = None
         self._hud_process: Optional[mp.Process] = None
         self._hud_process_queue: Optional[mp.Queue] = None
         self._use_process_mode = platform.system() == "Darwin"
@@ -908,12 +908,12 @@ class HUDOverlayController:
             self._hud_process = mp.Process(
                 target=_hud_process_main,
                 args=(hud_kwargs, self._hud_process_queue),
-                name="JarvisHUDProcess",
+                name="VesperHUDProcess",
                 daemon=True,
             )
             self._hud_process.start()
         else:
-            self._hud = JarvisHUDOverlay(**hud_kwargs)
+            self._hud = VesperHUDOverlay(**hud_kwargs)
             self._hud.start()
 
         self._tokens.append(self._event_bus.subscribe(BaseEvent, self._on_any_event))

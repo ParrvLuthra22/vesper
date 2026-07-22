@@ -76,7 +76,7 @@ class ChromaRAGMemoryService:
     def __init__(
         self,
         persist_directory: str,
-        collection_name: str = "jarvis_memory",
+        collection_name: str = "vesper_memory",
         embedding_model: Optional[str] = None,
         chunk_size_tokens: int = 400,
         chunk_overlap_tokens: int = 64,

@@ -1157,7 +1157,7 @@ def init_from_config(config: Dict[str, Any]) -> None:
     Expected config structure matches settings.yaml 'general' section:
         general:
           log_level: INFO
-          log_file: logs/jarvis.log
+          log_file: logs/vesper.log
           log_format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
           log_rotation: daily
           log_max_size_mb: 10

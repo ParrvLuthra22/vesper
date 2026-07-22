@@ -22,7 +22,7 @@ async def main() -> None:
 
     svc = ChromaRAGMemoryService(
         persist_directory=str(persist_dir),
-        collection_name="jarvis_smoke",
+        collection_name="vesper_smoke",
         embedding_model=None,
     )
 

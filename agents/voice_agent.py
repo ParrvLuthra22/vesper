@@ -1,5 +1,5 @@
 """
-Voice Agent Module - Speech recognition and synthesis for JARVIS.
+Voice Agent Module - Speech recognition and synthesis for VESPER.
 
 This agent handles all voice-related functionality:
     - Wake word detection using Vosk (FREE, offline)
@@ -10,7 +10,7 @@ This agent handles all voice-related functionality:
 Architecture:
     - VoiceAgent: Main agent coordinating all voice components
     - MicrophoneStream: Captures audio from microphone
-    - VoskWakeWordDetector: Listens for "Hey Jarvis" 
+    - VoskWakeWordDetector: Listens for "Hey Vesper" 
     - WhisperTranscriber: Converts speech to text
     - KokoroTTS: Speaks responses with neural voice synthesis
 
@@ -67,7 +67,7 @@ except Exception:  # pragma: no cover - optional dependency
 class VoiceAgentState(Enum):
     """State machine for voice agent."""
     IDLE = auto()                # Not listening
-    LISTENING_WAKE_WORD = auto() # Waiting for "Hey Jarvis"
+    LISTENING_WAKE_WORD = auto() # Waiting for "Hey Vesper"
     LISTENING_COMMAND = auto()   # Recording user speech
     TRANSCRIBING = auto()        # Converting speech to text
     SPEAKING = auto()            # Playing TTS response
@@ -196,7 +196,7 @@ class AsyncKokoroTTS:
 
 class VoiceAgent(BaseAgent):
     """
-    Voice Agent for JARVIS - handles all speech I/O.
+    Voice Agent for VESPER - handles all speech I/O.
     
     This agent:
     - Continuously listens for the wake word in a background thread
@@ -212,7 +212,7 @@ class VoiceAgent(BaseAgent):
         agent = VoiceAgent(event_bus)
         await agent.start()
         # Agent now listening for wake word...
-        # When user says "Hey Jarvis, what time is it?"
+        # When user says "Hey Vesper, what time is it?"
         # -> Emits VoiceInputEvent(text="what time is it", confidence=0.95)
     """
     
@@ -453,7 +453,10 @@ class VoiceAgent(BaseAgent):
                 if fallback.initialize():
                     self._transcriber = fallback
                 else:
-                    self._logger.error("No speech recognition available!")
+                    self._logger.warning(
+                        "No speech recognition available (optional voice deps not "
+                        "installed); voice input disabled. The CLI is unaffected."
+                    )
                     self._transcriber = None
         except ImportError as e:
             self._logger.error(f"Speech recognition imports failed: {e}")
@@ -545,7 +548,7 @@ class VoiceAgent(BaseAgent):
             )
             
             if not self._mic_stream.start():
-                self._logger.error(f"Microphone error: {self._mic_stream.error}")
+                self._logger.warning(f"Microphone unavailable: {self._mic_stream.error}")
                 try:
                     devices = self._mic_stream.list_input_devices()
                     if devices:
@@ -564,7 +567,7 @@ class VoiceAgent(BaseAgent):
             else:
                 self._logger.info("Microphone initialized")
         except Exception as e:
-            self._logger.error(f"Failed to initialize microphone: {e}")
+            self._logger.warning(f"Microphone unavailable: {e}")
             self._mic_stream = None
     
     async def _shutdown_components(self) -> None:

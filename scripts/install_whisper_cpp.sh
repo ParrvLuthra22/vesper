@@ -25,7 +25,7 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}"
 echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║           whisper.cpp Installation for JARVIS                 ║"
+echo "║           whisper.cpp Installation for VESPER                 ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 

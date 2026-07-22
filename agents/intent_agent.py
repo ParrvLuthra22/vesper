@@ -91,7 +91,7 @@ class IntentDefinition:
         return asdict(self)
 
 
-# Complete intent catalog for JARVIS
+# Complete intent catalog for VESPER
 DEFAULT_INTENTS = [
     # Application Control
     IntentDefinition(
@@ -241,7 +241,7 @@ DEFAULT_INTENTS = [
         description="Respond to a greeting",
         examples=[
             "hello",
-            "hi JARVIS",
+            "hi VESPER",
             "good morning",
             "hey there",
         ],

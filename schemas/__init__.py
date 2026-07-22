@@ -1,5 +1,5 @@
 """
-JARVIS Virtual Assistant - Schemas Package.
+VESPER Virtual Assistant - Schemas Package.
 
 This package defines all event schemas used for inter-agent communication.
 """

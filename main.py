@@ -96,7 +96,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     
     Priority:
     1. Specified config path
-    2. JARVIS_CONFIG environment variable
+    2. VESPER_CONFIG environment variable
     3. Default: config/settings.yaml
     
     Args:
@@ -113,7 +113,7 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     # Determine config path
     if config_path is None:
         config_path = os.environ.get(
-            "JARVIS_CONFIG",
+            "VESPER_CONFIG",
             str(PROJECT_ROOT / "config" / "settings.yaml")
         )
 
@@ -146,7 +146,7 @@ def setup_logging(config: Dict[str, Any]) -> None:
     # Check for debug mode
     debug_mode = (
         general_config.get("debug_mode", False)
-        or os.environ.get("JARVIS_DEBUG", "").lower() in ("1", "true", "yes")
+        or os.environ.get("VESPER_DEBUG", "").lower() in ("1", "true", "yes")
         or "--debug" in sys.argv
     )
     
@@ -303,8 +303,8 @@ Options:
     -h, --help          Show this help message
 
 Environment Variables:
-    JARVIS_CONFIG       Path to configuration file
-    JARVIS_DEBUG        Enable debug mode (1/true/yes)
+    VESPER_CONFIG       Path to configuration file
+    VESPER_DEBUG        Enable debug mode (1/true/yes)
     GEMINI_API_KEY      Gemini API key for intent recognition
 
 Examples:
@@ -441,7 +441,7 @@ class ErrorRecovery:
 
 async def main() -> int:
     """
-    Main entry point for JARVIS Virtual Assistant.
+    Main entry point for VESPER Virtual Assistant.
     
     Lifecycle:
         1. Parse arguments and load configuration
@@ -579,7 +579,7 @@ def run() -> None:
     
     Can be invoked with:
         python main.py
-        python -m jarvis
+        python -m vesper
     
     Handles the asyncio event loop lifecycle.
     """

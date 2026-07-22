@@ -1,4 +1,4 @@
-"""Required logging setup for JARVIS runtime.
+"""Required logging setup for VESPER runtime.
 
 This module provides the simplified, requirement-driven logger contract while
 preserving compatibility helpers consumed by existing code.
@@ -20,7 +20,7 @@ from typing import Any, Deque, Dict, Optional
 
 _LOGGER_CONFIGURED = False
 _LOGGER_LOCK = threading.RLock()
-_LOG_CONTEXT: ContextVar[Dict[str, Any]] = ContextVar("jarvis_log_context", default={})
+_LOG_CONTEXT: ContextVar[Dict[str, Any]] = ContextVar("vesper_log_context", default={})
 
 
 class AgentNameFormatter(logging.Formatter):
@@ -47,7 +47,7 @@ def configure_logging(
     level: str = "INFO",
     *,
     log_dir: str = "logs",
-    log_file: str = "jarvis.log",
+    log_file: str = "vesper.log",
     console_level: str = "INFO",
     file_level: str = "DEBUG",
 ) -> None:
@@ -246,7 +246,7 @@ def get_agent_logger(agent_name: str) -> AgentLogger:
 
 def init_from_config(config: Dict[str, Any]) -> None:
     level = str(config.get("log_level", os.environ.get("LOG_LEVEL", "INFO"))).upper()
-    log_file_path = Path(str(config.get("log_file", "logs/jarvis.log")))
+    log_file_path = Path(str(config.get("log_file", "logs/vesper.log")))
 
     configure_logging(
         level=level,

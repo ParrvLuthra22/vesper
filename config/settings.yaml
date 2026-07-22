@@ -1,9 +1,9 @@
 # =============================================================================
-# JARVIS Virtual Assistant Configuration
+# VESPER Virtual Assistant Configuration
 # =============================================================================
 # This file contains all configuration options for the assistant.
 # Environment variables can override these settings using the format:
-# JARVIS_<SECTION>_<KEY> (e.g., JARVIS_VOICE_WAKE_WORD)
+# VESPER_<SECTION>_<KEY> (e.g., VESPER_VOICE_WAKE_WORD)
 #
 # TODO: Add configuration validation schema
 # TODO: Add hot-reload support for runtime changes
@@ -57,7 +57,7 @@ general:
   # - Full event payloads logged (not just summaries)
   # - Additional internal state logging
   # - Performance timing for all operations
-  # Can also be enabled via: JARVIS_DEBUG=1 environment variable
+  # Can also be enabled via: VESPER_DEBUG=1 environment variable
   debug_mode: false
   
   # -------------------------------------------------------------------------

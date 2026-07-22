@@ -3,6 +3,6 @@
 The active implementation lives in ui.hud_overlay.
 """
 
-from ui.hud_overlay import HUDOverlayController, JarvisHUDOverlay
+from ui.hud_overlay import HUDOverlayController, VesperHUDOverlay
 
-__all__ = ["HUDOverlayController", "JarvisHUDOverlay"]
+__all__ = ["HUDOverlayController", "VesperHUDOverlay"]

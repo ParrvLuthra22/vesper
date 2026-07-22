@@ -1,5 +1,5 @@
 """
-Text-to-Speech Providers for JARVIS Virtual Assistant.
+Text-to-Speech Providers for VESPER Virtual Assistant.
 
 This module provides:
 - Pyttsx3TTS: Offline TTS using pyttsx3 (macOS native voices)
@@ -107,7 +107,7 @@ class Pyttsx3TTS(TTSProvider):
     Usage:
         tts = Pyttsx3TTS()
         await tts.initialize()
-        await tts.speak("Hello, I am JARVIS")
+        await tts.speak("Hello, I am VESPER")
     """
     
     def __init__(
@@ -163,7 +163,7 @@ class Pyttsx3TTS(TTSProvider):
             return True
             
         except ImportError:
-            logger.error("pyttsx3 not installed. Run: pip install pyttsx3")
+            logger.warning("pyttsx3 not installed. Run: pip install pyttsx3")
             return False
         except Exception as e:
             logger.error(f"Failed to initialize pyttsx3: {e}")

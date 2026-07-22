@@ -102,7 +102,7 @@ class PluginAgent(BaseAgent):
             self._logger.info(f"Loaded plugin: {plugin_name} ({len(triggers)} trigger(s))")
 
     def _import_plugin_module(self, plugin_file: Path) -> Optional[ModuleType]:
-        module_name = f"jarvis_plugin_{plugin_file.stem}"
+        module_name = f"vesper_plugin_{plugin_file.stem}"
         spec = importlib.util.spec_from_file_location(module_name, str(plugin_file))
         if spec is None or spec.loader is None:
             self._logger.warning(f"Failed to create import spec for plugin: {plugin_file}")

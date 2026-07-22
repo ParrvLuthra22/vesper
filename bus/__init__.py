@@ -1,5 +1,5 @@
 """
-JARVIS Virtual Assistant - Event Bus Package.
+VESPER Virtual Assistant - Event Bus Package.
 
 This package provides the event-driven communication infrastructure.
 """

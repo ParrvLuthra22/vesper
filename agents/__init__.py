@@ -1,5 +1,5 @@
 """
-JARVIS Virtual Assistant - Agents Package.
+VESPER Virtual Assistant - Agents Package.
 
 This package contains all agent implementations:
     - BaseAgent: Abstract base class for all agents

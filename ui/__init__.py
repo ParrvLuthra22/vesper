@@ -1,5 +1,5 @@
-"""UI components for JARVIS."""
+"""UI components for VESPER."""
 
-from ui.hud_overlay import HUDOverlayController, JarvisHUDOverlay
+from ui.hud_overlay import HUDOverlayController, VesperHUDOverlay
 
-__all__ = ["JarvisHUDOverlay", "HUDOverlayController"]
+__all__ = ["VesperHUDOverlay", "HUDOverlayController"]

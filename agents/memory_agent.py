@@ -1,5 +1,5 @@
 """
-MemoryAgent - Persistent Memory Storage for JARVIS
+MemoryAgent - Persistent Memory Storage for VESPER
 
 This agent manages two types of memory:
 1. Short-term context: Recent commands, session state, last app opened
@@ -404,7 +404,7 @@ class MemoryAgent(BaseAgent):
                 memory_config = self._config.get("memory", {})
                 vs_cfg = memory_config.get("vector_store", {})
                 persist_dir = vs_cfg.get("persist_directory", "data/chroma_memory")
-                collection_name = vs_cfg.get("collection_name", "jarvis_memory")
+                collection_name = vs_cfg.get("collection_name", "vesper_memory")
                 embedding_model = vs_cfg.get("embedding_model")
 
                 self._rag_service = ChromaRAGMemoryService(

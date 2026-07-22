@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
-# JARVIS Virtual Assistant - Setup Script
+# VESPER Virtual Assistant - Setup Script
 # ==============================================================================
-# This script installs all dependencies for the JARVIS voice assistant.
+# This script installs all dependencies for the VESPER voice assistant.
 # 
 # Usage:
 #   chmod +x scripts/setup.sh
@@ -12,7 +12,7 @@
 set -e
 
 echo "╔═══════════════════════════════════════════════════════════════╗"
-echo "║           JARVIS Virtual Assistant - Setup                    ║"
+echo "║           VESPER Virtual Assistant - Setup                    ║"
 echo "╚═══════════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -94,7 +94,7 @@ mkdir -p data logs
 echo ""
 echo "✅ Setup complete!"
 echo ""
-echo "To run JARVIS:"
+echo "To run VESPER:"
 echo "  source venv/bin/activate"
 echo "  export GEMINI_API_KEY='your-api-key'"
 echo "  python3 main.py"

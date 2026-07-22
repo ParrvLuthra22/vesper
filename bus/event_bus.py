@@ -180,7 +180,7 @@ class EventBus:
             print(f"Received: {event.text}")
         
         token = bus.subscribe(VoiceInputEvent, handle_voice_input)
-        await bus.emit(VoiceInputEvent(text="Hello JARVIS"))
+        await bus.emit(VoiceInputEvent(text="Hello VESPER"))
         token.unsubscribe()
         ```
     """

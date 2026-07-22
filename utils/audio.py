@@ -1,4 +1,4 @@
-"""Audio utilities for the JARVIS Virtual Assistant.
+"""Audio utilities for the VESPER Virtual Assistant.
 
 This module provides helper functions for:
 - Microphone access and audio recording
@@ -15,7 +15,7 @@ The built-in :mod:`audioop` module was removed from the Python standard
 library in Python 3.13. This module previously relied on :mod:`audioop`
 for a few basic operations (RMS, volume scaling, and resampling).
 
-To keep JARVIS working on Python 3.13+, we provide small, pure-Python
+To keep VESPER working on Python 3.13+, we provide small, pure-Python
 fallback implementations for the subset of functionality we use. When
 ``audioop`` is available (e.g. on Python 3.12), it will be used; when it
 is not available, the fallbacks are used instead. The fallbacks are
@@ -458,7 +458,7 @@ def create_temp_wav_file(
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     channels: int = DEFAULT_CHANNELS,
     sample_width: int = DEFAULT_SAMPLE_WIDTH,
-    prefix: str = "jarvis_audio_",
+    prefix: str = "vesper_audio_",
 ) -> Optional[str]:
     """
     Create a temporary WAV file from audio data.
@@ -771,7 +771,7 @@ class MicrophoneStream:
                 "On macOS, ensure Terminal (or your IDE) has Microphone permission "
                 "in System Settings > Privacy & Security > Microphone."
             )
-            logger.error(self._error)
+            logger.warning(self._error)
             return False
 
     def _resolve_sounddevice_input_device(self, sd) -> Optional[int]:
