@@ -1,0 +1,277 @@
+/* =========================================================================
+   Vesper HUD — design system (PV1)
+   Dark, quiet, luxury. Tokens first; components consume only tokens so the
+   whole look retunes from :root. Fonts are bundled locally (woff2) — no CDN,
+   works offline.
+   ========================================================================= */
+
+/* ------------------------------- Fonts --------------------------------- */
+@font-face {
+  font-family: "Fraunces";
+  font-style: italic;
+  font-weight: 400;
+  src: url("./fonts/fraunces-italic-400.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "Fraunces";
+  font-style: italic;
+  font-weight: 500;
+  src: url("./fonts/fraunces-italic-500.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  src: url("./fonts/jetbrains-mono-400.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  src: url("./fonts/jetbrains-mono-500.woff2") format("woff2");
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 600;
+  src: url("./fonts/jetbrains-mono-600.woff2") format("woff2");
+  font-display: swap;
+}
+
+/* ------------------------------- Tokens -------------------------------- */
+:root {
+  /* Surfaces & lines */
+  --vsp-bg: #0a0a0b;          /* panel background (per spec) */
+  --vsp-border: #2a2823;      /* panel hairline (per spec) */
+  --vsp-line: #1a1917;        /* internal dividers */
+
+  /* Gold — the evening star. Brand gold matches the CLI (VESPER_GOLD). */
+  --vsp-gold: #c9a96a;
+  --vsp-gold-soft: #a98f5a;
+  --vsp-gold-glow: rgba(201, 169, 106, 0.45);
+  --vsp-ember: #4a3f2a;       /* near-dead star when disconnected */
+
+  /* Text */
+  --vsp-text: #e8e4da;
+  --vsp-muted: #8a857a;
+  --vsp-faint: #55524b;
+  --vsp-dim: #3a3833;
+
+  /* Type */
+  --vsp-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --vsp-display: "Fraunces", Georgia, "Times New Roman", serif;
+
+  /* Geometry */
+  --vsp-radius: 14px;
+  --vsp-pad: 16px;
+  --vsp-star: 7px;
+
+  /* Motion */
+  --vsp-breath: 3.2s;
+}
+
+/* ------------------------------- Reset --------------------------------- */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  /* The native window is transparent; the .panel draws the only surface, so
+     its rounded corners read against whatever is behind it. */
+  background: transparent;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  cursor: default;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ------------------------------- Panel --------------------------------- */
+.panel {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--vsp-bg);
+  border: 0.5px solid var(--vsp-border);
+  border-radius: var(--vsp-radius);
+  overflow: hidden;
+  color: var(--vsp-text);
+  font-family: var(--vsp-mono);
+}
+
+/* ------------------------------- Header -------------------------------- */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 var(--vsp-pad);
+  border-bottom: 0.5px solid var(--vsp-line);
+  /* Whole header is the drag handle (data-tauri-drag-region). */
+  -webkit-app-region: drag;
+}
+
+.wordmark {
+  font-family: var(--vsp-mono);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.30em;
+  color: var(--vsp-text);
+  /* letter-spacing adds trailing space; nudge back for optical centering */
+  padding-left: 0.15em;
+}
+
+.clock {
+  margin-left: auto;
+  font-family: var(--vsp-mono);
+  font-weight: 400;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--vsp-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------- The evening star -------------------------- */
+.star {
+  width: var(--vsp-star);
+  height: var(--vsp-star);
+  border-radius: 50%;
+  background: var(--vsp-gold);
+  box-shadow: 0 0 8px 1px var(--vsp-gold-glow);
+  flex: 0 0 auto;
+  /* Before the socket resolves: a steady, unhurried gold. */
+  opacity: 0.6;
+}
+
+@keyframes vsp-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.92);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+}
+
+/* Connected: the star breathes. */
+.panel.connected .star {
+  background: var(--vsp-gold);
+  box-shadow: 0 0 9px 1.5px var(--vsp-gold-glow);
+  animation: vsp-breathe var(--vsp-breath) ease-in-out infinite;
+}
+
+/* Disconnected: a near-dead ember — static, dim, no glow. */
+.panel.disconnected .star {
+  background: var(--vsp-ember);
+  box-shadow: none;
+  opacity: 0.35;
+  animation: none;
+  transform: scale(0.92);
+}
+
+/* --------------------------------- Body -------------------------------- */
+.body {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--vsp-pad);
+}
+
+.idle {
+  font-family: var(--vsp-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--vsp-faint);
+  text-align: center;
+  letter-spacing: 0.01em;
+}
+
+/* -------------------------------- Status ------------------------------- */
+.status {
+  border-top: 0.5px solid var(--vsp-line);
+  padding: 12px var(--vsp-pad) 14px;
+  font-family: var(--vsp-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
+
+.conn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  letter-spacing: 0.04em;
+  color: var(--vsp-muted);
+}
+
+.conn-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--vsp-dim);
+  flex: 0 0 auto;
+}
+.panel.connected .conn-dot {
+  background: var(--vsp-gold);
+  box-shadow: 0 0 6px 0.5px var(--vsp-gold-glow);
+}
+.panel.disconnected .conn-dot {
+  background: var(--vsp-ember);
+}
+
+.conn-label {
+  color: var(--vsp-muted);
+}
+.panel.disconnected .conn-label {
+  color: var(--vsp-faint);
+}
+
+.stream {
+  list-style: none;
+  margin-top: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 132px;
+  overflow: hidden;
+}
+
+.stream li {
+  color: var(--vsp-faint);
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stream li::before {
+  content: "› ";
+  color: var(--vsp-dim);
+}
+/* The newest arrival glows briefly brighter. */
+.stream li.fresh {
+  color: var(--vsp-gold-soft);
+}
+
+/* --------------------------- Reduced motion ---------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  .panel.connected .star {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}

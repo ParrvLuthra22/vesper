@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <title>Vesper</title>
+    <script type="module" src="/src/main.ts" defer></script>
+  </head>
+
+  <body>
+    <div class="panel">
+      <!-- Header: draggable. The star's liveness IS the connection state. -->
+      <header class="header" data-tauri-drag-region>
+        <span class="star" id="star" aria-hidden="true"></span>
+        <span class="wordmark">VESPER</span>
+        <span class="clock" id="clock">--:--</span>
+      </header>
+
+      <!-- Body: no feature rendering yet (that is PV2) — a quiet idle line. -->
+      <main class="body">
+        <p class="idle">At your service.</p>
+      </main>
+
+      <!-- Footer: connection state + a live stream of incoming event types,
+           proof that data flows from the gateway. -->
+      <footer class="status">
+        <div class="conn" id="conn">
+          <span class="conn-dot"></span>
+          <span class="conn-label" id="conn-label">connecting…</span>
+        </div>
+        <ul class="stream" id="stream"></ul>
+      </footer>
+    </div>
+  </body>
+</html>

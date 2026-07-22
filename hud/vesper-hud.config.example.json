@@ -1,0 +1,6 @@
+{
+  "__comment": "Copy to vesper-hud.config.json (gitignored) and fill in the token, OR set VESPER_GATEWAY_TOKEN in the environment. Env vars override this file. The token must match the gateway's gateway.token / VESPER_GATEWAY_TOKEN.",
+  "host": "127.0.0.1",
+  "port": 8760,
+  "token": ""
+}
