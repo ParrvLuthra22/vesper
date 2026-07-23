@@ -282,9 +282,17 @@ class MCPBridge:
     def _register_tools(self, server_name: str, connection: MCPServerConnection, server_cfg: Dict[str, Any]) -> None:
         tiers = server_cfg.get("tiers", {}) or {}
         slow_tools = set(server_cfg.get("slow_tools", []) or [])
+        # Optional allowlist: when set, ONLY these tools are exposed to the
+        # planner — the rest of the server's tools (e.g. merge/close/force-push)
+        # are never registered. Empty/absent means "expose everything".
+        expose = server_cfg.get("expose")
+        expose_set = set(expose) if expose else None
 
         for tool_schema in connection.tools:
             tool_name = tool_schema["name"]
+            if expose_set is not None and tool_name not in expose_set:
+                logger.debug(f"[MCPBridge] '{server_name}.{tool_name}' not in expose list; skipping")
+                continue
             tier = tiers.get(tool_name)
             if tier is None:
                 logger.warning(

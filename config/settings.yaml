@@ -702,3 +702,31 @@ mcp:
         notion_search: safe
         notion_get_page: safe
         notion_get_database_rows: safe
+
+    # GitHub's official MCP server (PC0 — developer tools). OFF by default.
+    # Needs the server binary (`github-mcp-server stdio`) or docker, and a
+    # GITHUB_PERSONAL_ACCESS_TOKEN in the environment (inherited by the
+    # subprocess). `expose` is an allowlist: only these tools are surfaced to
+    # the planner — anything that merges/closes/force-pushes is never exposed.
+    github:
+      enabled: false
+      command: "github-mcp-server"    # or: docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+      args: ["stdio"]
+      expose:
+        - list_notifications
+        - list_pull_requests
+        - get_pull_request
+        - get_pull_request_diff
+        - list_issues
+        - search_code
+        - add_issue_comment
+        - create_branch
+      tiers:
+        list_notifications: safe
+        list_pull_requests: safe
+        get_pull_request: safe
+        get_pull_request_diff: safe
+        list_issues: safe
+        search_code: safe
+        add_issue_comment: confirm     # create_issue_comment
+        create_branch: confirm

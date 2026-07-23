@@ -52,6 +52,11 @@ class ToolSpec:
     category: str = "general"
     enabled: bool = True
     slow: bool = False
+    #: Optional async builder for the Guardian's confirmation summary. Given the
+    #: call's `arguments`, returns the exact one-line summary the user sees (and
+    #: may enrich/mutate `arguments` in place — e.g. git_commit generating a
+    #: message from the diff so it appears in the confirmation before running).
+    confirm_summary: Optional[Callable[[Dict[str, Any]], Awaitable[str]]] = None
 
     def __post_init__(self) -> None:
         if self.tier not in VALID_TIERS:

@@ -454,10 +454,39 @@ class MCPNotionServerSettings(BaseModel):
     slow_tools: List[str] = Field(default_factory=list)
 
 
+class MCPGithubServerSettings(BaseModel):
+    """GitHub's official MCP server (github/github-mcp-server), connected via the
+    MCP bridge (PC0). OFF by default; needs the server binary (or docker) and a
+    GITHUB_PERSONAL_ACCESS_TOKEN in the environment. Only tools in `expose` are
+    registered — anything that merges/closes/force-pushes is never surfaced in v3.
+    """
+
+    enabled: bool = False
+    command: str = "github-mcp-server"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "list_notifications", "list_pull_requests", "get_pull_request",
+        "get_pull_request_diff", "list_issues", "search_code",
+        "add_issue_comment", "create_branch",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "list_notifications": "safe",
+        "list_pull_requests": "safe",
+        "get_pull_request": "safe",
+        "get_pull_request_diff": "safe",
+        "list_issues": "safe",
+        "search_code": "safe",
+        "add_issue_comment": "confirm",
+        "create_branch": "confirm",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
 class MCPServersSettings(BaseModel):
     gmail: MCPGmailServerSettings = Field(default_factory=MCPGmailServerSettings)
     apple_pim: MCPAppleServerSettings = Field(default_factory=MCPAppleServerSettings)
     notion: MCPNotionServerSettings = Field(default_factory=MCPNotionServerSettings)
+    github: MCPGithubServerSettings = Field(default_factory=MCPGithubServerSettings)
 
 
 class MCPSettings(BaseModel):

@@ -9,6 +9,7 @@ as `tools` is imported.
 from tools.registry import ToolRegistry, ToolSpec, get_registry, tool
 
 import tools.builtin  # noqa: F401  (side effect: registers built-in tools)
+import tools.devtools  # noqa: F401  (side effect: registers developer tools)
 
 __all__ = [
     "ToolSpec",

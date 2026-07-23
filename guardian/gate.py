@@ -96,7 +96,7 @@ class Guardian:
         if tool_spec.tier == "safe":
             return Verdict(VerdictType.ALLOW, reason="safe tier - no confirmation required")
 
-        summary = self._render_summary(tool_spec, arguments)
+        summary = await self._render_summary(tool_spec, arguments)
         request_id = str(uuid4())
 
         loop = asyncio.get_running_loop()
@@ -137,7 +137,11 @@ class Guardian:
         return await pending.future
 
     @staticmethod
-    def _render_summary(tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
+    async def _render_summary(tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
+        # A tool may supply its own summary (e.g. git_commit shows the exact
+        # repo + branch + the message it generated from the diff).
+        if tool_spec.confirm_summary is not None:
+            return await tool_spec.confirm_summary(arguments)
         rendered_args = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
         return f"{tool_spec.name}({rendered_args})"
 
