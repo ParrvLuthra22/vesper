@@ -38,6 +38,7 @@ DEFAULT_CONTEXT_SWITCH_THRESHOLD = 3
 DEFAULT_CONTEXT_SWITCH_WINDOW_MIN = 30
 DEFAULT_CONTEXT_SWITCH_COOLDOWN_MIN = 90
 DEFAULT_MEETING_REMINDER_COOLDOWN_MIN = 10
+DEFAULT_FOCUS_BLOCK_COOLDOWN_MIN = 120
 DEFAULT_MORNING_BRIEFING_TIME = "08:30"
 DEFAULT_MIDNIGHT_REFLECTION_TIME = "00:00"
 #: Above this many minutes-until-start, a meeting reminder is the sensor's
@@ -93,6 +94,9 @@ class ProactiveEngine:
         )
         self._subscriptions.append(
             self._event_bus.subscribe(UpcomingMeetingEvent, self._on_upcoming_meeting)
+        )
+        self._subscriptions.append(
+            self._event_bus.subscribe(UpcomingMeetingEvent, self._on_focus_block)
         )
 
         self._scheduler = AsyncIOScheduler()
@@ -233,6 +237,40 @@ class ProactiveEngine:
 
         detail = f"Your meeting '{event.title}' starts in {event.minutes_until} minutes."
         await self._emit_observation("meeting_soon", detail, now)
+
+    # =========================================================================
+    # Rule: focus_block — OFFER to start a focus playlist as a deep-work block
+    # begins. Opt-in (default off): enabling this rule IS the user's one-time
+    # approval of the behaviour. It only OFFERS — it never auto-plays.
+    # =========================================================================
+
+    async def _on_focus_block(self, event: UpcomingMeetingEvent) -> None:
+        if not self._get_config("proactive.rules.focus_block.enabled", False):
+            return
+
+        title = (event.title or "").lower()
+        keywords = self._get_config(
+            "proactive.rules.focus_block.title_keywords",
+            ["focus", "deep work", "deep-work", "heads down", "heads-down", "writing", "study", "flow"],
+        )
+        if not any(k in title for k in keywords):
+            return
+
+        # Only as the block is actually starting, not at the 15/5-minute checkpoints.
+        start_within = int(self._get_config("proactive.rules.focus_block.start_within_minutes", 1))
+        if event.minutes_until > start_within:
+            return
+
+        now = self._clock()
+        cooldown_min = float(
+            self._get_config("proactive.rules.focus_block.cooldown_min", DEFAULT_FOCUS_BLOCK_COOLDOWN_MIN)
+        )
+        if not self._cooldown_elapsed("focus_block", cooldown_min, now):
+            return
+
+        playlist = self._get_config("proactive.rules.focus_block.playlist", "your focus playlist")
+        detail = f"Your focus block '{event.title}' is beginning — shall I put on {playlist}, Sir?"
+        await self._emit_observation("focus_block", detail, now)
 
     # =========================================================================
     # Shared helpers

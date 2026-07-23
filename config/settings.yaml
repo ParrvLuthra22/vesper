@@ -612,6 +612,16 @@ proactive:
       enabled: true
       cooldown_min: 10
 
+    # PC1: when a calendar event titled as focus/deep-work begins, OFFER to
+    # start a focus playlist. OPT-IN (default off) — enabling it is your
+    # one-time approval; it only ever OFFERS, it never auto-plays.
+    focus_block:
+      enabled: false
+      title_keywords: ["focus", "deep work", "deep-work", "heads down", "writing", "study", "flow"]
+      start_within_minutes: 1     # only as the block actually begins
+      cooldown_min: 120
+      playlist: "your focus playlist"
+
   schedule:
     morning_briefing:
       enabled: true
@@ -730,3 +740,30 @@ mcp:
         search_code: safe
         add_issue_comment: confirm     # create_issue_comment
         create_branch: confirm
+
+    # Spotify MCP server (PC1 — context-aware music). OFF by default. Needs the
+    # server + a Spotify OAuth token cached under data/ (gitignored). ALL tools
+    # are `safe` — playback is trivially reversible, so music is never gated
+    # behind confirmations.
+    spotify:
+      enabled: false
+      command: "spotify-mcp"          # or npx/uvx per your chosen Spotify MCP server
+      args: ["stdio"]
+      expose:
+        - current_track
+        - search
+        - list_playlists
+        - play
+        - pause
+        - next
+        - set_volume
+        - queue
+      tiers:
+        current_track: safe
+        search: safe
+        list_playlists: safe
+        play: safe
+        pause: safe
+        next: safe
+        set_volume: safe
+        queue: safe

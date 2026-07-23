@@ -350,12 +350,28 @@ class ProactiveMeetingReminderRuleSettings(BaseModel):
     cooldown_min: int = 10
 
 
+class ProactiveFocusBlockRuleSettings(BaseModel):
+    """PC1: OFFER a focus playlist as a deep-work calendar block begins. Opt-in
+    (default off); only ever offers, never auto-plays."""
+
+    enabled: bool = False
+    title_keywords: List[str] = Field(
+        default_factory=lambda: ["focus", "deep work", "deep-work", "heads down", "writing", "study", "flow"]
+    )
+    start_within_minutes: int = 1
+    cooldown_min: int = 120
+    playlist: str = "your focus playlist"
+
+
 class ProactiveRulesSettings(BaseModel):
     context_switch: ProactiveContextSwitchRuleSettings = Field(
         default_factory=ProactiveContextSwitchRuleSettings
     )
     meeting_reminder: ProactiveMeetingReminderRuleSettings = Field(
         default_factory=ProactiveMeetingReminderRuleSettings
+    )
+    focus_block: ProactiveFocusBlockRuleSettings = Field(
+        default_factory=ProactiveFocusBlockRuleSettings
     )
 
 
@@ -482,11 +498,38 @@ class MCPGithubServerSettings(BaseModel):
     slow_tools: List[str] = Field(default_factory=list)
 
 
+class MCPSpotifyServerSettings(BaseModel):
+    """Spotify's MCP server (PC1 — context-aware music). OFF by default; needs
+    the server + a Spotify OAuth token cached under data/ (gitignored). All
+    tools are `safe` — playback is trivially reversible, so music is never gated
+    behind confirmations. `expose` is the allowlist surfaced to the planner."""
+
+    enabled: bool = False
+    command: str = "spotify-mcp"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "current_track", "search", "list_playlists",
+        "play", "pause", "next", "set_volume", "queue",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "current_track": "safe",
+        "search": "safe",
+        "list_playlists": "safe",
+        "play": "safe",
+        "pause": "safe",
+        "next": "safe",
+        "set_volume": "safe",
+        "queue": "safe",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
 class MCPServersSettings(BaseModel):
     gmail: MCPGmailServerSettings = Field(default_factory=MCPGmailServerSettings)
     apple_pim: MCPAppleServerSettings = Field(default_factory=MCPAppleServerSettings)
     notion: MCPNotionServerSettings = Field(default_factory=MCPNotionServerSettings)
     github: MCPGithubServerSettings = Field(default_factory=MCPGithubServerSettings)
+    spotify: MCPSpotifyServerSettings = Field(default_factory=MCPSpotifyServerSettings)
 
 
 class MCPSettings(BaseModel):
