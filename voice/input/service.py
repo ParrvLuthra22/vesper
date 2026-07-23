@@ -26,12 +26,15 @@ def _log_emitter(t: VoiceTransition) -> None:
 
 
 def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None) -> VoiceInputPipeline:
+    sink = sink if sink is not None else GatewayRestSink(config)
+    on_wake = getattr(sink, "signal_wake", None)  # POST /wake -> cinematic reveal
     return VoiceInputPipeline(
         config=config,
         wake=WakeDetector(config),
         transcriber=Transcriber(config),
-        sink=sink if sink is not None else GatewayRestSink(config),
+        sink=sink,
         emitter=emitter if emitter is not None else _log_emitter,
+        on_wake=on_wake,
     )
 
 

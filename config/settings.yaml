@@ -103,6 +103,23 @@ voice:
     listen_timeout_ms: 6000     # no speech after wake -> back to idle
     mic_device: null            # sounddevice index/name; null = default input
 
+  # ---------------------------------------------------------------------------
+  # Voice OUTPUT (PV4) — Kokoro-82M TTS. Speaks Vesper's serif voice lines
+  # (never the mono trace lines) as its own client of the gateway
+  # (python -m voice.output). OFF by default.
+  # Needs: pip install kokoro-onnx soundfile  + `brew install espeak-ng`
+  # and the Kokoro model files in voice/models/ (see voice/output/README.md).
+  # ---------------------------------------------------------------------------
+  output:
+    enabled: false
+    tts_voice: "bm_george"      # measured British male — butler restraint
+    speed: 0.92                 # a touch slower — composed
+    lang: "en-gb"
+    streaming: true             # speak sentence-by-sentence (no long first-word wait)
+    speak_observations: true    # also speak proactive call-outs (serif, not traces)
+    model_path: "voice/models/kokoro-v1.0.onnx"
+    voices_path: "voice/models/voices-v1.0.bin"
+
   # Wake word settings (legacy VoiceAgent)
   wake_word: "vesper"
   wake_word_sensitivity: 0.5  # 0.0 to 1.0
@@ -385,6 +402,12 @@ gateway:
   # Prefer the env var VESPER_GATEWAY_TOKEN over putting a secret in this file.
   # Empty => fail closed (every connection is rejected).
   token: ""
+
+# -----------------------------------------------------------------------------
+# The cinematic wake reveal (PV4) — star flare + panel wake on wake word.
+# -----------------------------------------------------------------------------
+wake_flow:
+  animation: true   # HUD star flare + panel brighten (also honours reduced-motion)
 
 # -----------------------------------------------------------------------------
 # UI / HUD Configuration

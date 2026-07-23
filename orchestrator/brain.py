@@ -595,18 +595,22 @@ class Brain:
 
             logger.info("Brain started successfully")
 
-            pending_observations = self._context.get_pending_observations()
-            greeting = await self._planner.greet(observations=pending_observations)
-            self._context.consume_observations()
-            await self._event_bus.publish(VoiceOutputEvent(
-                text=greeting.text,
-                source="Brain",
-            ))
+            await self.greet()
 
         except Exception as e:
             self._state = BrainState.ERROR
             logger.error(f"Failed to start brain: {e}", exc_info=True)
             raise
+
+    async def greet(self) -> str:
+        """Generate + emit the time-appropriate greeting (plus one pending
+        observation, if any). Used at startup and on wake (the cinematic
+        reveal). Returns the greeting text."""
+        pending_observations = self._context.get_pending_observations()
+        greeting = await self._planner.greet(observations=pending_observations)
+        self._context.consume_observations()
+        await self._event_bus.publish(VoiceOutputEvent(text=greeting.text, source="Brain"))
+        return greeting.text
 
     async def stop(self, reason: str = "Normal shutdown") -> None:
         """

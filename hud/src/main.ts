@@ -8,10 +8,45 @@ import { GatewayLink, type ConnState } from "./gateway";
 import { Stream } from "./render";
 
 const panel = document.getElementById("panel")!;
+const star = document.getElementById("star")!;
 const clockEl = document.getElementById("clock")!;
 const streamEl = document.getElementById("stream")!;
 const composer = document.getElementById("composer") as HTMLFormElement;
 const input = document.getElementById("input") as HTMLInputElement;
+
+const prefersReducedMotion = () =>
+  window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+let listeningTimer: number | undefined;
+
+// --------------------------- The wake reveal ------------------------------
+// Wake word fired → the star flares, the panel wakes, and (via the greeting
+// reply that follows) Vesper speaks + types. Reduced motion degrades to a
+// quiet un-idle with no bloom.
+function wakeFlow(animate: boolean): void {
+  panel.classList.remove("idle");
+  if (animate && !prefersReducedMotion()) {
+    star.classList.remove("flaring");
+    void star.offsetWidth; // restart the animation
+    star.classList.add("flaring");
+    panel.classList.add("waking");
+    window.setTimeout(() => star.classList.remove("flaring"), 700);
+    window.setTimeout(() => panel.classList.remove("waking"), 1500);
+  }
+  // Then the listening indicator: focus the input, show it's listening.
+  panel.classList.add("listening");
+  input.placeholder = "listening…";
+  try {
+    input.focus();
+  } catch {
+    /* focus:false windows may refuse */
+  }
+  if (listeningTimer !== undefined) clearTimeout(listeningTimer);
+  listeningTimer = window.setTimeout(() => {
+    panel.classList.remove("listening");
+    input.placeholder = "…";
+  }, 9000);
+}
 
 // --------------------------------- Clock ----------------------------------
 function tickClock(): void {
@@ -27,7 +62,13 @@ setInterval(tickClock, 1000);
 
 // ------------------------------ Wiring ------------------------------------
 const link = new GatewayLink(
-  (msg) => stream.handle(msg),
+  (msg) => {
+    if (msg && msg.type === "wake") {
+      wakeFlow(msg.animate !== false);
+      return;
+    }
+    stream.handle(msg);
+  },
   (state, port) => setConn(state, port),
 );
 
@@ -41,6 +82,7 @@ const stream = new Stream(streamEl, panel, (id, approved) => {
   handle: (m: unknown) => stream.handle(m),
   briefing: () => stream.expectBriefing(),
   connected: (on: boolean) => setConn(on ? "connected" : "disconnected", "8760"),
+  wake: (animate = true) => wakeFlow(animate),
 };
 
 function setConn(state: ConnState, _port: string): void {

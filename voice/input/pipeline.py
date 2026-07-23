@@ -36,12 +36,14 @@ class VoiceInputPipeline:
         sink: TranscriptSink,
         emitter: Optional[Emitter] = None,
         vad_factory: Optional[Callable[[], object]] = None,
+        on_wake: Optional[Callable[[], None]] = None,
     ):
         self._config = config
         self._wake = wake
         self._transcriber = transcriber
         self._sink = sink
         self._emitter = emitter
+        self._on_wake = on_wake
         self._vad_factory = vad_factory or (lambda: make_vad(config))
         self._state = VoiceState.IDLE
         self._stop = False
@@ -129,7 +131,10 @@ class VoiceInputPipeline:
             return ""
 
     def _flare_hint(self) -> None:
-        """Wake intent → the HUD should flare the star. PV4 wires the flare;
-        for now the WAKE_DETECTED transition (emitted above) carries the intent
-        and we simply log it."""
-        logger.info("wake detected — (HUD star flare intent; wired in PV4)")
+        """Wake → fire the cinematic reveal: signal the gateway (HUD star flare,
+        spoken greeting, voice-output barge-in). PV4."""
+        if self._on_wake is not None:
+            try:
+                self._on_wake()
+            except Exception:
+                logger.exception("on_wake hook failed")

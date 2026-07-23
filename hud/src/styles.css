@@ -171,6 +171,62 @@ body {
   transform: scale(0.92);
 }
 
+/* --------------------------- The wake reveal --------------------------- */
+/* Wake word → the star blooms bright (~600 ms) then settles; the panel warms
+   as if waking. Composed and deliberate, not a UI popping open. */
+@keyframes vsp-flare {
+  0% {
+    transform: scale(1);
+    box-shadow: 0 0 9px 1.5px var(--vsp-gold-glow);
+  }
+  26% {
+    transform: scale(2.7);
+    box-shadow:
+      0 0 30px 13px rgba(201, 169, 106, 0.9),
+      0 0 66px 28px rgba(201, 169, 106, 0.34);
+  }
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 9px 1.5px var(--vsp-gold-glow);
+  }
+}
+.star.flaring {
+  background: var(--vsp-gold) !important;
+  animation: vsp-flare 650ms cubic-bezier(0.16, 0.9, 0.28, 1) !important;
+}
+
+@keyframes vsp-wake {
+  0% {
+    box-shadow: inset 0 0 0 0 rgba(201, 169, 106, 0);
+  }
+  25% {
+    box-shadow: inset 0 0 48px 2px rgba(201, 169, 106, 0.075);
+  }
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(201, 169, 106, 0);
+  }
+}
+.panel.waking {
+  animation: vsp-wake 1500ms ease-out;
+}
+
+/* Listening indicator: the composer's hairline breathes gold, placeholder warms. */
+@keyframes vsp-listen {
+  0%,
+  100% {
+    border-top-color: rgba(201, 169, 106, 0.22);
+  }
+  50% {
+    border-top-color: rgba(201, 169, 106, 0.7);
+  }
+}
+.panel.listening .composer {
+  animation: vsp-listen 1.7s ease-in-out infinite;
+}
+.panel.listening .composer-input::placeholder {
+  color: var(--vsp-gold-soft);
+}
+
 /* ------------------------------- Stream -------------------------------- */
 .stream {
   flex: 1 1 auto;
@@ -430,6 +486,11 @@ body {
     animation: none;
     opacity: 1;
     transform: none;
+  }
+  .star.flaring,
+  .panel.waking,
+  .panel.listening .composer {
+    animation: none !important;
   }
   .entry,
   .step {

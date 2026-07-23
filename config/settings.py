@@ -89,6 +89,19 @@ class VoiceInputSettings(BaseModel):
     mic_device: Optional[Any] = None
 
 
+class VoiceOutputSettings(BaseModel):
+    """Rebuilt voice output (PV4) — Kokoro-82M TTS. Off by default."""
+
+    enabled: bool = False
+    tts_voice: str = "bm_george"  # measured British male; butler restraint
+    speed: float = 0.92
+    lang: str = "en-gb"
+    streaming: bool = True
+    speak_observations: bool = True
+    model_path: str = "voice/models/kokoro-v1.0.onnx"
+    voices_path: str = "voice/models/voices-v1.0.bin"
+
+
 class VoiceSettings(BaseModel):
     wake_word: str = "vesper"
     wake_word_sensitivity: float = 0.5
@@ -99,6 +112,13 @@ class VoiceSettings(BaseModel):
     synthesis: VoiceSynthesisSettings = Field(default_factory=VoiceSynthesisSettings)
     address_user_as_sir: bool = True
     input: VoiceInputSettings = Field(default_factory=VoiceInputSettings)
+    output: VoiceOutputSettings = Field(default_factory=VoiceOutputSettings)
+
+
+class WakeFlowSettings(BaseModel):
+    """The cinematic wake reveal (PV4)."""
+
+    animation: bool = True  # HUD star flare + panel wake (also honours reduced-motion)
 
 
 class IntentProviderSettings(BaseModel):
@@ -513,6 +533,7 @@ class AppSettings(BaseSettings):
     event_bus: EventBusSettings = Field(default_factory=EventBusSettings)
     security: SecuritySettings = Field(default_factory=SecuritySettings)
     gateway: GatewaySettings = Field(default_factory=GatewaySettings)
+    wake_flow: WakeFlowSettings = Field(default_factory=WakeFlowSettings)
     ui: UISettings = Field(default_factory=UISettings)
     vision: VisionSettings = Field(default_factory=VisionSettings)
     web_search: WebSearchSettings = Field(default_factory=WebSearchSettings)

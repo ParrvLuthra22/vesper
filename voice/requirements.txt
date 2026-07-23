@@ -12,6 +12,12 @@ onnxruntime>=1.16          # openWakeWord inference (also used by silero-vad onn
 webrtcvad-wheels>=2.0.14   # default: lightweight, prebuilt wheels (module: webrtcvad)
 # silero-vad>=5.1          # alternative: more accurate; pulls torch (heavier)
 
+# --- Voice OUTPUT (PV4): Kokoro-82M TTS (voice/output/) ---
+kokoro-onnx>=0.4.0         # onnxruntime-based Kokoro TTS (no PyTorch)
+soundfile>=0.12            # audio I/O
+# Also required (system): `brew install espeak-ng` (phonemizer data), and the
+# Kokoro model files in voice/models/ — see voice/output/README.md.
+
 # --- Custom wake-word TRAINING only (see voice/TRAINING.md; not needed at runtime) ---
 # openwakeword[training]   # training utilities
 # kokoro>=0.7.0            # synthetic positive samples across many voices

@@ -591,6 +591,21 @@ class ReflectionRequestedEvent(BaseEvent):
     source: str = field(default="ProactiveEngine")
 
 
+@dataclass(frozen=True)
+class WakeEvent(BaseEvent):
+    """Emitted when the wake word fires (PV4). Drives the cinematic reveal: the
+    HUD star flares and the panel wakes, voice output barges in on any speech,
+    and the Brain speaks/types the time-appropriate greeting.
+
+    Attributes:
+        animate: Whether the HUD should play the flare (config wake_flow.animation;
+            clients also honour prefers-reduced-motion).
+    """
+
+    animate: bool = True
+    source: str = field(default="voice")
+
+
 # =============================================================================
 # System Events - macOS system interactions
 # =============================================================================
@@ -1179,6 +1194,7 @@ EVENT_REGISTRY: Dict[str, type] = {
     "ObservationEvent": ObservationEvent,
     "BriefingRequestedEvent": BriefingRequestedEvent,
     "ReflectionRequestedEvent": ReflectionRequestedEvent,
+    "WakeEvent": WakeEvent,
 }
 
 

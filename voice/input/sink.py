@@ -36,17 +36,27 @@ class GatewayRestSink(TranscriptSink):
         self._url = f"http://{config.gateway_host}:{config.gateway_port}/message"
         self._token = config.gateway_token
 
-    def inject(self, text: str) -> bool:
+    def __post(self, path: str, payload: dict, timeout: float) -> bool:
         import urllib.error
         import urllib.request
 
-        body = json.dumps({"text": text}).encode("utf-8")
+        base = self._url.rsplit("/message", 1)[0]
         headers = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        req = urllib.request.Request(self._url, data=body, headers=headers, method="POST")
+        req = urllib.request.Request(
+            base + path, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+        )
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return 200 <= resp.status < 300
         except urllib.error.URLError:
             return False
+
+    def inject(self, text: str) -> bool:
+        return self.__post("/message", {"text": text}, timeout=10)
+
+    def signal_wake(self) -> bool:
+        """Tell the gateway the wake word fired — triggers the HUD flare, the
+        spoken greeting, and voice-output barge-in (the cinematic reveal)."""
+        return self.__post("/wake", {}, timeout=3)

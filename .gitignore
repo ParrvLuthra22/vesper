@@ -86,3 +86,4 @@ htmlcov/
 voice/.venv/
 voice/training_data/
 voice/models/*.onnx
+voice/models/*.bin

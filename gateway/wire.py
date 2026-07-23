@@ -20,6 +20,7 @@ from schemas.events import (
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
     VoiceOutputEvent,
+    WakeEvent,
 )
 
 Extractor = Callable[[Any], Dict[str, Any]]
@@ -66,6 +67,10 @@ WIRE_SPEC: Dict[Type[BaseEvent], Tuple[str, Extractor]] = {
     BriefingRequestedEvent: (
         "briefing_requested",
         lambda e: {"schedule_name": e.schedule_name},
+    ),
+    WakeEvent: (
+        "wake",
+        lambda e: {"animate": e.animate},
     ),
 }
 

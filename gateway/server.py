@@ -38,6 +38,7 @@ from schemas.events import (
     ConfirmationResponseEvent,
     VoiceInputEvent,
     VoiceOutputEvent,
+    WakeEvent,
 )
 from utils.logger import get_logger
 
@@ -265,6 +266,17 @@ class Gateway:
         async def post_confirm(body: ConfirmIn, _: None = Depends(require_token)) -> Dict[str, Any]:
             self.inject_confirm(body.request_id, body.approved)
             return {"status": "ok"}
+
+        @app.post("/wake")
+        async def post_wake(_: None = Depends(require_token)) -> Dict[str, Any]:
+            # The wake word fired (from the voice-input client). Broadcast the
+            # WakeEvent (HUD flare + voice-output barge-in) and speak the
+            # time-appropriate greeting — the cinematic reveal.
+            animate = bool((self._config.get("wake_flow", {}) or {}).get("animation", True))
+            await self._bus.emit(WakeEvent(animate=animate, source="voice"))
+            if self._brain is not None:
+                asyncio.create_task(self._brain.greet())
+            return {"status": "waking"}
 
         @app.websocket("/ws")
         async def ws_endpoint(ws: WebSocket) -> None:
