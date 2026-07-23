@@ -8,8 +8,10 @@ before it runs. It notices things worth mentioning through local sensors
 (a context switch, an inbox surge, a meeting five minutes out), remembers
 what you tell it across sessions, and degrades gracefully rather than
 crashing when a dependency it relies on is unavailable. v1 ships as a rich
-terminal application; voice and a floating HUD are not part of this release
-(see [Roadmap](#roadmap-v2)).
+terminal application; the **v2 interaction layer** (below) adds a local API
+gateway, a frameless always-on-top HUD, and a full voice interface — wake word
+→ speech-to-text → spoken reply — all attaching to the same Brain over the
+gateway (see [Interaction layer (v2)](#interaction-layer-v2)).
 
 ## Architecture
 
@@ -121,20 +123,44 @@ and Vesper never invents a result it doesn't have.
 
 ![A LangSmith trace showing a turn, its plan_iteration children, and a tool_execution leaf, with real input/output](docs/images/langsmith_trace.png)
 
-## Roadmap (v2)
+## Interaction layer (v2)
 
-Ideas under consideration for the next phase, roughly in the order they'd
-plausibly land:
+Shipped on top of the v1 core. Every surface is a stateless client of one
+running Brain, attaching over the gateway — the Brain is the single source of
+truth, and adding a surface never touches the planner.
 
-- **Gateway** — a remote/API entry point so Vesper isn't confined to a
-  local terminal session.
-- **HUD** — the floating on-screen overlay (`ui/hud_overlay.py` exists as
-  an early stub; not wired into v1's primary interface).
-- **Voice + wake word** — the always-listening pipeline (`VoiceAgent`,
-  `main.py`) exists in the codebase but isn't part of this release's
-  primary interface; the CLI is.
-- **Developer tools** — MCP servers for the tools developers actually
-  live in (a shell/terminal server, GitHub, etc).
+- **API gateway** (`gateway/`) — a FastAPI surface over the event bus:
+  WebSocket `/ws` (bearer-token auth, snapshot on connect) plus REST
+  `/message`, `/status`, `/confirm`, `/wake`. **Localhost only** (binds
+  `127.0.0.1`, refuses anything else). Run: `python -m gateway.server`.
+- **HUD** (`hud/`) — a Tauri 2 frameless, always-on-top panel that renders
+  Vesper's live event streams: serif voice lines (typewriter), mono
+  plan-traces that collapse, gold proactive call-outs, briefing blocks, and
+  inline confirmation cards. The evening star breathes when connected and
+  dims to an ember when the gateway is gone. Run: `cd hud && npm run tauri dev`.
+- **Voice input** (`voice/input/`) — openWakeWord (bundled "hey_jarvis" or a
+  custom `.onnx`) → VAD (webrtcvad/silero) → faster-whisper. The transcript is
+  injected as just another client message. Run: `python -m voice.input`.
+- **Voice output** (`voice/output/`) — Kokoro-82M TTS speaks the serif voice
+  lines (never the mono traces); sentence-streamed, with barge-in on wake.
+  Run: `python -m voice.output`.
+- **The wake reveal** — wake word → the HUD star flares and the panel wakes,
+  and Vesper speaks + types the time-appropriate greeting, then listens.
+
+Each is off by default (`gateway.*`, `voice.input.*`, `voice.output.*` in
+`config/settings.yaml`); the voice stack's heavy ML deps are optional
+(`voice/requirements.txt`).
+
+## Roadmap (v3)
+
+Not yet built, roughly in the order they'd plausibly land:
+
+- **Remote access** — exposing the gateway beyond localhost, which first
+  requires real auth (per-user credentials, TLS, rate limiting).
+- **Acoustic echo cancellation** — so the spoken greeting doesn't bleed into
+  the command capture.
+- **Developer tools** — MCP servers for the tools developers live in (a
+  shell/terminal server, GitHub, etc).
 - **Spotify** — playback control and library access as an MCP server.
 - **Creator tools** — integrations aimed at content/creative workflows.
 - **Slack / Discord** — presence in team chat, not just a local terminal.
@@ -205,7 +231,7 @@ running the same `Brain` with `VoiceAgent` enabled instead of the CLI.
 ## Testing
 
 ```bash
-pytest                          # unit suite — 174 tests as of v1.0.0
+pytest                          # unit suite — 198 tests (incl. gateway + voice)
 ```
 
 See [`docs/TESTPLAN.md`](docs/TESTPLAN.md) for the manual acceptance test
