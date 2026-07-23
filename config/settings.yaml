@@ -80,7 +80,30 @@ general:
 # Voice Agent Configuration
 # -----------------------------------------------------------------------------
 voice:
-  # Wake word settings
+  # ---------------------------------------------------------------------------
+  # Rebuilt voice INPUT (PV3) — openWakeWord + VAD + faster-whisper.
+  # Independent of the legacy VoiceAgent settings below. Runs as its own client
+  # of the gateway (python -m voice.input). OFF by default — opt in here.
+  # Install the voice deps first:  pip install -r voice/requirements.txt
+  # ---------------------------------------------------------------------------
+  input:
+    enabled: false
+    # Bundled pretrained name ("hey_jarvis", "alexa", "hey_mycroft") OR a path
+    # to a custom .onnx in voice/models/ (e.g. "wake_up_daddys_home"). Hot-swap
+    # is just this value + a restart — no code change. See voice/TRAINING.md.
+    wake_model: "hey_jarvis"
+    wake_threshold: 0.5
+    # faster-whisper: small/base English models keep latency low on M-series.
+    whisper_model: "base.en"
+    whisper_compute_type: "int8"
+    # End-of-speech detection.
+    vad_backend: "webrtcvad"   # "webrtcvad" | "silero"
+    vad_aggressiveness: 2       # webrtcvad 0..3
+    vad_silence_ms: 800
+    listen_timeout_ms: 6000     # no speech after wake -> back to idle
+    mic_device: null            # sounddevice index/name; null = default input
+
+  # Wake word settings (legacy VoiceAgent)
   wake_word: "vesper"
   wake_word_sensitivity: 0.5  # 0.0 to 1.0
   

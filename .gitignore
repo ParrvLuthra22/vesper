@@ -81,3 +81,8 @@ htmlcov/
 
 # Local Python version managers
 .python-version
+
+# Voice input (PV3) — user-generated / heavy artifacts
+voice/.venv/
+voice/training_data/
+voice/models/*.onnx

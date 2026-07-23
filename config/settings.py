@@ -73,6 +73,22 @@ class VoiceTTSSettings(BaseModel):
     voice_id: str = "af_heart"
 
 
+class VoiceInputSettings(BaseModel):
+    """Rebuilt voice input (PV3) — openWakeWord + VAD + faster-whisper. Off by
+    default; independent of the legacy VoiceAgent settings above."""
+
+    enabled: bool = False
+    wake_model: str = "hey_jarvis"  # bundled name or a path to a custom .onnx
+    wake_threshold: float = 0.5
+    whisper_model: str = "base.en"
+    whisper_compute_type: str = "int8"
+    vad_backend: str = "webrtcvad"  # "webrtcvad" | "silero"
+    vad_aggressiveness: int = 2
+    vad_silence_ms: int = 800
+    listen_timeout_ms: int = 6000
+    mic_device: Optional[Any] = None
+
+
 class VoiceSettings(BaseModel):
     wake_word: str = "vesper"
     wake_word_sensitivity: float = 0.5
@@ -82,6 +98,7 @@ class VoiceSettings(BaseModel):
     tts: VoiceTTSSettings = Field(default_factory=VoiceTTSSettings)
     synthesis: VoiceSynthesisSettings = Field(default_factory=VoiceSynthesisSettings)
     address_user_as_sir: bool = True
+    input: VoiceInputSettings = Field(default_factory=VoiceInputSettings)
 
 
 class IntentProviderSettings(BaseModel):

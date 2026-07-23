@@ -1,0 +1,18 @@
+# Vesper voice input (PV3) — runtime deps for `python -m voice.input`.
+# Install into the main .venv, or a dedicated one; voice runs as its own client
+# of the gateway. Off by default (voice.input.enabled).
+
+openwakeword>=0.6.0        # wake stage (pretrained "hey_jarvis" + custom .onnx)
+faster-whisper>=1.0.0      # STT stage (ctranslate2 whisper; small/base.en on M-series)
+sounddevice>=0.4.6         # microphone capture (16 kHz mono int16)
+numpy>=1.24                # audio buffers
+onnxruntime>=1.16          # openWakeWord inference (also used by silero-vad onnx)
+
+# End-of-speech VAD — pick ONE backend (config: voice.input.vad_backend):
+webrtcvad-wheels>=2.0.14   # default: lightweight, prebuilt wheels (module: webrtcvad)
+# silero-vad>=5.1          # alternative: more accurate; pulls torch (heavier)
+
+# --- Custom wake-word TRAINING only (see voice/TRAINING.md; not needed at runtime) ---
+# openwakeword[training]   # training utilities
+# kokoro>=0.7.0            # synthetic positive samples across many voices
+# scipy>=1.10              # audio resampling for training
