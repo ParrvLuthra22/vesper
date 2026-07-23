@@ -9,7 +9,7 @@
   </head>
 
   <body>
-    <div class="panel">
+    <div class="panel" id="panel">
       <!-- Header: draggable. The star's liveness IS the connection state. -->
       <header class="header" data-tauri-drag-region>
         <span class="star" id="star" aria-hidden="true"></span>
@@ -17,20 +17,22 @@
         <span class="clock" id="clock">--:--</span>
       </header>
 
-      <!-- Body: no feature rendering yet (that is PV2) — a quiet idle line. -->
-      <main class="body">
-        <p class="idle">At your service.</p>
-      </main>
+      <!-- Stream: Vesper's actual life — voice lines, plan traces, gold
+           call-outs, briefings, confirmation cards. Newest at the bottom. -->
+      <main class="stream" id="stream" aria-live="polite"></main>
 
-      <!-- Footer: connection state + a live stream of incoming event types,
-           proof that data flows from the gateway. -->
-      <footer class="status">
-        <div class="conn" id="conn">
-          <span class="conn-dot"></span>
-          <span class="conn-label" id="conn-label">connecting…</span>
-        </div>
-        <ul class="stream" id="stream"></ul>
-      </footer>
+      <!-- Light command input: SHORT commands and confirmations only. The HUD
+           is display-first, not a chat window. -->
+      <form class="composer" id="composer" autocomplete="off">
+        <input
+          class="composer-input"
+          id="input"
+          type="text"
+          placeholder="…"
+          spellcheck="false"
+          autocomplete="off"
+        />
+      </form>
     </div>
   </body>
 </html>

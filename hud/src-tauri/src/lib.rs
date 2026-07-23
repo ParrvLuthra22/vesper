@@ -118,6 +118,31 @@ fn quit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// Make the panel a true HUD: float over every Space, including other apps'
+/// fullscreen windows. Tauri's set_visible_on_all_workspaces only sets
+/// canJoinAllSpaces; a HUD also needs fullScreenAuxiliary.
+#[cfg(target_os = "macos")]
+fn float_over_fullscreen(window: &WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
+    // NSWindowCollectionBehavior bit flags:
+    //   CanJoinAllSpaces (1<<0) | Stationary (1<<4) | FullScreenAuxiliary (1<<8)
+    const CAN_JOIN_ALL_SPACES: usize = 1 << 0;
+    const STATIONARY: usize = 1 << 4;
+    const FULLSCREEN_AUXILIARY: usize = 1 << 8;
+    let behavior: usize = CAN_JOIN_ALL_SPACES | STATIONARY | FULLSCREEN_AUXILIARY;
+
+    if let Ok(ptr) = window.ns_window() {
+        let ns_window = ptr as *mut AnyObject;
+        if !ns_window.is_null() {
+            unsafe {
+                let _: () = msg_send![ns_window, setCollectionBehavior: behavior];
+            }
+        }
+    }
+}
+
 /// Pin the panel to the top-right of the primary display with a small inset.
 fn position_top_right(window: &WebviewWindow) {
     if let Ok(Some(monitor)) = window.primary_monitor() {
@@ -148,6 +173,8 @@ pub fn run() {
             // A HUD should float across every Space — including over other
             // apps' fullscreen windows — not just the active desktop.
             let _ = window.set_visible_on_all_workspaces(true);
+            #[cfg(target_os = "macos")]
+            float_over_fullscreen(&window);
             let _ = window.show();
 
             // Tray: show/hide the panel, and quit. Left-click opens the menu.

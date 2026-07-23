@@ -23,3 +23,9 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# macOS: set the panel's NSWindow collection behavior so the HUD floats over
+# every Space, including other apps' fullscreen windows (a HUD should always
+# be present). objc2 0.6.4 is already in the tree via tao/wry.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+

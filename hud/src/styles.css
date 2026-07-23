@@ -1,8 +1,8 @@
 /* =========================================================================
-   Vesper HUD — design system (PV1)
-   Dark, quiet, luxury. Tokens first; components consume only tokens so the
-   whole look retunes from :root. Fonts are bundled locally (woff2) — no CDN,
-   works offline.
+   Vesper HUD — design system (PV2)
+   Dark, quiet, luxury. Serif voice, mono plan-traces, gold reserved for
+   Vesper's proactive call-outs. Tokens first; components consume only tokens.
+   Fonts bundled locally (woff2) — no CDN, works offline.
    ========================================================================= */
 
 /* ------------------------------- Fonts --------------------------------- */
@@ -44,33 +44,28 @@
 
 /* ------------------------------- Tokens -------------------------------- */
 :root {
-  /* Surfaces & lines */
-  --vsp-bg: #0a0a0b;          /* panel background (per spec) */
-  --vsp-border: #2a2823;      /* panel hairline (per spec) */
-  --vsp-line: #1a1917;        /* internal dividers */
+  --vsp-bg: #0a0a0b;
+  --vsp-border: #2a2823;
+  --vsp-line: #1a1917;
 
-  /* Gold — the evening star. Brand gold matches the CLI (VESPER_GOLD). */
   --vsp-gold: #c9a96a;
   --vsp-gold-soft: #a98f5a;
   --vsp-gold-glow: rgba(201, 169, 106, 0.45);
-  --vsp-ember: #4a3f2a;       /* near-dead star when disconnected */
+  --vsp-champagne: #d8be86; /* the call-out — only gold text in the body */
+  --vsp-ember: #4a3f2a;
 
-  /* Text */
-  --vsp-text: #e8e4da;
+  --vsp-text: #e8e4da; /* bone */
   --vsp-muted: #8a857a;
   --vsp-faint: #55524b;
   --vsp-dim: #3a3833;
+  --vsp-fail: #9a6b5a; /* muted terracotta for a failed trace step */
 
-  /* Type */
   --vsp-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --vsp-display: "Fraunces", Georgia, "Times New Roman", serif;
 
-  /* Geometry */
   --vsp-radius: 14px;
   --vsp-pad: 16px;
   --vsp-star: 7px;
-
-  /* Motion */
   --vsp-breath: 3.2s;
 }
 
@@ -85,8 +80,6 @@ html,
 body {
   width: 100%;
   height: 100%;
-  /* The native window is transparent; the .panel draws the only surface, so
-     its rounded corners read against whatever is behind it. */
   background: transparent;
   overflow: hidden;
   -webkit-user-select: none;
@@ -118,17 +111,16 @@ body {
   height: 44px;
   padding: 0 var(--vsp-pad);
   border-bottom: 0.5px solid var(--vsp-line);
-  /* Whole header is the drag handle (data-tauri-drag-region). */
   -webkit-app-region: drag;
+  flex: 0 0 auto;
 }
 
 .wordmark {
   font-family: var(--vsp-mono);
   font-weight: 500;
   font-size: 11px;
-  letter-spacing: 0.30em;
+  letter-spacing: 0.3em;
   color: var(--vsp-text);
-  /* letter-spacing adds trailing space; nudge back for optical centering */
   padding-left: 0.15em;
 }
 
@@ -150,7 +142,6 @@ body {
   background: var(--vsp-gold);
   box-shadow: 0 0 8px 1px var(--vsp-gold-glow);
   flex: 0 0 auto;
-  /* Before the socket resolves: a steady, unhurried gold. */
   opacity: 0.6;
 }
 
@@ -166,14 +157,12 @@ body {
   }
 }
 
-/* Connected: the star breathes. */
 .panel.connected .star {
   background: var(--vsp-gold);
   box-shadow: 0 0 9px 1.5px var(--vsp-gold-glow);
   animation: vsp-breathe var(--vsp-breath) ease-in-out infinite;
 }
 
-/* Disconnected: a near-dead ember — static, dim, no glow. */
 .panel.disconnected .star {
   background: var(--vsp-ember);
   box-shadow: none;
@@ -182,89 +171,257 @@ body {
   transform: scale(0.92);
 }
 
-/* --------------------------------- Body -------------------------------- */
-.body {
+/* ------------------------------- Stream -------------------------------- */
+.stream {
   flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 15px var(--vsp-pad);
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--vsp-pad);
+  flex-direction: column;
+  gap: 11px;
+  scrollbar-width: none;
+}
+.stream::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
-.idle {
+/* Everything in the stream fades up as it arrives (film-credit staging). */
+.entry {
+  opacity: 0;
+  transform: translateY(5px);
+  transition:
+    opacity 0.55s ease,
+    transform 0.55s ease;
+}
+.entry.in {
+  opacity: 1;
+  transform: none;
+}
+
+/* Voice lines — Vesper speaking, Fraunces italic bone. */
+.line.voice {
   font-family: var(--vsp-display);
   font-style: italic;
   font-weight: 400;
-  font-size: 16px;
+  font-size: 15.5px;
   line-height: 1.5;
-  color: var(--vsp-faint);
-  text-align: center;
   letter-spacing: 0.01em;
+  color: var(--vsp-text);
+  min-height: 1.5em;
 }
 
-/* -------------------------------- Status ------------------------------- */
-.status {
-  border-top: 0.5px solid var(--vsp-line);
-  padding: 12px var(--vsp-pad) 14px;
-  font-family: var(--vsp-mono);
-  font-size: 10.5px;
-  line-height: 1.6;
+/* Observations — the call-out. The ONLY gold text in the body. */
+.line.obs {
+  font-family: var(--vsp-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--vsp-champagne);
+  border-left: 1.5px solid var(--vsp-gold);
+  padding-left: 12px;
 }
 
-.conn {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  letter-spacing: 0.04em;
-  color: var(--vsp-muted);
-}
-
-.conn-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--vsp-dim);
-  flex: 0 0 auto;
-}
-.panel.connected .conn-dot {
-  background: var(--vsp-gold);
-  box-shadow: 0 0 6px 0.5px var(--vsp-gold-glow);
-}
-.panel.disconnected .conn-dot {
-  background: var(--vsp-ember);
-}
-
-.conn-label {
-  color: var(--vsp-muted);
-}
-.panel.disconnected .conn-label {
-  color: var(--vsp-faint);
-}
-
-.stream {
-  list-style: none;
-  margin-top: 9px;
+/* Plan trace — dim mono steps, staged one by one, collapsible. */
+.trace {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  max-height: 132px;
-  overflow: hidden;
+  gap: 3px;
 }
-
-.stream li {
-  color: var(--vsp-faint);
+.trace-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.step {
+  font-family: var(--vsp-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
   letter-spacing: 0.02em;
+  color: var(--vsp-faint);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
 }
-.stream li::before {
-  content: "› ";
+.step.in {
+  opacity: 1;
+  transform: none;
+}
+.step.fail {
+  color: var(--vsp-fail);
+}
+.trace.folded .trace-steps {
+  display: none;
+}
+.trace.folded.open .trace-steps {
+  display: flex;
+  margin-top: 4px;
+}
+.trace-toggle {
+  font-family: var(--vsp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.02em;
+  color: var(--vsp-dim);
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.trace-toggle:hover {
+  color: var(--vsp-faint);
+}
+
+/* Briefing — restrained block: serif summary + mono data lines. */
+.briefing {
+  border-left: 1.5px solid var(--vsp-line);
+  padding: 2px 0 2px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.briefing-summary {
+  font-family: var(--vsp-display);
+  font-style: italic;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--vsp-text);
+}
+.briefing-line {
+  font-family: var(--vsp-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  letter-spacing: 0.01em;
+  color: var(--vsp-muted);
+}
+
+/* Confirmation card — gold approve, hairline deny, depleting hairline. */
+.confirm-card {
+  border: 0.5px solid var(--vsp-border);
+  border-radius: 8px;
+  padding: 11px 12px 9px;
+  background: rgba(255, 255, 255, 0.015);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+.confirm-summary {
+  font-family: var(--vsp-mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  letter-spacing: 0.01em;
+  color: var(--vsp-text);
+}
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+.cbtn {
+  font-family: var(--vsp-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 13px;
+  border-radius: 5px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease;
+}
+.cbtn.approve {
+  color: #17140d;
+  background: var(--vsp-gold);
+  border: 0.5px solid var(--vsp-gold);
+}
+.cbtn.approve:hover {
+  background: #d8bd82;
+}
+.cbtn.deny {
+  color: var(--vsp-muted);
+  background: transparent;
+  border: 0.5px solid var(--vsp-border);
+}
+.cbtn.deny:hover {
+  color: var(--vsp-text);
+  border-color: var(--vsp-faint);
+}
+.cbtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.confirm-expiry {
+  height: 1px;
+  background: var(--vsp-line);
+  overflow: hidden;
+}
+.expiry-bar {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--vsp-gold-soft);
+}
+.confirm-card.approved {
+  border-color: rgba(201, 169, 106, 0.4);
+}
+.confirm-card.denied,
+.confirm-card.expired {
+  opacity: 0.55;
+}
+.confirm-status {
+  font-family: var(--vsp-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--vsp-faint);
+}
+
+/* ------------------------------ Composer ------------------------------- */
+.composer {
+  flex: 0 0 auto;
+  border-top: 0.5px solid var(--vsp-line);
+  padding: 10px var(--vsp-pad);
+  -webkit-app-region: no-drag;
+}
+.composer-input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--vsp-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--vsp-text);
+  caret-color: var(--vsp-gold);
+}
+.composer-input::placeholder {
   color: var(--vsp-dim);
 }
-/* The newest arrival glows briefly brighter. */
-.stream li.fresh {
-  color: var(--vsp-gold-soft);
+
+/* -------------------------------- Idle --------------------------------- */
+/* Restraint is the aesthetic: when nothing's happening, fade to just the
+   last thing Vesper said. */
+.panel.idle .stream > .entry {
+  transition: opacity 1.2s ease;
+}
+.panel.idle .stream > .entry:not(:last-child) {
+  opacity: 0;
+}
+.panel.idle .stream > .entry:last-child {
+  opacity: 0.4;
+}
+.panel.idle .composer {
+  opacity: 0.6;
+  transition: opacity 1.2s ease;
 }
 
 /* --------------------------- Reduced motion ---------------------------- */
@@ -273,5 +430,9 @@ body {
     animation: none;
     opacity: 1;
     transform: none;
+  }
+  .entry,
+  .step {
+    transition: none;
   }
 }
