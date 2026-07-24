@@ -639,6 +639,34 @@ proactive:
       enabled: true
       time: "00:00"
 
+  # PC4: the no-prompt morning routine — the composed briefing that defines
+  # Vesper. OPT-IN (default off) so it never double-fires with morning_briefing
+  # above; if you enable this, disable morning_briefing. It fires at `time`, or
+  # on the first app activity after `activate_after_hour` (so it happens
+  # unprompted the moment you sit down). It gathers weather + calendar +
+  # reminders + email + GitHub + Slack + the day plan, delivers ONE spoken
+  # briefing, then OFFERS to set up your workspace (one confirmation for the
+  # whole set). At most once per calendar day; a "not now" defers it, a second
+  # "not now" cancels it for the day.
+  morning_routine:
+    enabled: false
+    time: "07:30"
+    activate_after_hour: 7        # first app focus after this hour also triggers it
+    pre_approved: false           # true = set up the workspace without confirming (default: always offer)
+    defer_minutes: 60             # a "not now" pushes it this far
+    conversation_retry_minutes: 5 # if you're mid-conversation, retry after this
+    work_apps:
+      - "Visual Studio Code"
+      - "Terminal"
+      - "Slack"
+    playlist: "your focus playlist"
+    weather_location: ""          # a city name or "lat,lon"; empty = weather line omitted
+
+  # PC4: the small evening close — two lines (what got done + next commitment).
+  evening_routine:
+    enabled: false
+    time: "18:30"
+
 
 # -----------------------------------------------------------------------------
 # Tracing (P06) — LangSmith instrumentation over the Planner's tool-calling

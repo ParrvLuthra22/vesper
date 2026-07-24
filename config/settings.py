@@ -400,9 +400,37 @@ class ProactiveScheduleSettings(BaseModel):
     )
 
 
+class ProactiveMorningRoutineSettings(BaseModel):
+    """PC4: the composed, no-prompt morning routine. Opt-in (default off) so it
+    never collides with the older morning_briefing. Fires at `time`, or on the
+    first app activity after `activate_after_hour`. `pre_approved` runs the
+    environment setup (focus playlist + work apps) without a confirmation —
+    default off, so it always OFFERS. A "not now" defers by `defer_minutes`."""
+
+    enabled: bool = False
+    time: str = "07:30"
+    activate_after_hour: int = 7
+    pre_approved: bool = False
+    defer_minutes: int = 60
+    conversation_retry_minutes: int = 5
+    work_apps: List[str] = Field(default_factory=lambda: ["Visual Studio Code", "Terminal", "Slack"])
+    playlist: str = "your focus playlist"
+    weather_location: str = ""
+
+
+class ProactiveEveningRoutineSettings(BaseModel):
+    """PC4: the small evening counterpart — a two-line close (what got done +
+    the next commitment). Optional; default off."""
+
+    enabled: bool = False
+    time: str = "18:30"
+
+
 class ProactiveSettings(BaseModel):
     rules: ProactiveRulesSettings = Field(default_factory=ProactiveRulesSettings)
     schedule: ProactiveScheduleSettings = Field(default_factory=ProactiveScheduleSettings)
+    morning_routine: ProactiveMorningRoutineSettings = Field(default_factory=ProactiveMorningRoutineSettings)
+    evening_routine: ProactiveEveningRoutineSettings = Field(default_factory=ProactiveEveningRoutineSettings)
 
 
 class TracingSettings(BaseModel):
