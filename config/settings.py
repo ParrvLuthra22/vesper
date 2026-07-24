@@ -536,6 +536,28 @@ class MCPSettings(BaseModel):
     servers: MCPServersSettings = Field(default_factory=MCPServersSettings)
 
 
+class CreatorAutomationSettings(BaseModel):
+    """PC2 automation-composer safety. `denylist` ADDS regex patterns to the
+    always-on DEFAULT_DENYLIST in tools/creator.py — it can only strengthen the
+    floor, never weaken it. `enforce_home_boundary` refuses commands that write
+    to absolute paths outside the user's home (temp dirs excepted). Both
+    run_shell and run_applescript are DANGEROUS tier: the exact command/script
+    is shown and explicit approval is asked every single time — no remembered
+    approval, and denylist matches are refused outright even after approval."""
+
+    denylist: List[str] = Field(default_factory=list)
+    enforce_home_boundary: bool = True
+
+
+class CreatorSettings(BaseModel):
+    """PC2 creator tools — deep research, script writer, guarded automation."""
+
+    research_dir: str = "data/research"
+    scripts_dir: str = "data/scripts"
+    formats_dir: str = "config/formats"
+    automation: CreatorAutomationSettings = Field(default_factory=CreatorAutomationSettings)
+
+
 class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
@@ -563,6 +585,7 @@ class AppSettings(BaseSettings):
     proactive: ProactiveSettings = Field(default_factory=ProactiveSettings)
     tracing: TracingSettings = Field(default_factory=TracingSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
+    creator: CreatorSettings = Field(default_factory=CreatorSettings)
 
     @classmethod
     def settings_customise_sources(

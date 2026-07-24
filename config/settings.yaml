@@ -767,3 +767,27 @@ mcp:
         next: safe
         set_volume: safe
         queue: safe
+
+
+# -----------------------------------------------------------------------------
+# Creator tools (PC2) — the "does everything" layer, delivered as tools:
+#   research        deep multi-step web research (Search -> Reader -> Writer ->
+#                   Critic); slow, runs on the task queue, writes the full report
+#                   to research_dir and announces completion.
+#   write_script    template-driven short-form scripts; each format is just a
+#                   markdown spec under formats_dir (e.g. reel.md) — new formats
+#                   need no code change. Output saved to scripts_dir.
+#   run_shell /     the automation composer. Both are DANGEROUS tier: the exact
+#   run_applescript command is shown verbatim and explicit approval is asked
+#                   EVERY time (no remembered approval). The denylist below ADDS
+#                   to an always-on safety floor in tools/creator.py
+#                   (rm -rf /, sudo, disk utilities, curl|sh, fork bombs, …) —
+#                   any match is refused outright, even after approval.
+# -----------------------------------------------------------------------------
+creator:
+  research_dir: "data/research"
+  scripts_dir: "data/scripts"
+  formats_dir: "config/formats"
+  automation:
+    enforce_home_boundary: true   # refuse writes to absolute paths outside $HOME (temp dirs excepted)
+    denylist: []                  # extra regex patterns, added on top of the built-in floor
