@@ -1,12 +1,17 @@
-# Vesper v1.0.0 — Manual Acceptance Test Plan
+# Vesper v3.0.0 — Manual Acceptance Test Plan
 
 This is a scripted, human-run walkthrough for validating a release build
 end to end, against real services (Groq, Ollama, Gmail, Calendar/Reminders,
-Notion if configured) — not a substitute for the automated `pytest` suite
-(`pytest` — 174 tests as of v1.0.0), which covers unit-level correctness
-and runs on every change. Run this plan before tagging a release, or after
-any change to `orchestrator/`, `llm/`, `tools/mcp_bridge.py`, `sensors/`, or
-`proactive/`.
+Notion, GitHub, Spotify, Slack, Discord — as configured) — not a substitute
+for the automated `pytest` suite (`pytest` — **250 tests** as of v3.0.0),
+which covers unit-level correctness and runs on every change. Run this plan
+before tagging a release, or after any change to `orchestrator/`, `llm/`,
+`tools/`, `guardian/`, `remote/`, `sensors/`, or `proactive/`.
+
+Tests **1–20** are the v1/v2 core (conversation, tools, confirmation,
+sensors, briefing, memory, failure drills, CLI). Tests **21–33** cover the
+v3 capability layer: developer tools, music, research/script/automation,
+Slack/Discord + the remote interface, the morning routine, and weather.
 
 ## Prerequisites
 
@@ -297,6 +302,135 @@ the session-end reflection pass (see test 12).
 
 ---
 
+## v3 capability layer (21–33)
+
+Enable the relevant servers/tools in `config/settings.yaml` before running each
+(all v3 integrations default **off**). A test whose service isn't configured is
+**N/A**, not FAIL.
+
+### 21. Developer tools — git status/diff and gated commit (PC0)
+
+**Steps:** In a repo working tree, *"what's changed in this repo?"* then
+*"commit the staged changes."*
+
+**Expected:** `▸ git_status` / `▸ git_diff` run safe (no prompt). `git_commit`
+is confirm-tier: the `⚠` summary shows the **exact repo, branch, and the commit
+message** (auto-generated from the staged diff if you didn't dictate one). It
+commits only on `y`, and only the current repo — never one you didn't name.
+
+### 22. Developer tools — run_tests on the task queue (PC0)
+
+**Steps:** *"run the tests."*
+
+**Expected:** `run_tests` is `slow=True` — Vesper replies immediately
+("…in the background") and, on completion, announces *"Sir, the run tests you
+asked for is ready."* as a pending observation, with a pass/fail summary.
+
+### 23. Music — named track plays immediately (PC1)
+
+**Steps:** With `mcp.servers.spotify.enabled: true`, *"play Sirf Kaam Hai by
+[artist]."*
+
+**Expected:** `▸ play(...)` runs **safe** (no confirmation — playback is never
+gated). Vesper confirms in one line, no menu, no deliberation.
+
+### 24. Music — context-aware selection from memory (PC1)
+
+**Steps:** Once, tell it a preference: *"when I'm coding put on lo-fi, no
+vocals."* Later, *"focus time"* (a state, not a track).
+
+**Expected:** Vesper **chooses** without asking, honouring the remembered
+preference (lo-fi), and states the one-line choice. `/trace` shows the music
+preference surfaced in `memory_injected`.
+
+### 25. Deep research — queues, announces, writes a file (PC2)
+
+**Steps:** *"research the best MCP servers for productivity."* (needs
+`TAVILY_API_KEY` + a working LLM.)
+
+**Expected:** `research` is slow → runs on the queue; the inline reply is a
+3-line summary + a path. On completion: *"Sir, the research you asked for is
+ready."*, and a full sourced report exists under `data/research/`.
+
+### 26. Script writer — obeys the format spec (PC2)
+
+**Steps:** *"write me a reel script about shipping Vesper."*
+
+**Expected:** The output follows `config/formats/reel.md` exactly — four beats
+(Cold Frame → Declaration → Proof → Tomorrow hook), the signature line
+`Sirf kaam hai`, the sign-off `Day X. Done.`, no exclamation marks/emoji. The
+full script is saved to `data/scripts/`.
+
+### 27. Automation composer — verbatim confirmation, runs on approval (PC2)
+
+**Steps:** *"clear my downloads folder of files older than 30 days."*
+
+**Expected:** Vesper composes a shell command and asks to run it **DANGEROUS**;
+the `⚠` summary shows the command **verbatim** (never paraphrased). It executes
+only on `y`, every time (no remembered approval).
+
+### 28. Automation denylist — refused outright, even if approved (PC2)
+
+**Steps:** Ask for something denylisted: *"run `sudo rm -rf /`"* (or `diskutil`,
+a `curl … | sh`, or a write outside your home dir).
+
+**Expected:** Refused **outright** with the matched pattern named — it is not
+even offered for confirmation-approval, and approving anything adjacent never
+runs it. `data/audit.jsonl` shows no `allow` for it.
+
+### 29. Slack/Discord — reads safe, sends show exact channel + text (PC3)
+
+**Steps:** With `mcp.servers.slack.enabled: true`: *"any Slack mentions I've
+missed?"* then *"reply in #eng saying I'll review the PR after lunch."*
+
+**Expected:** `get_mentions` / `search` run safe. `post_message` / `reply_thread`
+are confirm-tier: the `⚠` summary shows the **exact channel and the full
+message text** before anything posts. (Discord tools behave identically.)
+
+### 30. Remote interface — owner-only, dangerous disabled (PC3)
+
+**Steps:** With `remote.enabled: true` + a bot token, DM Vesper from your own
+Discord account in the designated channel: *"what's on my calendar?"* Then
+message from a **different** account. Then, as owner, ask for a dangerous action
+(e.g. a shell command).
+
+**Expected:** Your message is answered (reply posted back). The non-owner
+message is **ignored** (no reply, no turn). The dangerous request is **refused**
+— dangerous-tier tools are disabled for remote sessions entirely
+(`remote.allow_dangerous` defaults false).
+
+### 31. Remote interface — confirm-tier needs explicit approval (PC3)
+
+**Steps:** Over the remote channel, ask for a confirm-tier action (e.g. draft a
+Slack reply). When Vesper posts the confirmation with a request id, first reply
+*"yes"*; then reply with the **request id** (or react ✅ to the prompt).
+
+**Expected:** The bare *"yes"* is **refused** ("that won't approve it…"). The
+action runs only after the explicit request-id reply or the ✅ reaction.
+
+### 32. Morning routine — unprompted, composed, once per day (PC4)
+
+**Steps:** Set `proactive.morning_routine.enabled: true`, `time` a couple of
+minutes out (and a `weather_location`); disable `morning_briefing`. Sit at the
+desk and wait — or just open an app after the configured hour.
+
+**Expected:** Unprompted, Vesper delivers **one** composed briefing (weather
+line → what matters → top-3 to action → day plan), spoken + on the HUD, naming
+any failed source in a single clause. It then **offers** to set up your
+workspace (start the playlist + open work apps) as a **single** confirmation;
+approving runs the whole set. It does not fire a second time the same day. Reply
+*"not now"* on a fresh day → it defers ~60 min; a second *"not now"* → cancelled
+for the day.
+
+### 33. Weather tool (PC4)
+
+**Steps:** *"what's the weather in London?"*
+
+**Expected:** `▸ current_weather(...)` runs safe and returns a one-line summary
+(conditions + current temp + today's range) via Open-Meteo — no API key needed.
+
+---
+
 ## Result log
 
 | # | Test | Result | Notes |
@@ -321,3 +455,16 @@ the session-end reflection pass (see test 12).
 | 18 | Tool timeout | | |
 | 19 | Malformed tool arguments | | |
 | 20 | CLI surface (/trace /tools /status /quit) | | |
+| 21 | Dev tools — git status/diff + gated commit | | |
+| 22 | Dev tools — run_tests on the task queue | | |
+| 23 | Music — named track plays immediately | | |
+| 24 | Music — context-aware selection from memory | | |
+| 25 | Deep research — queues, announces, file written | | |
+| 26 | Script writer — obeys the reel format spec | | |
+| 27 | Automation composer — verbatim confirm + run | | |
+| 28 | Automation denylist — refused outright | | |
+| 29 | Slack/Discord — reads safe, sends confirm | | |
+| 30 | Remote — owner-only, dangerous disabled | | |
+| 31 | Remote — confirm needs explicit approval | | |
+| 32 | Morning routine — unprompted, once/day, defer | | |
+| 33 | Weather tool | | |

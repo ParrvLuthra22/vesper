@@ -1,239 +1,289 @@
 # Vesper
 
-Vesper is a macOS assistant built as a tool-calling operator, not a chatbot. An
-LLM planner reasons over a registry of real capabilities — email, calendar,
-reminders, task databases, system control — and every consequential action
-passes through a permission gate that requires your explicit confirmation
-before it runs. It notices things worth mentioning through local sensors
-(a context switch, an inbox surge, a meeting five minutes out), remembers
-what you tell it across sessions, and degrades gracefully rather than
-crashing when a dependency it relies on is unavailable. v1 ships as a rich
-terminal application; the **v2 interaction layer** (below) adds a local API
-gateway, a frameless always-on-top HUD, and a full voice interface — wake word
-→ speech-to-text → spoken reply — all attaching to the same Brain over the
-gateway (see [Interaction layer (v2)](#interaction-layer-v2)).
+Vesper is a macOS personal assistant built as an **operator with judgment**, not
+another task executor. It doesn't wait for a command and dispatch it — it watches
+your day through local sensors, reasons over a registry of real capabilities
+(email, calendar, code, music, research, team chat, the shell) with an LLM
+planner, and gates every consequential action behind a permission tier that asks
+before it acts. It notices when something is worth raising — a third context
+switch this hour, an inbox surge, a deep-work block starting — forms a view, and
+says so once, then drops it. It remembers what you tell it across sessions,
+degrades gracefully when a dependency is down, and can run the whole morning for
+you before you've asked: weather, what matters today, the three things that need
+action, and an offer to set up your workspace — spoken aloud and on a heads-up
+display, or reached from your phone over a private Discord channel.
+
+## What makes it different
+
+Most assistants are reactive: you ask, they execute. Vesper is written to have a
+point of view. **It observes** — local sensors feed a proactive engine that
+tracks focus, calendar, and inbox pressure. **It forms a view** — cooldown-gated
+rules decide whether what it noticed is actually worth your attention. **It says
+something — respectfully, once** — framed as information plus a question, never a
+command, never repeated, dropped the moment you wave it off. That restraint is
+enforced in code (cooldowns, once-per-day gates, a single call-out doctrine), not
+left to a prompt.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Sensing["Sensors"]
+    subgraph Sensing["Sensors (local only)"]
         Focus["FocusSensor"]
         Cal["CalendarSensor"]
         Inbox["InboxSensor"]
     end
 
     subgraph Proactive["Proactive Engine"]
-        Rules["Cooldown-gated rules<br/>context_switch / meeting_reminder / inbox_surge"]
-        Sched["Scheduled jobs<br/>morning_briefing / midnight_reflection"]
+        Rules["Cooldown-gated rules<br/>context_switch / meeting / focus_block"]
+        Sched["Scheduled routines<br/>morning routine / briefing / reflection"]
     end
 
-    Bus["Event Bus (pub/sub)"]
-    CLI["cli/app.py (terminal)"] --> Bus
+    Bus(["Event Bus (pub/sub)"])
     Sensing --> Bus
-    Bus --> Rules
-    Bus --> Sched
-    Rules -.->|ObservationEvent| Bus
-    Sched -.->|BriefingRequested / ReflectionRequested| Bus
+    Bus --> Proactive
+    Proactive -.->|Observation / RoutineTriggered| Bus
 
     Bus --> Planner["Planner<br/>LLM tool-calling loop"]
-    Router["ModelRouter<br/>Groq primary, Ollama fallback"] <--> Planner
+    Router["ModelRouter<br/>Groq primary · Ollama fallback"] <--> Planner
+    Planner <--> Memory["MemoryAgent<br/>SQLite + Chroma (semantic)"]
 
-    Planner --> Guardian["Guardian<br/>safe / confirm / dangerous"]
+    Planner --> Guardian["Guardian<br/>safe · confirm · dangerous<br/>+ remote session policy"]
     Guardian -->|allow| Registry["Tool Registry"]
     Guardian -.->|needs confirmation| Bus
 
-    Registry --> Builtin["Builtin tools<br/>system, web search, macOS control"]
-    Registry --> MCPBridge["MCP Bridge"]
-    MCPBridge --> Gmail["Gmail MCP server"]
-    MCPBridge --> Apple["apple_pim MCP server<br/>Calendar + Reminders"]
-    MCPBridge --> Notion["Notion MCP server"]
-
-    Planner <--> Memory["MemoryAgent<br/>SQLite + Chroma"]
-    Reflection["Reflection job"] --> Memory
-    Sched -.-> Reflection
+    Registry --> Builtin["Builtin + native tools<br/>research · scripts · automation · weather · git"]
+    Registry --> MCP["MCP Bridge"]
+    MCP --> Servers["Gmail · Calendar/Reminders · Notion<br/>GitHub · Spotify · Slack · Discord"]
 
     Planner --> Tracer["Tracer<br/>LangSmith / local JSONL"]
-    Planner --> Reply["Reply (voice / CLI)"]
+
+    subgraph Clients["Interaction surfaces (stateless clients)"]
+        HUD["HUD (Tauri)"]
+        Voice["Voice in/out<br/>wake · STT · TTS"]
+        Remote["Discord remote<br/>(owner-only, restricted)"]
+        Term["Terminal CLI"]
+    end
+    Gateway["Gateway<br/>FastAPI · localhost only"] <--> Bus
+    Clients <--> Gateway
+    Term <--> Bus
 ```
 
-Sensors publish onto a shared event bus; the Proactive Engine turns sensor
-events into cooldown-gated observations and runs scheduled jobs (the morning
-briefing, nightly memory reflection). Every user turn — spoken, typed, or
-proactively triggered — goes through the Planner's tool-calling loop, which
-asks the Guardian whether each tool call may run before the Tool Registry
-(builtin capabilities plus anything bridged in from an MCP server) actually
-executes it. MemoryAgent backs both short-term conversational context and
-long-term semantic memory; every turn is traced.
+One **Brain** owns the state. Sensors publish onto a shared event bus; the
+Proactive Engine turns sensor events into cooldown-gated observations and runs
+scheduled routines. Every turn — spoken, typed, proactive, or remote — goes
+through the Planner's tool-calling loop, which asks the **Guardian** whether each
+call may run before the **Tool Registry** (builtin/native tools plus anything
+bridged from an MCP server) executes it. Memory backs both conversational context
+and long-term semantic recall. Every interaction surface — CLI, HUD, voice, and
+the Discord remote — is a stateless client of that one Brain over the gateway;
+**adding a surface never touches the planner.**
 
 ## The persona
 
-Vesper is written as a British butler in temperament, not caricature:
-measured, dry when it lands, never enthusiastic, never performative. It says
-what needs saying and stops — three sentences by default, observations
-raised once and dropped if ignored, never repeated or escalated into
-nagging. Honesty is non-negotiable: a failed tool call is reported plainly,
-and Vesper never invents a result it doesn't have.
+Vesper is written as a British butler in temperament, not caricature: measured,
+dry when it lands, never enthusiastic, never performative. It addresses you as
+"Sir", says what needs saying and stops — three sentences by default,
+observations raised once and dropped if ignored. Honesty is non-negotiable: a
+failed tool call is reported plainly, and it never invents a result it doesn't
+have.
 
-## Capabilities (v1)
+## What ships (v3.0.0)
 
+**Core reasoning & safety**
 - **LLM tool-calling planner** — open vocabulary, no rule-based intent
-  switchboard. Groq primary, Ollama local fallback, automatic retry/backoff
-  on rate limits.
-- **Guardian permission gate** — every tool call is tiered safe / confirm /
-  dangerous; confirm-tier calls require an explicit yes, time out to a
-  denial, and are appended to a local audit log.
-- **Gmail** — triage, search, thread summarization, and reply drafting
-  (never sending — that's a deliberate v2 decision) via OAuth2.
-- **Calendar + Reminders** — read today's/upcoming events and reminders,
-  create new ones (confirm-gated) via EventKit, with an AppleScript
-  fallback for reads.
-- **Notion** — read-only search, page retrieval, and database queries
-  against your named databases.
-- **Morning briefing** — inbox triage, today's calendar, carried-over
-  items, and an optional day-plan section, delivered on a schedule or
-  on demand ("brief me").
-- **Day planning** — "plan my day" produces a realistic, time-blocked
-  schedule from your calendar, reminders, Notion tasks, and email
-  pressure, and protects anything you've told Vesper to treat as
-  non-negotiable.
-- **Long-term memory** — a nightly (and session-end) reflection pass
-  extracts durable facts, preferences, and patterns from conversation
-  into semantic memory; relevant memories surface automatically on
-  later turns; "forget X" deletes them on request.
-- **Proactive sensing** — focus/context-switch tracking, upcoming-meeting
-  reminders, inbox-surge detection — all cooldown-gated so nothing repeats
-  or nags.
-- **Rich terminal presence** — `vesper` (or `python -m vesper`): live plan
-  traces as tools execute, streamed replies, inline `[y/N]` confirmations,
-  and `/trace` `/tools` `/status` `/quit`.
-- **Tracing** — every turn is instrumented as a turn → plan_iteration →
-  tool_execution hierarchy in LangSmith, with an always-on local JSONL
-  fallback so tracing never breaks the app.
-- **Resilience** — an MCP server crashing mid-session is detected, its
-  tools disappear from the model's schema rather than failing loudly, and
-  it reconnects on its own with exponential backoff. See
-  [`docs/TESTPLAN.md`](docs/TESTPLAN.md) for the full list of failure
-  drills this release is hardened against.
+  switchboard. Groq primary, Ollama local fallback, automatic retry/backoff.
+- **Guardian permission gate** — every tool is tiered `safe` / `confirm` /
+  `dangerous`; confirm-tier needs an explicit yes, times out to a denial, and is
+  appended to a local audit log. A **session policy** lets a restricted surface
+  (the remote interface) lower the ceiling further.
+- **Long-term memory** — a nightly + session-end reflection pass distils durable
+  facts/preferences into semantic memory; relevant memories resurface on later
+  turns; "forget X" deletes them.
 
-### A real trace
+**Productivity (MCP)**
+- **Gmail** — triage, search, thread summarization, reply *drafting* (never
+  sending — a deliberate choice).
+- **Calendar + Reminders** — read and create (confirm-gated) via EventKit.
+- **Notion** — read-only search, pages, database queries.
+- **GitHub** — notifications, PRs, issues, code search (read safe; comment/branch
+  confirm). No merge/close/force-push is ever surfaced.
+- **Slack / Discord** — mentions, DMs, search (safe); posting/replying
+  (confirm — the exact channel + full text is shown before it sends).
 
-`turn` → `plan_iteration` → `tool_execution`, exactly as instrumented in
-`tracing/tracer.py` — this one is a real "plan my day" call:
+**Capability layer (native tools)**
+- **Developer tools** — `git status/diff`, gated `git_commit` (shows exact repo +
+  branch + message), and `run_tests` on the background task queue.
+- **Music** — Spotify playback that's context-aware: name a track and it plays;
+  say "focus time" and it *chooses*, honouring remembered preferences.
+- **Deep research** — a Search → Reader → Writer → Critic pipeline; runs on the
+  queue, announces when ready, writes a sourced report to `data/research/`.
+- **Script writer** — template-driven from `config/formats/*.md` (new formats =
+  new markdown, no code).
+- **Automation composer** — `run_shell` / `run_applescript`, DANGEROUS-tier: the
+  command is shown **verbatim**, approved every time, and a denylist refuses
+  `rm -rf /`, `sudo`, disk utilities, `curl | sh`, and writes outside `$HOME`
+  **outright — even after approval.**
+- **Weather** — Open-Meteo, no API key.
 
-![A LangSmith trace showing a turn, its plan_iteration children, and a tool_execution leaf, with real input/output](docs/images/langsmith_trace.png)
+**Proactive & routines**
+- **Morning routine** — fires at a wake time or on your first activity of the
+  day; delivers one composed briefing (weather → what matters → top-3 → day plan)
+  spoken + on the HUD, then offers to set up your workspace as a single
+  confirmation. At most once per day; "not now" defers it, twice cancels it.
+- **Sensing** — context-switch, meeting, focus-block, and inbox-surge rules, all
+  cooldown-gated so nothing nags.
+- **Morning briefing & day planning** — on schedule or on demand ("brief me",
+  "plan my day").
 
-## Interaction layer (v2)
+**Interaction surfaces**
+- **Terminal CLI** — live plan traces, streamed replies, inline `[y/N]`
+  confirmations, `/trace` `/tools` `/status`.
+- **HUD** (Tauri) — frameless always-on-top panel: serif voice lines, collapsing
+  mono traces, gold call-outs, confirmation cards, a breathing star.
+- **Voice** — openWakeWord → VAD → faster-whisper in; Kokoro-82M TTS out; a
+  cinematic wake reveal.
+- **Discord remote** — mobile access with no app: owner-only, dangerous tools
+  disabled entirely, confirm-tier requiring an explicit remote approval (the
+  request id or a ✅ reaction — never a bare "yes").
+- **Gateway** — FastAPI over the bus, **localhost only** (binds `127.0.0.1` and
+  refuses anything else), bearer-token auth.
+- **Tracing** — every turn as `turn → plan_iteration → tool_execution` in
+  LangSmith, with an always-on local JSONL fallback.
+- **Resilience** — a crashed MCP server drops out of the model's schema and
+  reconnects on its own with backoff. See [`docs/TESTPLAN.md`](docs/TESTPLAN.md).
 
-Shipped on top of the v1 core. Every surface is a stateless client of one
-running Brain, attaching over the gateway — the Brain is the single source of
-truth, and adding a surface never touches the planner.
+## What is deliberately *not* built
 
-- **API gateway** (`gateway/`) — a FastAPI surface over the event bus:
-  WebSocket `/ws` (bearer-token auth, snapshot on connect) plus REST
-  `/message`, `/status`, `/confirm`, `/wake`. **Localhost only** (binds
-  `127.0.0.1`, refuses anything else). Run: `python -m gateway.server`.
-- **HUD** (`hud/`) — a Tauri 2 frameless, always-on-top panel that renders
-  Vesper's live event streams: serif voice lines (typewriter), mono
-  plan-traces that collapse, gold proactive call-outs, briefing blocks, and
-  inline confirmation cards. The evening star breathes when connected and
-  dims to an ember when the gateway is gone. Run: `cd hud && npm run tauri dev`.
-- **Voice input** (`voice/input/`) — openWakeWord (bundled "hey_jarvis" or a
-  custom `.onnx`) → VAD (webrtcvad/silero) → faster-whisper. The transcript is
-  injected as just another client message. Run: `python -m voice.input`.
-- **Voice output** (`voice/output/`) — Kokoro-82M TTS speaks the serif voice
-  lines (never the mono traces); sentence-streamed, with barge-in on wake.
-  Run: `python -m voice.output`.
-- **The wake reveal** — wake word → the HUD star flares and the panel wakes,
-  and Vesper speaks + types the time-appropriate greeting, then listens.
+Restraint is a feature. These were considered and left out on purpose:
 
-Each is off by default (`gateway.*`, `voice.input.*`, `voice.output.*` in
-`config/settings.yaml`); the voice stack's heavy ML deps are optional
-(`voice/requirements.txt`).
+- **WhatsApp integration** — the unofficial APIs are a terms-of-service and
+  account-ban risk; I won't ship something that can get a user's number banned.
+- **A general browser agent** — driving arbitrary sites with real credentials is
+  a safety and prompt-injection surface I'm not willing to expose behind an
+  autonomous planner.
+- **Home automation** — no hardware to control, and simulating it would be
+  theatre, not a capability.
 
-## Roadmap (v3)
+## Screenshots
 
-Not yet built, roughly in the order they'd plausibly land:
+**The HUD in a live session** — serif voice lines, mono plan-traces, and the
+breathing star:
 
-- **Remote access** — exposing the gateway beyond localhost, which first
-  requires real auth (per-user credentials, TLS, rate limiting).
-- **Acoustic echo cancellation** — so the spoken greeting doesn't bleed into
-  the command capture.
-- **Developer tools** — MCP servers for the tools developers live in (a
-  shell/terminal server, GitHub, etc).
-- **Spotify** — playback control and library access as an MCP server.
-- **Creator tools** — integrations aimed at content/creative workflows.
-- **Slack / Discord** — presence in team chat, not just a local terminal.
+![Vesper HUD live session](hud/docs/pv2-reel.gif)
+
+**A call-out moment / the wake reveal** — the star flares as Vesper wakes and
+greets:
+
+![Vesper wake reveal and call-out](hud/docs/pv4-wake-reel.gif)
+
+**A real LangSmith trace** — `turn → plan_iteration → tool_execution`, exactly as
+instrumented in `tracing/tracer.py` (a real "plan my day" call):
+
+![A LangSmith trace tree with real input/output](docs/images/langsmith_trace.png)
 
 ## Setup
 
+A stranger should be able to reach a working greeting from this section alone.
+
 ### Prerequisites
 
-- macOS (EventKit/AppleScript integrations are Apple-only).
-- Python 3.9 for the main app; Python 3.10+ for the MCP servers (see below).
-- A [Groq](https://console.groq.com) API key.
-- [Ollama](https://ollama.com) running locally, with a fallback model
-  pulled (`config/settings.yaml` → `llm.fallback.model`).
+- **macOS** (EventKit/AppleScript integrations are Apple-only).
+- **Python 3.9–3.11** for the main app (verified on 3.9 and 3.11). Use an
+  explicit `python3.11` (or `python3.9`) — a bare `python3` that resolves to
+  3.12+ may lack wheels for the pinned native deps. The MCP servers need
+  **Python 3.10+**.
+- A [Groq](https://console.groq.com) API key **or** [Ollama](https://ollama.com)
+  running locally with a model pulled — either one alone is enough to get a
+  greeting; with both, Groq is primary and Ollama is the fallback.
 
-### 1. Main application (Python 3.9)
+### 1. Main application (Python 3.9–3.11)
 
 ```bash
-python3 -m venv .venv
+git clone <this-repo> vesper && cd vesper
+python3.11 -m venv .venv        # explicit version — not a bare `python3`
 source .venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
+pip install -e .
 ```
 
-### 2. MCP servers (Python 3.10+)
+### 2. Minimum to a greeting
 
-Gmail, Calendar/Reminders, and Notion each run as a separate MCP server
-process under their own virtualenv — the official `mcp` SDK requires
-Python 3.10+, which the main app doesn't run on.
+```bash
+cp .env.example .env   # if present; otherwise create .env (see below)
+```
+
+`.env` needs just one working model provider to start:
+
+```bash
+GROQ_API_KEY=...        # from console.groq.com — the fastest path to a greeting
+# (or run `ollama serve` with the fallback model pulled and skip the key)
+```
+
+Then run:
+
+```bash
+vesper                  # rich terminal CLI  (or: python -m vesper)
+```
+
+You should get **"Good morning, Sir."** (or the time-appropriate greeting). That
+is the verification target — everything below is optional capability.
+
+### 3. Optional — MCP servers (Python 3.10+)
+
+Gmail, Calendar/Reminders, and Notion each run as a separate MCP process under
+their own virtualenv (the official `mcp` SDK needs 3.10+, which the main app
+doesn't run on):
 
 ```bash
 cd mcp_servers
-python3.11 -m venv .venv   # any 3.10+ interpreter works
+python3.11 -m venv .venv        # any 3.10+ interpreter
 .venv/bin/pip install -r requirements.txt
 cd ..
 ```
 
-### 3. Environment variables (`.env`)
+### 4. Optional — more environment variables (`.env`)
 
 ```bash
-GROQ_API_KEY=...
-LANGSMITH_API_KEY=...          # optional — traces fall back to local JSONL without it
-GOOGLE_CLIENT_ID=...           # Gmail OAuth (Desktop app client type in Google Cloud Console)
+LANGSMITH_API_KEY=...           # traces fall back to local JSONL without it
+GOOGLE_CLIENT_ID=...            # Gmail OAuth (Desktop app client type)
 GOOGLE_CLIENT_SECRET=...
-NOTION_API_KEY=...             # optional — an internal integration token
-NOTION_DATABASES={"tasks": "<database_id>", "projects": "<database_id>"}  # optional
+NOTION_API_KEY=...              # internal integration token
+NOTION_DATABASES={"tasks":"<id>","projects":"<id>"}
+GITHUB_PERSONAL_ACCESS_TOKEN=...# GitHub MCP
+TAVILY_API_KEY=...              # deep-research web search
+VESPER_DISCORD_TOKEN=...        # Discord remote interface bot token
 ```
 
-Gmail's first real API call opens a browser for one-time OAuth consent; the
-resulting token is cached at `data/google_token.json` (gitignored).
-Calendar/Reminders access is a native macOS permission prompt on first use.
+Gmail's first API call opens a browser for one-time OAuth (token cached at
+`data/google_token.json`, gitignored). Calendar/Reminders is a native macOS
+prompt on first use.
 
-### 4. Enable what you want in `config/settings.yaml`
+### 5. Optional — enable what you want in `config/settings.yaml`
 
-Each capability is independently toggleable under `mcp.servers.*` and
-`sensors.*` — everything defaults to a reasonable state for a first run
-except Notion, which needs the environment variables above first.
+Every integration and surface is independently toggleable and **defaults off**:
+`mcp.servers.*` (gmail/apple_pim on by default, others off), `sensors.*`,
+`proactive.morning_routine.*`, `remote.*`, `gateway.*`, `voice.*`. Enable only
+what you have credentials for.
 
-### 5. Run it
+### 6. Optional — the other surfaces
 
 ```bash
-pip install -e .
-vesper                  # or: python -m vesper
+python -m gateway.server     # localhost API gateway (needed by HUD/voice/remote)
+cd hud && npm install && npm run tauri dev   # the HUD
+python -m voice.input        # wake word + STT   (needs voice/requirements.txt)
+python -m voice.output       # Kokoro TTS
+python main.py               # full voice-capable entry point (VoiceAgent instead of CLI)
 ```
-
-`main.py` remains the full voice-capable entry point (`python main.py`),
-running the same `Brain` with `VoiceAgent` enabled instead of the CLI.
 
 ## Testing
 
 ```bash
-pytest                          # unit suite — 198 tests (incl. gateway + voice)
+pytest                       # automated unit suite — 250 tests
 ```
 
-See [`docs/TESTPLAN.md`](docs/TESTPLAN.md) for the manual acceptance test
-plan — 20 scripted interactions against real services, run before tagging
-a release.
+See [`docs/TESTPLAN.md`](docs/TESTPLAN.md) for the manual acceptance plan (33
+scripted interactions against real services) and
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design decisions and *why*
+they were made.
