@@ -301,9 +301,22 @@ class MCPBridge:
                 )
                 tier = DEFAULT_UNMAPPED_TIER
 
+            # Two servers can expose the same tool name (Slack and Discord both
+            # have get_mentions/post_message/…). Registry names are unique, so
+            # the first server keeps the bare name (backward-compatible) and any
+            # later collision is disambiguated with a server prefix. Tier/slow
+            # lookup and the handler still use the ORIGINAL tool name.
+            register_name = tool_name
+            if self._registry.get(register_name) is not None:
+                register_name = f"{server_name}_{tool_name}"
+                logger.info(
+                    f"[MCPBridge] tool name '{tool_name}' already registered; "
+                    f"registering '{server_name}.{tool_name}' as '{register_name}'"
+                )
+
             self._registry.register(
                 ToolSpec(
-                    name=tool_name,
+                    name=register_name,
                     description=tool_schema.get("description", ""),
                     parameters=tool_schema.get("inputSchema") or {"type": "object", "properties": {}},
                     tier=tier,

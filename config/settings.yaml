@@ -768,6 +768,70 @@ mcp:
         set_volume: safe
         queue: safe
 
+    # Slack MCP server (PC3 — reach). OFF by default. Needs the server + a Slack
+    # token in the environment. Reads are `safe`; sends are `confirm` — the
+    # Guardian shows the exact channel + full text before anything is posted.
+    slack:
+      enabled: false
+      command: "slack-mcp"            # or npx/uvx per your chosen Slack MCP server
+      args: ["stdio"]
+      expose:
+        - list_unreads
+        - get_channel_messages
+        - search
+        - get_mentions
+        - post_message
+        - reply_thread
+      tiers:
+        list_unreads: safe
+        get_channel_messages: safe
+        search: safe
+        get_mentions: safe
+        post_message: confirm
+        reply_thread: confirm
+
+    # Discord MCP server (PC3 — reach). OFF by default. Same shape as Slack.
+    # This is the tool surface; the separate `remote:` block below is the DM
+    # control channel (the mobile-access bridge), a different thing entirely.
+    discord:
+      enabled: false
+      command: "discord-mcp"
+      args: ["stdio"]
+      expose:
+        - list_unreads
+        - get_channel_messages
+        - search
+        - get_mentions
+        - post_message
+        - reply_thread
+      tiers:
+        list_unreads: safe
+        get_channel_messages: safe
+        search: safe
+        get_mentions: safe
+        post_message: confirm
+        reply_thread: confirm
+
+
+# -----------------------------------------------------------------------------
+# Remote interface (PC3) — the Discord DM control channel. Mobile access to
+# Vesper without a mobile app: messages the owner sends in the designated
+# private channel are injected as user turns and Vesper's replies posted back.
+# Safety rails (not optional):
+#   - only owner_user_id is accepted; every other author is ignored.
+#   - allow_dangerous DEFAULTS FALSE: dangerous-tier tools are disabled for
+#     remote sessions entirely (enforced in the Guardian).
+#   - confirm-tier tools still need an EXPLICIT remote approval — the request_id
+#     or a reaction on the specific message; a bare "yes" is refused.
+# The bot token comes from the environment (token_env), never this file.
+# -----------------------------------------------------------------------------
+remote:
+  enabled: false
+  owner_user_id: ""        # your Discord user ID — the ONLY accepted sender
+  channel_id: ""           # the designated private channel ID
+  allow_dangerous: false   # keep false; true would let remote sessions run dangerous tools
+  token_env: "VESPER_DISCORD_TOKEN"
+
 
 # -----------------------------------------------------------------------------
 # Creator tools (PC2) — the "does everything" layer, delivered as tools:

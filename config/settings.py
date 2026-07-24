@@ -524,12 +524,62 @@ class MCPSpotifyServerSettings(BaseModel):
     slow_tools: List[str] = Field(default_factory=list)
 
 
+class MCPSlackServerSettings(BaseModel):
+    """Slack MCP server (PC3 — reach). OFF by default; needs the server + a
+    Slack token in the environment. Reads (list_unreads / get_channel_messages /
+    search / get_mentions) are `safe`; sends (post_message / reply_thread) are
+    `confirm` — the Guardian shows the exact channel + full text before posting.
+    `expose` is the allowlist surfaced to the planner."""
+
+    enabled: bool = False
+    command: str = "slack-mcp"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "list_unreads", "get_channel_messages", "search", "get_mentions",
+        "post_message", "reply_thread",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "list_unreads": "safe",
+        "get_channel_messages": "safe",
+        "search": "safe",
+        "get_mentions": "safe",
+        "post_message": "confirm",
+        "reply_thread": "confirm",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
+class MCPDiscordServerSettings(BaseModel):
+    """Discord MCP server (PC3 — reach). OFF by default. Same shape as Slack:
+    reads are `safe`, sends (post_message / reply_thread) are `confirm`. This is
+    the *tool* surface; the separate remote.* config is the DM control channel."""
+
+    enabled: bool = False
+    command: str = "discord-mcp"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "list_unreads", "get_channel_messages", "search", "get_mentions",
+        "post_message", "reply_thread",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "list_unreads": "safe",
+        "get_channel_messages": "safe",
+        "search": "safe",
+        "get_mentions": "safe",
+        "post_message": "confirm",
+        "reply_thread": "confirm",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
 class MCPServersSettings(BaseModel):
     gmail: MCPGmailServerSettings = Field(default_factory=MCPGmailServerSettings)
     apple_pim: MCPAppleServerSettings = Field(default_factory=MCPAppleServerSettings)
     notion: MCPNotionServerSettings = Field(default_factory=MCPNotionServerSettings)
     github: MCPGithubServerSettings = Field(default_factory=MCPGithubServerSettings)
     spotify: MCPSpotifyServerSettings = Field(default_factory=MCPSpotifyServerSettings)
+    slack: MCPSlackServerSettings = Field(default_factory=MCPSlackServerSettings)
+    discord: MCPDiscordServerSettings = Field(default_factory=MCPDiscordServerSettings)
 
 
 class MCPSettings(BaseModel):
@@ -556,6 +606,26 @@ class CreatorSettings(BaseModel):
     scripts_dir: str = "data/scripts"
     formats_dir: str = "config/formats"
     automation: CreatorAutomationSettings = Field(default_factory=CreatorAutomationSettings)
+
+
+class RemoteSettings(BaseModel):
+    """PC3 remote interface — the Discord DM control channel (remote/discord_remote.py).
+
+    Mobile access to Vesper without a mobile app: messages the owner sends in a
+    designated private Discord channel are injected as user turns and replies are
+    posted back. Hard safety rails, none of them optional:
+      - Only `owner_user_id` is accepted; every other author is ignored.
+      - `allow_dangerous` DEFAULTS FALSE and gates dangerous-tier tools for remote
+        sessions entirely (enforced in guardian/gate.py). Confirm-tier tools still
+        require an explicit remote approval (the request_id or a reaction — a bare
+        "yes" is refused).
+    The Discord bot token comes from the environment (`token_env`), never config."""
+
+    enabled: bool = False
+    owner_user_id: str = ""
+    channel_id: str = ""
+    allow_dangerous: bool = False
+    token_env: str = "VESPER_DISCORD_TOKEN"
 
 
 class AppSettings(BaseSettings):
@@ -586,6 +656,7 @@ class AppSettings(BaseSettings):
     tracing: TracingSettings = Field(default_factory=TracingSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     creator: CreatorSettings = Field(default_factory=CreatorSettings)
+    remote: RemoteSettings = Field(default_factory=RemoteSettings)
 
     @classmethod
     def settings_customise_sources(

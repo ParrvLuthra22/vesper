@@ -117,6 +117,45 @@ async def gather_dev(registry: ToolRegistry) -> Optional[str]:
     return "Development (keep to 2-3 lines in your voice):\n" + "\n".join(f"  - {ln}" for ln in lines)
 
 
+async def gather_slack(registry: ToolRegistry) -> Optional[str]:
+    """Optional Slack section — present ONLY when the Slack MCP tools are
+    connected (mcp.servers.slack.enabled). Mentions and DMs/threads awaiting a
+    reply, kept to 2 lines. Returns raw data for the model to voice, or None if
+    Slack isn't wired up. Deliberately scoped to the Slack server by category so
+    an identically-named Discord tool never gets mistaken for it."""
+
+    def _slack_tool(name: str):
+        spec = registry.get(name)
+        if spec is not None and spec.handler is not None and spec.category == "mcp:slack":
+            return spec
+        return None
+
+    mentions_tool = _slack_tool("get_mentions")
+    unreads_tool = _slack_tool("list_unreads")
+    if mentions_tool is None and unreads_tool is None:
+        return None
+
+    lines: List[str] = []
+    if mentions_tool is not None:
+        try:
+            items = _as_list(await mentions_tool.handler({}, {}))
+            if items:
+                lines.append(f"Slack mentions awaiting your reply: {len(items)}")
+        except Exception as exc:
+            logger.warning(f"[Briefing] slack mentions failed: {exc}")
+    if unreads_tool is not None:
+        try:
+            items = _as_list(await unreads_tool.handler({}, {}))
+            if items:
+                lines.append(f"Unread Slack DMs/threads: {len(items)}")
+        except Exception as exc:
+            logger.warning(f"[Briefing] slack unreads failed: {exc}")
+
+    if not lines:
+        return None
+    return "Slack (keep to 2 lines in your voice):\n" + "\n".join(f"  - {ln}" for ln in lines[:2])
+
+
 async def gather_calendar(calendar_sensor: Optional[CalendarSensor]) -> List[Dict[str, str]]:
     """Fetch today's remaining calendar events, if the sensor is available."""
     if calendar_sensor is None:
@@ -207,6 +246,10 @@ async def assemble_briefing_text(
     if include_day_plan:
         day_plan_text = await assemble_day_plan_text(registry, memory_agent, notion_db)
         text = f"{text}\n\n{day_plan_text}"
+
+    slack_text = await gather_slack(registry)
+    if slack_text:
+        text = f"{text}\n\n{slack_text}"
 
     dev_text = await gather_dev(registry)
     if dev_text:

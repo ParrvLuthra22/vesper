@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 from uuid import uuid4
 
 from bus.event_bus import EventBus, get_event_bus
@@ -34,6 +36,45 @@ logger = get_logger(__name__)
 
 DEFAULT_AUDIT_LOG_PATH = Path("data/audit.jsonl")
 DEFAULT_CONFIRMATION_TIMEOUT_SECONDS = 120.0
+
+
+@dataclass(frozen=True)
+class SessionPolicy:
+    """Extra restrictions the Guardian applies for the current session.
+
+    Local surfaces (CLI, voice, HUD) run with no policy — full capability, with
+    dangerous-tier calls still individually confirmed. A restricted surface —
+    the Discord remote interface (remote/discord_remote.py) — activates a policy
+    around each turn so the Guardian can enforce that surface's ceiling
+    regardless of what the planner decides to call."""
+
+    name: str = "local"
+    #: When False, every dangerous-tier tool is DENIED outright (never even
+    #: offered for confirmation) while this policy is active. The remote
+    #: interface sets this from `remote.allow_dangerous`, which defaults False.
+    allow_dangerous: bool = True
+
+
+#: Task-scoped so a restricted turn's policy cannot leak into a concurrent
+#: local turn — contextvars are per-asyncio-task and propagate across `await`
+#: within the same task (the whole handle_user_text → planner → check chain).
+_active_policy: ContextVar[Optional[SessionPolicy]] = ContextVar("guardian_session_policy", default=None)
+
+
+def current_session_policy() -> Optional[SessionPolicy]:
+    """The SessionPolicy in force for the current task, or None (local/unrestricted)."""
+    return _active_policy.get()
+
+
+@contextmanager
+def session_policy(policy: SessionPolicy) -> Iterator[None]:
+    """Activate `policy` for the duration of the `with` block (and everything it
+    awaits within this task). Restored on exit, even on exception."""
+    token = _active_policy.set(policy)
+    try:
+        yield
+    finally:
+        _active_policy.reset(token)
 
 
 class VerdictType(str, Enum):
@@ -95,6 +136,22 @@ class Guardian:
         """
         if tool_spec.tier == "safe":
             return Verdict(VerdictType.ALLOW, reason="safe tier - no confirmation required")
+
+        # Session ceiling: a restricted surface (the remote interface) disables
+        # dangerous-tier tools ENTIRELY — refused outright, never even offered
+        # for confirmation. Confirm-tier still goes through the normal flow.
+        policy = current_session_policy()
+        if tool_spec.tier == "dangerous" and policy is not None and not policy.allow_dangerous:
+            verdict = Verdict(
+                VerdictType.DENY,
+                reason=f"dangerous-tier tools are disabled for {policy.name} sessions",
+            )
+            self._audit(tool_spec.name, arguments, verdict, who_approved=None)
+            logger.warning(
+                f"[Guardian] denied dangerous tool '{tool_spec.name}' — "
+                f"disabled for {policy.name} session"
+            )
+            return verdict
 
         summary = await self._render_summary(tool_spec, arguments)
         request_id = str(uuid4())
@@ -188,10 +245,19 @@ class Guardian:
         verdict: Verdict,
         who_approved: Optional[str],
     ) -> None:
+        self._audit(pending.tool_name, pending.arguments, verdict, who_approved)
+
+    def _audit(
+        self,
+        tool_name: str,
+        arguments: Dict[str, Any],
+        verdict: Verdict,
+        who_approved: Optional[str],
+    ) -> None:
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tool": pending.tool_name,
-            "args": pending.arguments,
+            "tool": tool_name,
+            "args": arguments,
             "verdict": verdict.outcome.value,
             "who_approved": who_approved,
         }
