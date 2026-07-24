@@ -28,6 +28,7 @@ from schemas.events import (
     BriefingRequestedEvent,
     ObservationEvent,
     ReflectionRequestedEvent,
+    RoutineTriggeredEvent,
     UpcomingMeetingEvent,
 )
 from utils.logger import get_logger
@@ -38,8 +39,15 @@ DEFAULT_CONTEXT_SWITCH_THRESHOLD = 3
 DEFAULT_CONTEXT_SWITCH_WINDOW_MIN = 30
 DEFAULT_CONTEXT_SWITCH_COOLDOWN_MIN = 90
 DEFAULT_MEETING_REMINDER_COOLDOWN_MIN = 10
+DEFAULT_FOCUS_BLOCK_COOLDOWN_MIN = 120
 DEFAULT_MORNING_BRIEFING_TIME = "08:30"
 DEFAULT_MIDNIGHT_REFLECTION_TIME = "00:00"
+DEFAULT_MORNING_ROUTINE_TIME = "07:30"
+DEFAULT_EVENING_ROUTINE_TIME = "18:30"
+#: The morning routine may also be triggered by the user's first app activity of
+#: the day; this throttles those activity triggers so a burst of app-switching
+#: fires it at most once per this many minutes (the routine itself is once/day).
+_MORNING_ACTIVITY_THROTTLE_MIN = 10
 #: Above this many minutes-until-start, a meeting reminder is the sensor's
 #: 15-minute checkpoint, not the near-term one this rule calls out on.
 _MEETING_CALLOUT_MAX_MINUTES = 7
@@ -74,6 +82,8 @@ class ProactiveEngine:
         self._context_switch_history: Deque[Tuple[datetime, str]] = deque(maxlen=_SWITCH_HISTORY_MAXLEN)
         # Last-fired time per observation kind, for cooldown enforcement.
         self._last_fired: Dict[str, datetime] = {}
+        # Throttle for the morning routine's activity trigger (see _on_morning_activity).
+        self._last_morning_activity: Optional[datetime] = None
 
     def _get_config(self, key: str, default: Any = None) -> Any:
         """Dot-path lookup against the full app config."""
@@ -93,6 +103,12 @@ class ProactiveEngine:
         )
         self._subscriptions.append(
             self._event_bus.subscribe(UpcomingMeetingEvent, self._on_upcoming_meeting)
+        )
+        self._subscriptions.append(
+            self._event_bus.subscribe(UpcomingMeetingEvent, self._on_focus_block)
+        )
+        self._subscriptions.append(
+            self._event_bus.subscribe(AppFocusChangedEvent, self._on_morning_activity)
         )
 
         self._scheduler = AsyncIOScheduler()
@@ -134,6 +150,23 @@ class ProactiveEngine:
             default_time=DEFAULT_MIDNIGHT_REFLECTION_TIME,
             callback=self._fire_midnight_reflection,
         )
+        # PC4: the composed morning routine and its evening counterpart. Both
+        # opt-in (default off), so registering them changes nothing unless the
+        # user enabled them.
+        self._register_cron_job(
+            job_id="morning_routine",
+            enabled_key="proactive.morning_routine.enabled",
+            time_key="proactive.morning_routine.time",
+            default_time=DEFAULT_MORNING_ROUTINE_TIME,
+            callback=self._fire_morning_routine,
+        )
+        self._register_cron_job(
+            job_id="evening_routine",
+            enabled_key="proactive.evening_routine.enabled",
+            time_key="proactive.evening_routine.time",
+            default_time=DEFAULT_EVENING_ROUTINE_TIME,
+            callback=self._fire_evening_routine,
+        )
 
     def _register_cron_job(
         self,
@@ -169,6 +202,39 @@ class ProactiveEngine:
     async def _fire_midnight_reflection(self) -> None:
         await self._event_bus.emit(
             ReflectionRequestedEvent(schedule_name="midnight_reflection", source="ProactiveEngine")
+        )
+
+    async def _fire_morning_routine(self) -> None:
+        await self._event_bus.emit(
+            RoutineTriggeredEvent(routine="morning", trigger="scheduled", source="ProactiveEngine")
+        )
+
+    async def _fire_evening_routine(self) -> None:
+        await self._event_bus.emit(
+            RoutineTriggeredEvent(routine="evening", trigger="scheduled", source="ProactiveEngine")
+        )
+
+    async def _on_morning_activity(self, event: AppFocusChangedEvent) -> None:
+        """Second morning-routine trigger: the user's first app activity after
+        the configured hour. This lets the routine happen the moment they sit
+        down, not only at a fixed clock time. The routine itself enforces
+        once-per-day; here we only gate on the hour (local) and throttle bursts
+        of app-switching. Re-firing after a throttle window is also how a
+        deferred routine gets another chance once its defer elapses."""
+        if not self._get_config("proactive.morning_routine.enabled", False):
+            return
+        # Hour-of-day is inherently local; durations use the (possibly injected) clock.
+        if datetime.now().hour < int(self._get_config("proactive.morning_routine.activate_after_hour", 7)):
+            return
+        now = self._clock()
+        if (
+            self._last_morning_activity is not None
+            and (now - self._last_morning_activity) < timedelta(minutes=_MORNING_ACTIVITY_THROTTLE_MIN)
+        ):
+            return
+        self._last_morning_activity = now
+        await self._event_bus.emit(
+            RoutineTriggeredEvent(routine="morning", trigger="activity", source="ProactiveEngine")
         )
 
     # =========================================================================
@@ -233,6 +299,40 @@ class ProactiveEngine:
 
         detail = f"Your meeting '{event.title}' starts in {event.minutes_until} minutes."
         await self._emit_observation("meeting_soon", detail, now)
+
+    # =========================================================================
+    # Rule: focus_block — OFFER to start a focus playlist as a deep-work block
+    # begins. Opt-in (default off): enabling this rule IS the user's one-time
+    # approval of the behaviour. It only OFFERS — it never auto-plays.
+    # =========================================================================
+
+    async def _on_focus_block(self, event: UpcomingMeetingEvent) -> None:
+        if not self._get_config("proactive.rules.focus_block.enabled", False):
+            return
+
+        title = (event.title or "").lower()
+        keywords = self._get_config(
+            "proactive.rules.focus_block.title_keywords",
+            ["focus", "deep work", "deep-work", "heads down", "heads-down", "writing", "study", "flow"],
+        )
+        if not any(k in title for k in keywords):
+            return
+
+        # Only as the block is actually starting, not at the 15/5-minute checkpoints.
+        start_within = int(self._get_config("proactive.rules.focus_block.start_within_minutes", 1))
+        if event.minutes_until > start_within:
+            return
+
+        now = self._clock()
+        cooldown_min = float(
+            self._get_config("proactive.rules.focus_block.cooldown_min", DEFAULT_FOCUS_BLOCK_COOLDOWN_MIN)
+        )
+        if not self._cooldown_elapsed("focus_block", cooldown_min, now):
+            return
+
+        playlist = self._get_config("proactive.rules.focus_block.playlist", "your focus playlist")
+        detail = f"Your focus block '{event.title}' is beginning — shall I put on {playlist}, Sir?"
+        await self._emit_observation("focus_block", detail, now)
 
     # =========================================================================
     # Shared helpers

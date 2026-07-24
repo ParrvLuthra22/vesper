@@ -606,6 +606,25 @@ class WakeEvent(BaseEvent):
     source: str = field(default="voice")
 
 
+@dataclass(frozen=True)
+class RoutineTriggeredEvent(BaseEvent):
+    """Emitted by the Proactive Engine to request a composed day-routine run
+    (proactive/morning_routine.py). The routine itself owns all the
+    anti-annoyance gating (once/day, defer, cancel); this event is just the
+    trigger.
+
+    Attributes:
+        routine: "morning" or "evening".
+        trigger: what caused it — "scheduled" (wake-time cron), "activity"
+            (first app focus after the configured hour), or "tick" (a periodic
+            re-check that lets a deferred routine fire once its window elapses).
+    """
+
+    routine: str = "morning"
+    trigger: str = "scheduled"
+    source: str = field(default="ProactiveEngine")
+
+
 # =============================================================================
 # System Events - macOS system interactions
 # =============================================================================
@@ -1195,6 +1214,7 @@ EVENT_REGISTRY: Dict[str, type] = {
     "BriefingRequestedEvent": BriefingRequestedEvent,
     "ReflectionRequestedEvent": ReflectionRequestedEvent,
     "WakeEvent": WakeEvent,
+    "RoutineTriggeredEvent": RoutineTriggeredEvent,
 }
 
 

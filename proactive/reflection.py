@@ -37,6 +37,8 @@ REFLECTION_PROMPT_TEMPLATE = """You are extracting durable, long-term-relevant m
 
 Extract at most {max_items} items worth remembering long-term: durable facts about the user, explicitly stated preferences, or clearly observed patterns. Do NOT include one-off requests, transient task details, or anything unlikely to matter again.
 
+Music preferences count and should be captured as `preference` — e.g. "coding playlist = Deep Focus", "likes lo-fi while working", "dislikes vocals when concentrating", "gym music = high-energy". Capture the user's reaction to a suggested track/playlist too, if they gave one.
+
 Output exactly one item per line, formatted as:
 kind: text
 

@@ -399,12 +399,28 @@ class ProactiveMeetingReminderRuleSettings(BaseModel):
     cooldown_min: int = 10
 
 
+class ProactiveFocusBlockRuleSettings(BaseModel):
+    """PC1: OFFER a focus playlist as a deep-work calendar block begins. Opt-in
+    (default off); only ever offers, never auto-plays."""
+
+    enabled: bool = False
+    title_keywords: List[str] = Field(
+        default_factory=lambda: ["focus", "deep work", "deep-work", "heads down", "writing", "study", "flow"]
+    )
+    start_within_minutes: int = 1
+    cooldown_min: int = 120
+    playlist: str = "your focus playlist"
+
+
 class ProactiveRulesSettings(BaseModel):
     context_switch: ProactiveContextSwitchRuleSettings = Field(
         default_factory=ProactiveContextSwitchRuleSettings
     )
     meeting_reminder: ProactiveMeetingReminderRuleSettings = Field(
         default_factory=ProactiveMeetingReminderRuleSettings
+    )
+    focus_block: ProactiveFocusBlockRuleSettings = Field(
+        default_factory=ProactiveFocusBlockRuleSettings
     )
 
 
@@ -433,9 +449,37 @@ class ProactiveScheduleSettings(BaseModel):
     )
 
 
+class ProactiveMorningRoutineSettings(BaseModel):
+    """PC4: the composed, no-prompt morning routine. Opt-in (default off) so it
+    never collides with the older morning_briefing. Fires at `time`, or on the
+    first app activity after `activate_after_hour`. `pre_approved` runs the
+    environment setup (focus playlist + work apps) without a confirmation —
+    default off, so it always OFFERS. A "not now" defers by `defer_minutes`."""
+
+    enabled: bool = False
+    time: str = "07:30"
+    activate_after_hour: int = 7
+    pre_approved: bool = False
+    defer_minutes: int = 60
+    conversation_retry_minutes: int = 5
+    work_apps: List[str] = Field(default_factory=lambda: ["Visual Studio Code", "Terminal", "Slack"])
+    playlist: str = "your focus playlist"
+    weather_location: str = ""
+
+
+class ProactiveEveningRoutineSettings(BaseModel):
+    """PC4: the small evening counterpart — a two-line close (what got done +
+    the next commitment). Optional; default off."""
+
+    enabled: bool = False
+    time: str = "18:30"
+
+
 class ProactiveSettings(BaseModel):
     rules: ProactiveRulesSettings = Field(default_factory=ProactiveRulesSettings)
     schedule: ProactiveScheduleSettings = Field(default_factory=ProactiveScheduleSettings)
+    morning_routine: ProactiveMorningRoutineSettings = Field(default_factory=ProactiveMorningRoutineSettings)
+    evening_routine: ProactiveEveningRoutineSettings = Field(default_factory=ProactiveEveningRoutineSettings)
 
 
 class TracingSettings(BaseModel):
@@ -503,14 +547,162 @@ class MCPNotionServerSettings(BaseModel):
     slow_tools: List[str] = Field(default_factory=list)
 
 
+class MCPGithubServerSettings(BaseModel):
+    """GitHub's official MCP server (github/github-mcp-server), connected via the
+    MCP bridge (PC0). OFF by default; needs the server binary (or docker) and a
+    GITHUB_PERSONAL_ACCESS_TOKEN in the environment. Only tools in `expose` are
+    registered — anything that merges/closes/force-pushes is never surfaced in v3.
+    """
+
+    enabled: bool = False
+    command: str = "github-mcp-server"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "list_notifications", "list_pull_requests", "get_pull_request",
+        "get_pull_request_diff", "list_issues", "search_code",
+        "add_issue_comment", "create_branch",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "list_notifications": "safe",
+        "list_pull_requests": "safe",
+        "get_pull_request": "safe",
+        "get_pull_request_diff": "safe",
+        "list_issues": "safe",
+        "search_code": "safe",
+        "add_issue_comment": "confirm",
+        "create_branch": "confirm",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
+class MCPSpotifyServerSettings(BaseModel):
+    """Spotify's MCP server (PC1 — context-aware music). OFF by default; needs
+    the server + a Spotify OAuth token cached under data/ (gitignored). All
+    tools are `safe` — playback is trivially reversible, so music is never gated
+    behind confirmations. `expose` is the allowlist surfaced to the planner."""
+
+    enabled: bool = False
+    command: str = "spotify-mcp"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "current_track", "search", "list_playlists",
+        "play", "pause", "next", "set_volume", "queue",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "current_track": "safe",
+        "search": "safe",
+        "list_playlists": "safe",
+        "play": "safe",
+        "pause": "safe",
+        "next": "safe",
+        "set_volume": "safe",
+        "queue": "safe",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
+class MCPSlackServerSettings(BaseModel):
+    """Slack MCP server (PC3 — reach). OFF by default; needs the server + a
+    Slack token in the environment. Reads (list_unreads / get_channel_messages /
+    search / get_mentions) are `safe`; sends (post_message / reply_thread) are
+    `confirm` — the Guardian shows the exact channel + full text before posting.
+    `expose` is the allowlist surfaced to the planner."""
+
+    enabled: bool = False
+    command: str = "slack-mcp"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "list_unreads", "get_channel_messages", "search", "get_mentions",
+        "post_message", "reply_thread",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "list_unreads": "safe",
+        "get_channel_messages": "safe",
+        "search": "safe",
+        "get_mentions": "safe",
+        "post_message": "confirm",
+        "reply_thread": "confirm",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
+class MCPDiscordServerSettings(BaseModel):
+    """Discord MCP server (PC3 — reach). OFF by default. Same shape as Slack:
+    reads are `safe`, sends (post_message / reply_thread) are `confirm`. This is
+    the *tool* surface; the separate remote.* config is the DM control channel."""
+
+    enabled: bool = False
+    command: str = "discord-mcp"
+    args: List[str] = Field(default_factory=lambda: ["stdio"])
+    expose: List[str] = Field(default_factory=lambda: [
+        "list_unreads", "get_channel_messages", "search", "get_mentions",
+        "post_message", "reply_thread",
+    ])
+    tiers: Dict[str, str] = Field(default_factory=lambda: {
+        "list_unreads": "safe",
+        "get_channel_messages": "safe",
+        "search": "safe",
+        "get_mentions": "safe",
+        "post_message": "confirm",
+        "reply_thread": "confirm",
+    })
+    slow_tools: List[str] = Field(default_factory=list)
+
+
 class MCPServersSettings(BaseModel):
     gmail: MCPGmailServerSettings = Field(default_factory=MCPGmailServerSettings)
     apple_pim: MCPAppleServerSettings = Field(default_factory=MCPAppleServerSettings)
     notion: MCPNotionServerSettings = Field(default_factory=MCPNotionServerSettings)
+    github: MCPGithubServerSettings = Field(default_factory=MCPGithubServerSettings)
+    spotify: MCPSpotifyServerSettings = Field(default_factory=MCPSpotifyServerSettings)
+    slack: MCPSlackServerSettings = Field(default_factory=MCPSlackServerSettings)
+    discord: MCPDiscordServerSettings = Field(default_factory=MCPDiscordServerSettings)
 
 
 class MCPSettings(BaseModel):
     servers: MCPServersSettings = Field(default_factory=MCPServersSettings)
+
+
+class CreatorAutomationSettings(BaseModel):
+    """PC2 automation-composer safety. `denylist` ADDS regex patterns to the
+    always-on DEFAULT_DENYLIST in tools/creator.py — it can only strengthen the
+    floor, never weaken it. `enforce_home_boundary` refuses commands that write
+    to absolute paths outside the user's home (temp dirs excepted). Both
+    run_shell and run_applescript are DANGEROUS tier: the exact command/script
+    is shown and explicit approval is asked every single time — no remembered
+    approval, and denylist matches are refused outright even after approval."""
+
+    denylist: List[str] = Field(default_factory=list)
+    enforce_home_boundary: bool = True
+
+
+class CreatorSettings(BaseModel):
+    """PC2 creator tools — deep research, script writer, guarded automation."""
+
+    research_dir: str = "data/research"
+    scripts_dir: str = "data/scripts"
+    formats_dir: str = "config/formats"
+    automation: CreatorAutomationSettings = Field(default_factory=CreatorAutomationSettings)
+
+
+class RemoteSettings(BaseModel):
+    """PC3 remote interface — the Discord DM control channel (remote/discord_remote.py).
+
+    Mobile access to Vesper without a mobile app: messages the owner sends in a
+    designated private Discord channel are injected as user turns and replies are
+    posted back. Hard safety rails, none of them optional:
+      - Only `owner_user_id` is accepted; every other author is ignored.
+      - `allow_dangerous` DEFAULTS FALSE and gates dangerous-tier tools for remote
+        sessions entirely (enforced in guardian/gate.py). Confirm-tier tools still
+        require an explicit remote approval (the request_id or a reaction — a bare
+        "yes" is refused).
+    The Discord bot token comes from the environment (`token_env`), never config."""
+
+    enabled: bool = False
+    owner_user_id: str = ""
+    channel_id: str = ""
+    allow_dangerous: bool = False
+    token_env: str = "VESPER_DISCORD_TOKEN"
 
 
 class AppSettings(BaseSettings):
@@ -542,6 +734,8 @@ class AppSettings(BaseSettings):
     proactive: ProactiveSettings = Field(default_factory=ProactiveSettings)
     tracing: TracingSettings = Field(default_factory=TracingSettings)
     mcp: MCPSettings = Field(default_factory=MCPSettings)
+    creator: CreatorSettings = Field(default_factory=CreatorSettings)
+    remote: RemoteSettings = Field(default_factory=RemoteSettings)
 
     @classmethod
     def settings_customise_sources(

@@ -677,6 +677,16 @@ proactive:
       enabled: true
       cooldown_min: 10
 
+    # PC1: when a calendar event titled as focus/deep-work begins, OFFER to
+    # start a focus playlist. OPT-IN (default off) — enabling it is your
+    # one-time approval; it only ever OFFERS, it never auto-plays.
+    focus_block:
+      enabled: false
+      title_keywords: ["focus", "deep work", "deep-work", "heads down", "writing", "study", "flow"]
+      start_within_minutes: 1     # only as the block actually begins
+      cooldown_min: 120
+      playlist: "your focus playlist"
+
   schedule:
     morning_briefing:
       enabled: true
@@ -693,6 +703,34 @@ proactive:
     midnight_reflection:
       enabled: true
       time: "00:00"
+
+  # PC4: the no-prompt morning routine — the composed briefing that defines
+  # Vesper. OPT-IN (default off) so it never double-fires with morning_briefing
+  # above; if you enable this, disable morning_briefing. It fires at `time`, or
+  # on the first app activity after `activate_after_hour` (so it happens
+  # unprompted the moment you sit down). It gathers weather + calendar +
+  # reminders + email + GitHub + Slack + the day plan, delivers ONE spoken
+  # briefing, then OFFERS to set up your workspace (one confirmation for the
+  # whole set). At most once per calendar day; a "not now" defers it, a second
+  # "not now" cancels it for the day.
+  morning_routine:
+    enabled: false
+    time: "07:30"
+    activate_after_hour: 7        # first app focus after this hour also triggers it
+    pre_approved: false           # true = set up the workspace without confirming (default: always offer)
+    defer_minutes: 60             # a "not now" pushes it this far
+    conversation_retry_minutes: 5 # if you're mid-conversation, retry after this
+    work_apps:
+      - "Visual Studio Code"
+      - "Terminal"
+      - "Slack"
+    playlist: "your focus playlist"
+    weather_location: ""          # a city name or "lat,lon"; empty = weather line omitted
+
+  # PC4: the small evening close — two lines (what got done + next commitment).
+  evening_routine:
+    enabled: false
+    time: "18:30"
 
 
 # -----------------------------------------------------------------------------
@@ -767,3 +805,146 @@ mcp:
         notion_search: safe
         notion_get_page: safe
         notion_get_database_rows: safe
+
+    # GitHub's official MCP server (PC0 — developer tools). OFF by default.
+    # Needs the server binary (`github-mcp-server stdio`) or docker, and a
+    # GITHUB_PERSONAL_ACCESS_TOKEN in the environment (inherited by the
+    # subprocess). `expose` is an allowlist: only these tools are surfaced to
+    # the planner — anything that merges/closes/force-pushes is never exposed.
+    github:
+      enabled: false
+      command: "github-mcp-server"    # or: docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+      args: ["stdio"]
+      expose:
+        - list_notifications
+        - list_pull_requests
+        - get_pull_request
+        - get_pull_request_diff
+        - list_issues
+        - search_code
+        - add_issue_comment
+        - create_branch
+      tiers:
+        list_notifications: safe
+        list_pull_requests: safe
+        get_pull_request: safe
+        get_pull_request_diff: safe
+        list_issues: safe
+        search_code: safe
+        add_issue_comment: confirm     # create_issue_comment
+        create_branch: confirm
+
+    # Spotify MCP server (PC1 — context-aware music). OFF by default. Needs the
+    # server + a Spotify OAuth token cached under data/ (gitignored). ALL tools
+    # are `safe` — playback is trivially reversible, so music is never gated
+    # behind confirmations.
+    spotify:
+      enabled: false
+      command: "spotify-mcp"          # or npx/uvx per your chosen Spotify MCP server
+      args: ["stdio"]
+      expose:
+        - current_track
+        - search
+        - list_playlists
+        - play
+        - pause
+        - next
+        - set_volume
+        - queue
+      tiers:
+        current_track: safe
+        search: safe
+        list_playlists: safe
+        play: safe
+        pause: safe
+        next: safe
+        set_volume: safe
+        queue: safe
+
+    # Slack MCP server (PC3 — reach). OFF by default. Needs the server + a Slack
+    # token in the environment. Reads are `safe`; sends are `confirm` — the
+    # Guardian shows the exact channel + full text before anything is posted.
+    slack:
+      enabled: false
+      command: "slack-mcp"            # or npx/uvx per your chosen Slack MCP server
+      args: ["stdio"]
+      expose:
+        - list_unreads
+        - get_channel_messages
+        - search
+        - get_mentions
+        - post_message
+        - reply_thread
+      tiers:
+        list_unreads: safe
+        get_channel_messages: safe
+        search: safe
+        get_mentions: safe
+        post_message: confirm
+        reply_thread: confirm
+
+    # Discord MCP server (PC3 — reach). OFF by default. Same shape as Slack.
+    # This is the tool surface; the separate `remote:` block below is the DM
+    # control channel (the mobile-access bridge), a different thing entirely.
+    discord:
+      enabled: false
+      command: "discord-mcp"
+      args: ["stdio"]
+      expose:
+        - list_unreads
+        - get_channel_messages
+        - search
+        - get_mentions
+        - post_message
+        - reply_thread
+      tiers:
+        list_unreads: safe
+        get_channel_messages: safe
+        search: safe
+        get_mentions: safe
+        post_message: confirm
+        reply_thread: confirm
+
+
+# -----------------------------------------------------------------------------
+# Remote interface (PC3) — the Discord DM control channel. Mobile access to
+# Vesper without a mobile app: messages the owner sends in the designated
+# private channel are injected as user turns and Vesper's replies posted back.
+# Safety rails (not optional):
+#   - only owner_user_id is accepted; every other author is ignored.
+#   - allow_dangerous DEFAULTS FALSE: dangerous-tier tools are disabled for
+#     remote sessions entirely (enforced in the Guardian).
+#   - confirm-tier tools still need an EXPLICIT remote approval — the request_id
+#     or a reaction on the specific message; a bare "yes" is refused.
+# The bot token comes from the environment (token_env), never this file.
+# -----------------------------------------------------------------------------
+remote:
+  enabled: false
+  owner_user_id: ""        # your Discord user ID — the ONLY accepted sender
+  channel_id: ""           # the designated private channel ID
+  allow_dangerous: false   # keep false; true would let remote sessions run dangerous tools
+  token_env: "VESPER_DISCORD_TOKEN"
+
+
+# -----------------------------------------------------------------------------
+# Creator tools (PC2) — the "does everything" layer, delivered as tools:
+#   research        deep multi-step web research (Search -> Reader -> Writer ->
+#                   Critic); slow, runs on the task queue, writes the full report
+#                   to research_dir and announces completion.
+#   write_script    template-driven short-form scripts; each format is just a
+#                   markdown spec under formats_dir (e.g. reel.md) — new formats
+#                   need no code change. Output saved to scripts_dir.
+#   run_shell /     the automation composer. Both are DANGEROUS tier: the exact
+#   run_applescript command is shown verbatim and explicit approval is asked
+#                   EVERY time (no remembered approval). The denylist below ADDS
+#                   to an always-on safety floor in tools/creator.py
+#                   (rm -rf /, sudo, disk utilities, curl|sh, fork bombs, …) —
+#                   any match is refused outright, even after approval.
+# -----------------------------------------------------------------------------
+creator:
+  research_dir: "data/research"
+  scripts_dir: "data/scripts"
+  formats_dir: "config/formats"
+  automation:
+    enforce_home_boundary: true   # refuse writes to absolute paths outside $HOME (temp dirs excepted)
+    denylist: []                  # extra regex patterns, added on top of the built-in floor

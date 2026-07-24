@@ -62,6 +62,100 @@ async def gather_inbox_triage(registry: ToolRegistry, max_n: int = INBOX_TRIAGE_
     return {"available": True, "count": len(messages), "messages": messages}
 
 
+def _as_list(raw: Any) -> List[Any]:
+    """Best-effort: MCP tool results are JSON — pull out the list of items."""
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return []
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("items", "notifications", "pull_requests", "results", "data"):
+            if isinstance(data.get(key), list):
+                return data[key]
+    return []
+
+
+def _looks_ci_failure(item: Any) -> bool:
+    s = (item if isinstance(item, str) else json.dumps(item)).lower()
+    return ("ci" in s or "workflow" in s or "check" in s) and ("fail" in s or "error" in s)
+
+
+async def gather_dev(registry: ToolRegistry) -> Optional[str]:
+    """Optional development section — present ONLY when the GitHub MCP tools are
+    connected (mcp.servers.github.enabled). Unread notifications, PRs awaiting
+    review, and failing CI if visible from notifications. Returns raw data for
+    the model to voice in 2-3 lines, or None if GitHub isn't wired up."""
+    notif_tool = registry.get("list_notifications")
+    pr_tool = registry.get("list_pull_requests")
+    have_notif = notif_tool is not None and notif_tool.handler is not None
+    have_pr = pr_tool is not None and pr_tool.handler is not None
+    if not have_notif and not have_pr:
+        return None
+
+    lines: List[str] = []
+    if have_notif:
+        try:
+            items = _as_list(await notif_tool.handler({}, {}))
+            ci_fail = sum(1 for it in items if _looks_ci_failure(it))
+            note = f"GitHub notifications: {len(items)} unread"
+            if ci_fail:
+                note += f" ({ci_fail} about failing CI)"
+            lines.append(note)
+        except Exception as exc:
+            logger.warning(f"[Briefing] github notifications failed: {exc}")
+    if have_pr:
+        try:
+            prs = _as_list(await pr_tool.handler({}, {}))
+            lines.append(f"Pull requests awaiting your review: {len(prs)}")
+        except Exception as exc:
+            logger.warning(f"[Briefing] github PRs failed: {exc}")
+
+    if not lines:
+        return None
+    return "Development (keep to 2-3 lines in your voice):\n" + "\n".join(f"  - {ln}" for ln in lines)
+
+
+async def gather_slack(registry: ToolRegistry) -> Optional[str]:
+    """Optional Slack section — present ONLY when the Slack MCP tools are
+    connected (mcp.servers.slack.enabled). Mentions and DMs/threads awaiting a
+    reply, kept to 2 lines. Returns raw data for the model to voice, or None if
+    Slack isn't wired up. Deliberately scoped to the Slack server by category so
+    an identically-named Discord tool never gets mistaken for it."""
+
+    def _slack_tool(name: str):
+        spec = registry.get(name)
+        if spec is not None and spec.handler is not None and spec.category == "mcp:slack":
+            return spec
+        return None
+
+    mentions_tool = _slack_tool("get_mentions")
+    unreads_tool = _slack_tool("list_unreads")
+    if mentions_tool is None and unreads_tool is None:
+        return None
+
+    lines: List[str] = []
+    if mentions_tool is not None:
+        try:
+            items = _as_list(await mentions_tool.handler({}, {}))
+            if items:
+                lines.append(f"Slack mentions awaiting your reply: {len(items)}")
+        except Exception as exc:
+            logger.warning(f"[Briefing] slack mentions failed: {exc}")
+    if unreads_tool is not None:
+        try:
+            items = _as_list(await unreads_tool.handler({}, {}))
+            if items:
+                lines.append(f"Unread Slack DMs/threads: {len(items)}")
+        except Exception as exc:
+            logger.warning(f"[Briefing] slack unreads failed: {exc}")
+
+    if not lines:
+        return None
+    return "Slack (keep to 2 lines in your voice):\n" + "\n".join(f"  - {ln}" for ln in lines[:2])
+
+
 async def gather_calendar(calendar_sensor: Optional[CalendarSensor]) -> List[Dict[str, str]]:
     """Fetch today's remaining calendar events, if the sensor is available."""
     if calendar_sensor is None:
@@ -152,6 +246,14 @@ async def assemble_briefing_text(
     if include_day_plan:
         day_plan_text = await assemble_day_plan_text(registry, memory_agent, notion_db)
         text = f"{text}\n\n{day_plan_text}"
+
+    slack_text = await gather_slack(registry)
+    if slack_text:
+        text = f"{text}\n\n{slack_text}"
+
+    dev_text = await gather_dev(registry)
+    if dev_text:
+        text = f"{text}\n\n{dev_text}"
 
     return text
 

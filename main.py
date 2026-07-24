@@ -519,7 +519,16 @@ async def main() -> int:
         logger.info("Boot sequence enabled: voice startup + full agent routing")
         await brain.start()
         logger.info("Brain started successfully")
-        
+
+        # PC3: optional Discord remote interface (mobile access). Guarded — it
+        # no-ops unless remote.enabled AND discord.py + a token are present, so
+        # it can never block or break startup for anyone not using it.
+        remote_task = None
+        if config.get("remote", {}).get("enabled"):
+            from remote.discord_remote import run_remote
+            remote_task = asyncio.create_task(run_remote(brain, config))
+            logger.info("Discord remote interface enabled (remote.enabled=true)")
+
         # Log active agents
         logger.info("Active agents:")
         for name in brain._agents.keys():
@@ -545,6 +554,8 @@ async def main() -> int:
                     break
         
         # Graceful shutdown
+        if remote_task is not None:
+            remote_task.cancel()
         await _graceful_shutdown(brain, logger, "User interrupt")
         return 0
         

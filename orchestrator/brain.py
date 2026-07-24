@@ -57,6 +57,7 @@ from orchestrator.planner import Planner, PlannerResult
 from proactive.briefing import deliver_scheduled_briefing, make_get_daily_briefing_handler
 from proactive.day_planner import make_plan_my_day_handler
 from proactive.engine import ProactiveEngine
+from proactive.morning_routine import MorningRoutine
 from proactive.reflection import run_reflection
 from sensors.calendar_sensor import CalendarSensor
 from sensors.focus_sensor import FocusSensor
@@ -82,6 +83,7 @@ from schemas.events import (
     ContextUpdatedEvent,
     ObservationEvent,
     ReflectionRequestedEvent,
+    RoutineTriggeredEvent,
     ShutdownRequestedEvent,
     VoiceInputEvent,
     VoiceOutputEvent,
@@ -432,6 +434,21 @@ class Brain:
         # Proactive Engine (P05): scheduled jobs + cooldown-gated call-out rules.
         self._proactive_engine = ProactiveEngine(event_bus=self._event_bus, config=self._config)
 
+        # Morning routine (PC4): the composed no-prompt briefing + environment
+        # setup, triggered by the Proactive Engine's RoutineTriggeredEvent. It
+        # composes existing tools; memory_agent is attached lazily at run time.
+        self._morning_routine = MorningRoutine(
+            planner=self._planner,
+            guardian=self._guardian,
+            registry=get_registry(),
+            event_bus=self._event_bus,
+            calendar_sensor=self._calendar_sensor,
+            config=self._config,
+        )
+        # >0 while a user turn is in flight, so the routine can defer when the
+        # user is mid-conversation.
+        self._active_turns = 0
+
         logger.info(f"Brain initialized (session={self._session_id})")
 
     # =========================================================================
@@ -768,6 +785,19 @@ class Brain:
         )
         await self._event_bus.emit(VoiceOutputEvent(text=result.text, source="Brain"))
 
+    async def _handle_routine_triggered(self, event: RoutineTriggeredEvent) -> None:
+        """PC4: the composed morning (or evening) routine. The routine owns all
+        the anti-annoyance gating; the Brain only supplies fresh state (a live
+        memory agent + whether a user turn is in flight) and forwards the call.
+        The routine emits its own VoiceOutputEvent (spoken + HUD)."""
+        self._morning_routine._memory_agent = self.get_agent("MemoryAgent")
+        in_conversation = self._active_turns > 0
+        logger.info(f"Routine triggered: {event.routine} (trigger={event.trigger})")
+        if event.routine == "evening":
+            await self._morning_routine.run_evening(in_conversation=in_conversation)
+        else:
+            await self._morning_routine.run(in_conversation=in_conversation)
+
     # =========================================================================
     # Day planning (P09)
     # =========================================================================
@@ -1008,6 +1038,7 @@ class Brain:
         self._event_bus.subscribe(ObservationEvent, self._handle_observation)
         self._event_bus.subscribe(BriefingRequestedEvent, self._handle_briefing_requested)
         self._event_bus.subscribe(ReflectionRequestedEvent, self._handle_reflection_requested)
+        self._event_bus.subscribe(RoutineTriggeredEvent, self._handle_routine_triggered)
         self._event_bus.subscribe(AgentErrorEvent, self._handle_agent_error)
         self._event_bus.subscribe(AgentStoppedEvent, self._handle_agent_stopped)
 
@@ -1061,13 +1092,17 @@ class Brain:
             source="Brain",
         ))
 
-        result = await self._planner.run(
-            user_text=text,
-            recent_context=recent_context,
-            observations=pending_observations,
-            memories=relevant_memories,
-            on_token=on_token,
-        )
+        self._active_turns += 1
+        try:
+            result = await self._planner.run(
+                user_text=text,
+                recent_context=recent_context,
+                observations=pending_observations,
+                memories=relevant_memories,
+                on_token=on_token,
+            )
+        finally:
+            self._active_turns -= 1
         self._context.consume_observations()
 
         self._context.update_last_response(result.text, action="planner")
