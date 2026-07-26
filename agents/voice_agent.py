@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
@@ -247,6 +249,8 @@ class VoiceAgent(BaseAgent):
         # Background tasks
         self._listen_task: Optional[asyncio.Task] = None
         self._process_task: Optional[asyncio.Task] = None
+        # D3: speech runs on its own task so it never blocks the event bus.
+        self._speak_task: Optional[asyncio.Task] = None
         
         # Queues for thread-safe communication
         self._audio_queue: asyncio.Queue = asyncio.Queue()
@@ -257,7 +261,11 @@ class VoiceAgent(BaseAgent):
         self._recording_complete = asyncio.Event()
         self._shutdown_event = threading.Event()
         self._keyboard_fallback_logged = False
-        self._last_mic_retry = 0.0
+        # D2: voice input is try-once. On first mic failure it is disabled for the
+        # rest of the session (no infinite retry, no log spam). Re-enable by fixing
+        # the environment and restarting, or at runtime via enable_voice_input().
+        self._voice_input_disabled = False
+        self._mic_unavailable_reason = ""
     
     def _load_config(self, config: Optional[Dict[str, Any]]) -> VoiceConfig:
         """Load configuration from dict (from settings.yaml)."""
@@ -361,7 +369,7 @@ class VoiceAgent(BaseAgent):
         self._shutdown_event.set()
         
         # Cancel background tasks
-        for task in [self._listen_task, self._process_task]:
+        for task in [self._listen_task, self._process_task, self._speak_task]:
             if task and not task.done():
                 task.cancel()
                 try:
@@ -548,26 +556,23 @@ class VoiceAgent(BaseAgent):
             )
             
             if not self._mic_stream.start():
-                self._logger.warning(f"Microphone unavailable: {self._mic_stream.error}")
-                try:
+                # Capture the reason quietly; the single canonical warning line is
+                # emitted once by _recover_microphone() when voice input is disabled.
+                self._mic_unavailable_reason = str(self._mic_stream.error)
+                self._logger.debug(f"Microphone start failed: {self._mic_stream.error}")
+                with suppress(Exception):
                     devices = self._mic_stream.list_input_devices()
-                    if devices:
-                        self._logger.warning(
-                            "Available input devices: "
-                            + ", ".join(
-                                f"{d['index']}:{d['name']}"
-                                for d in devices
-                            )
-                        )
-                    else:
-                        self._logger.warning("No input devices detected by PyAudio")
-                except Exception as e:
-                    self._logger.warning(f"Failed to enumerate input devices: {e}")
+                    detail = (
+                        ", ".join(f"{d['index']}:{d['name']}" for d in devices)
+                        if devices else "no input devices detected"
+                    )
+                    self._logger.debug(f"Input devices: {detail}")
                 self._mic_stream = None
             else:
                 self._logger.info("Microphone initialized")
         except Exception as e:
-            self._logger.warning(f"Microphone unavailable: {e}")
+            self._mic_unavailable_reason = str(e)
+            self._logger.debug(f"Microphone init raised: {e}")
             self._mic_stream = None
     
     async def _shutdown_components(self) -> None:
@@ -652,9 +657,15 @@ class VoiceAgent(BaseAgent):
         
         while self.is_running and not self._shutdown_event.is_set():
             try:
-                # If microphone unavailable, use keyboard fallback
+                # If microphone unavailable, disable voice input ONCE (D2) and then
+                # either accept typed input (interactive terminal) or idle quietly.
                 if not self._mic_stream:
-                    await self._recover_microphone()
+                    if not self._voice_input_disabled:
+                        await self._recover_microphone()
+                    if sys.stdin and sys.stdin.isatty():
+                        await self._keyboard_input_fallback()
+                    else:
+                        await asyncio.sleep(0.5)
                     continue
 
                 # If no wake word detector, use speech-activated mode
@@ -698,20 +709,39 @@ class VoiceAgent(BaseAgent):
 
     async def _recover_microphone(self) -> None:
         """
-        Keep trying microphone recovery so voice capture survives tab/app switches.
+        D2: disable voice input for the session on the first failure.
 
-        Falls back to keyboard input only when stdin is interactive.
+        No infinite 3-second retry, no log spam: we log ONE clear line pointing
+        at the doctor script and stop touching the audio backend. The user fixes
+        the environment and restarts, or calls enable_voice_input() at runtime.
         """
-        now = time.monotonic()
-        if now - self._last_mic_retry >= 3.0:
-            self._last_mic_retry = now
-            self._logger.warning("Microphone unavailable, retrying audio input backend")
-            await self._initialize_microphone()
-            if self._mic_stream:
-                self._logger.info("Microphone recovered")
-                self._keyboard_fallback_logged = False
-                return
-        await self._keyboard_input_fallback()
+        reason = self._mic_unavailable_reason or "microphone/audio backend unavailable"
+        self._logger.warning(
+            f"Voice input unavailable: {reason}. Run scripts/doctor.py."
+        )
+        self._voice_input_disabled = True
+        self._set_voice_state(VoiceAgentState.IDLE)
+
+    async def enable_voice_input(self) -> bool:
+        """
+        Re-enable voice input after fixing the environment (D2 escape hatch).
+
+        Retries microphone initialisation exactly once. Returns True if the
+        microphone came back, False otherwise (leaving voice input disabled).
+        """
+        self._voice_input_disabled = False
+        self._mic_unavailable_reason = ""
+        self._keyboard_fallback_logged = False
+        await self._initialize_microphone()
+        if self._mic_stream:
+            self._logger.info("Voice input re-enabled; microphone recovered.")
+            self._set_voice_state(VoiceAgentState.LISTENING_WAKE_WORD)
+            return True
+        self._voice_input_disabled = True
+        self._logger.warning(
+            "Voice input re-enable failed; microphone still unavailable. Run scripts/doctor.py."
+        )
+        return False
 
     async def _listen_without_wake_word(self) -> None:
         """Listen continuously using VAD when wake word detector is unavailable."""
@@ -917,49 +947,70 @@ class VoiceAgent(BaseAgent):
     # =========================================================================
     
     async def _handle_voice_output(self, event: VoiceOutputEvent) -> None:
-        """Handle request to speak text."""
+        """
+        Handle a request to speak text WITHOUT blocking the event bus (D3).
+
+        Synthesis and playback take seconds; doing them inline would stall every
+        other event handler for that whole time (the 6s bus stall the audit
+        flagged). Instead we spawn a background task and return immediately, so
+        this handler completes in well under a millisecond while audio plays
+        asynchronously. A new utterance cancels the previous one (barge-in).
+        """
         self._logger.info(f"Received VoiceOutputEvent: '{event.text[:50]}...' from {event.source}")
-        
+
         if not event.text:
             return
 
         spoken_text = self._format_for_owner(event.text)
-        
-        # Set speaking state
+
+        # Barge-in: cancel any in-flight utterance. This is fire-and-forget — we
+        # do NOT await the old task, so the handler never blocks the bus.
+        prev = self._speak_task
+        if prev is not None and not prev.done():
+            prev.cancel()
+
+        voice = event.voice_id if event.voice_id != "default" else ""
+        self._speak_task = asyncio.create_task(
+            self._speak_worker(spoken_text, voice, event.speed)
+        )
+
+    async def _speak_worker(self, spoken_text: str, voice: str, rate: float) -> None:
+        """Background utterance: synthesis + playback, off the event bus (D3)."""
+        # Set speaking state + suppress wake word so we don't self-trigger.
         self._set_voice_state(VoiceAgentState.SPEAKING)
-        
-        # Disable wake word during speech (prevent self-triggering)
         if self._wake_word_detector:
             self._wake_word_detector.disable()
-        
+
         try:
             if self._tts:
                 try:
-                    await self._tts.speak(
-                        text=spoken_text,
-                        voice=event.voice_id if event.voice_id != "default" else "",
-                        rate=event.speed,
-                    )
+                    await self._tts.speak(text=spoken_text, voice=voice, rate=rate)
+                except asyncio.CancelledError:
+                    with suppress(Exception):
+                        await self._tts.stop()
+                    raise
                 except Exception as exc:
                     self._logger.warning(f"Primary TTS playback failed: {exc}")
                     # Runtime fallback for output-device errors and other playback faults.
                     switched = await self._switch_to_fallback_tts(str(exc))
                     if switched and self._tts:
                         try:
-                            await self._tts.speak(
-                                text=spoken_text,
-                                voice=event.voice_id if event.voice_id != "default" else "",
-                                rate=event.speed,
-                            )
+                            await self._tts.speak(text=spoken_text, voice=voice, rate=rate)
+                        except asyncio.CancelledError:
+                            with suppress(Exception):
+                                await self._tts.stop()
+                            raise
                         except Exception as retry_exc:
                             self._logger.error(f"Fallback TTS playback failed: {retry_exc}")
             else:
                 self._logger.warning("TTS not available")
+        except asyncio.CancelledError:
+            # Barge-in / shutdown: swallow so the task ends quietly.
+            return
         finally:
-            # Re-enable wake word detection
+            # Re-enable wake word detection and return to listening.
             if self._wake_word_detector:
                 self._wake_word_detector.enable()
-            
             self._set_voice_state(VoiceAgentState.LISTENING_WAKE_WORD)
 
     def _format_for_owner(self, text: str) -> str:

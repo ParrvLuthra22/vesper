@@ -45,7 +45,10 @@ class MacOSControlAgent(BaseAgent):
         ]
 
     async def _setup(self) -> None:
-        self._subscribe(IntentRecognizedEvent, self._handle_intent)
+        # D7: IntentRecognizedEvent is dead — the Planner routes tool calls, and
+        # macOS control is exposed through SystemAgent's registered tools
+        # (open_app/close_app/set_volume/set_brightness/...). Only the direct
+        # MacOSCommandEvent path remains.
         self._subscribe(MacOSCommandEvent, self._handle_macos_command)
 
     async def _teardown(self) -> None:

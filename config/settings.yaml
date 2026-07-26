@@ -414,6 +414,13 @@ wake_flow:
 # -----------------------------------------------------------------------------
 ui:
   enabled: true
+  # Legacy Python (tkinter) always-on-top overlay (ui/hud_overlay.py). OFF by
+  # default (D4): it is superseded by the Tauri HUD (hud/), which attaches over
+  # the gateway, and the frameless tkinter window can fail outright on some
+  # macOS/Tk builds (a native AppKit version mismatch). Left in the tree but not
+  # started unless you explicitly opt back in here.
+  legacy_overlay:
+    enabled: false
   hud:
     enabled: true
     # Geometry (pixels)
@@ -586,9 +593,17 @@ web_search:
 # LLM Router Configuration (llm/router.py — not yet wired into the Brain, P03)
 # -----------------------------------------------------------------------------
 llm:
-  # Primary provider/model for completions. Groq deprecated
-  # llama-3.3-70b-versatile on 2026-08-16 in favor of openai/gpt-oss-120b for
-  # agentic tool-use workloads (faster + cheaper too) — see console.groq.com/docs/models.
+  # Primary provider/model for completions.
+  #
+  # Verified against console.groq.com/docs/models on 2026-07-26: openai/gpt-oss-120b
+  # AND llama-3.3-70b-versatile are BOTH current Groq *production* models. We run
+  # gpt-oss-120b deliberately — it is purpose-built for agentic tool-use and is
+  # materially faster on Groq (~500 vs ~280 tok/s) than llama-3.3-70b, which is what
+  # the planner's tool-calling loop benefits from most.
+  #
+  # NOTE: an earlier version of this comment claimed Groq "deprecated
+  # llama-3.3-70b-versatile on 2026-08-16" — that is false (and was future-dated).
+  # llama-3.3-70b-versatile is NOT deprecated and remains a valid drop-in here.
   primary:
     provider: "groq"
     model: "openai/gpt-oss-120b"
@@ -629,12 +644,18 @@ llm:
 # lines handed to the LLM planner. Each sensor is individually toggleable;
 # disabled by default until the user opts in.
 sensors:
+  # Focus + calendar are ON by default (D6): they are the whole point of the
+  # proactive/call-out feature. Both are strictly local (focus reads the
+  # frontmost app via NSWorkspace; calendar reads events via EventKit) and each
+  # poll is wrapped in error handling, so a missing macOS permission degrades to
+  # a quiet no-op rather than a crash. Disable an individual sensor here if you
+  # do not want it.
   focus:
-    enabled: false
+    enabled: true
     poll_interval_seconds: 5
 
   calendar:
-    enabled: false
+    enabled: true
     poll_interval_seconds: 300
     # How far ahead to look for upcoming meetings, in minutes.
     lookahead_minutes: 120

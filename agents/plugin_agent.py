@@ -52,7 +52,10 @@ class PluginAgent(BaseAgent):
 
     async def _setup(self) -> None:
         self._load_plugins()
-        self._subscribe(IntentRecognizedEvent, self._handle_intent)
+        # D7: IntentRecognizedEvent is dead — the Planner no longer emits it, and
+        # plugins are not (yet) exposed as registered tools, so this agent is no
+        # longer wired to the bus. _handle_intent is retained as the dispatch entry
+        # point for whenever plugins are surfaced as tools; it is not subscribed.
         self._logger.info(
             f"Plugin agent ready with {len(self._loaded_plugins)} plugin(s) from {self._plugins_dir}"
         )

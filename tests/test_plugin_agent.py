@@ -49,8 +49,10 @@ async def test_plugin_agent_loads_and_handles(tmp_path, monkeypatch):
     # Subscribe capture to the event bus used by the agent
     agent.event_bus.subscribe(VoiceOutputEvent, capture)
 
-    # Emit the intent to the agent's bus (simulate system)
-    await agent.event_bus.emit(event)
+    # D7: PluginAgent is no longer subscribed to IntentRecognizedEvent (the
+    # Planner doesn't emit it). Invoke the dispatch handler directly — this still
+    # verifies plugin loading + handling + VoiceOutputEvent emission.
+    await agent._handle_intent(event)
 
     # Wait for the plugin to handle and emit voice output
     voice_event = await asyncio.wait_for(received, timeout=2.0)

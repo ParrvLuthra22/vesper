@@ -248,6 +248,13 @@ class MCPBridge:
                 return default
         return value
 
+    def connected_summary(self) -> Dict[str, int]:
+        """{server_name: tool_count} for every currently-connected MCP server.
+
+        Used by the Brain's startup summary (D8) to report what is actually live.
+        """
+        return {name: len(conn.tools) for name, conn in self._connections.items()}
+
     async def start(self) -> None:
         """Connect to every enabled configured server and register its tools."""
         servers_config = self._get_config("mcp.servers", {}) or {}

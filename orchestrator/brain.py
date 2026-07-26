@@ -576,13 +576,19 @@ class Brain:
             )
             self._health_server.start()
 
-            # Start HUD overlay in dedicated thread (non-blocking).
-            try:
-                self._hud_overlay = HUDOverlayController(event_bus=self._event_bus, config=self._config)
-                await self._hud_overlay.start()
-            except Exception as exc:
-                logger.warning(f"HUD overlay could not start: {exc}")
-                self._hud_overlay = None
+            # Legacy tkinter overlay (D4): OFF by default. The Tauri HUD (hud/) is
+            # the intended UI and connects over the gateway; the legacy overlay is
+            # only started when explicitly re-enabled via ui.legacy_overlay.enabled.
+            self._hud_overlay = None
+            if self._config.get("ui", {}).get("legacy_overlay", {}).get("enabled", False):
+                try:
+                    self._hud_overlay = HUDOverlayController(event_bus=self._event_bus, config=self._config)
+                    await self._hud_overlay.start()
+                except Exception as exc:
+                    logger.warning(f"Legacy HUD overlay could not start: {exc}")
+                    self._hud_overlay = None
+            else:
+                logger.info("Legacy HUD overlay disabled (ui.legacy_overlay.enabled=false)")
 
             # Start health check task
             self._health_check_task = asyncio.create_task(
@@ -611,6 +617,7 @@ class Brain:
             self._started_at = datetime.now(timezone.utc)
 
             logger.info("Brain started successfully")
+            self._log_startup_summary()
 
             await self.greet()
 
@@ -618,6 +625,89 @@ class Brain:
             self._state = BrainState.ERROR
             logger.error(f"Failed to start brain: {e}", exc_info=True)
             raise
+
+    @staticmethod
+    def _port_open(host: str, port: int) -> bool:
+        """Best-effort check: is something listening on host:port right now?"""
+        import socket
+
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.settimeout(0.2)
+                return sock.connect_ex((host, int(port))) == 0
+        except Exception:
+            return False
+
+    def _log_startup_summary(self) -> None:
+        """
+        Print a 6-line honest summary of what is ACTUALLY live this session (D8).
+
+        No guessing from 200 lines of warnings: LLM, voice in/out, sensors, MCP
+        servers with tool counts, and gateway status, each derived from real
+        runtime state rather than config intent alone.
+        """
+        cfg = self._config
+
+        # 1. LLM provider + model (with fallback).
+        primary = cfg.get("llm", {}).get("primary", {})
+        fallback = cfg.get("llm", {}).get("fallback", {})
+        llm_line = f"{primary.get('provider', '?')} {primary.get('model', '?')}"
+        if fallback:
+            llm_line += f"  (fallback: {fallback.get('provider', '?')} {fallback.get('model', '?')})"
+
+        # 2/3. Voice input (on/off + why) and output provider — real agent state.
+        voice_info = self._agents.get("VoiceAgent")
+        if voice_info is None:
+            voice_in = "off (VoiceAgent not registered)"
+            voice_out = "n/a"
+        else:
+            va = voice_info.agent
+            mic_up = getattr(va, "_mic_stream", None) is not None
+            disabled = getattr(va, "_voice_input_disabled", False)
+            if mic_up and not disabled:
+                voice_in = "on"
+            else:
+                reason = getattr(va, "_mic_unavailable_reason", "") or "microphone unavailable"
+                voice_in = f"off — {reason} (run scripts/doctor.py)"
+            tts = getattr(va, "_tts", None)
+            voice_out = type(tts).__name__ if tts is not None else "unavailable"
+
+        # 4. Sensors actually running.
+        running_sensors = [
+            label
+            for label, sensor in (
+                ("focus", self._focus_sensor),
+                ("calendar", self._calendar_sensor),
+                ("inbox", self._inbox_sensor),
+            )
+            if getattr(sensor, "is_running", False)
+        ]
+        sensors_line = ", ".join(running_sensors) if running_sensors else "none"
+
+        # 5. MCP servers connected, with tool counts.
+        mcp_summary = self._mcp_bridge.connected_summary()
+        mcp_line = (
+            ", ".join(f"{name}({count})" for name, count in mcp_summary.items())
+            if mcp_summary else "none connected"
+        )
+
+        # 6. Gateway — probed live (a separate `python -m gateway.server` process).
+        gw_cfg = cfg.get("gateway", {})
+        gw_host = gw_cfg.get("host", "127.0.0.1")
+        gw_port = gw_cfg.get("port", 8760)
+        if self._port_open(gw_host, gw_port):
+            gateway_line = f"running (port {gw_port})"
+        else:
+            gateway_line = f"not running — start with `python -m gateway.server` (port {gw_port})"
+
+        logger.info("── VESPER live this session ──────────────────────────")
+        logger.info(f"  LLM       : {llm_line}")
+        logger.info(f"  Voice in  : {voice_in}")
+        logger.info(f"  Voice out : {voice_out}")
+        logger.info(f"  Sensors   : {sensors_line}")
+        logger.info(f"  MCP       : {mcp_line}")
+        logger.info(f"  Gateway   : {gateway_line}")
+        logger.info("──────────────────────────────────────────────────────")
 
     async def greet(self) -> str:
         """Generate + emit the time-appropriate greeting (plus one pending
@@ -1031,16 +1121,27 @@ class Brain:
           assembles and delivers the scheduled briefing
         - ReflectionRequestedEvent: ProactiveEngine's midnight_reflection
           job — extracts and stores durable memories from the day so far
+        - AgentStartedEvent: When an agent starts
         - AgentErrorEvent: When an agent has an error
         - AgentStoppedEvent: When an agent stops
+
+        Called from start() BEFORE _start_agents() (D5): agents emit
+        AgentStartedEvent as they come up, so their sole observer must already be
+        subscribed or the bus logs "No handlers" for each one during boot.
         """
         self._event_bus.subscribe(VoiceInputEvent, self._handle_voice_input)
         self._event_bus.subscribe(ObservationEvent, self._handle_observation)
         self._event_bus.subscribe(BriefingRequestedEvent, self._handle_briefing_requested)
         self._event_bus.subscribe(ReflectionRequestedEvent, self._handle_reflection_requested)
         self._event_bus.subscribe(RoutineTriggeredEvent, self._handle_routine_triggered)
+        self._event_bus.subscribe(AgentStartedEvent, self._handle_agent_started)
         self._event_bus.subscribe(AgentErrorEvent, self._handle_agent_error)
         self._event_bus.subscribe(AgentStoppedEvent, self._handle_agent_stopped)
+
+    async def _handle_agent_started(self, event: AgentStartedEvent) -> None:
+        """Record that an agent came up. Subscribed before agents start (D5) so
+        every AgentStartedEvent has a handler and boot logs stay clean."""
+        logger.debug(f"Agent started: {event.agent_name}")
 
     async def _handle_voice_input(self, event: VoiceInputEvent) -> None:
         """Handle voice input event (USER_SPOKE) by feeding the Planner."""

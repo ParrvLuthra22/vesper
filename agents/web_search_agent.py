@@ -89,7 +89,8 @@ class WebSearchAgent(BaseAgent):
         ]
 
     async def _setup(self) -> None:
-        self._subscribe(IntentRecognizedEvent, self._handle_intent)
+        # D7: IntentRecognizedEvent is dead (the Planner no longer emits it). The
+        # live path is the `search_web` tool, routed here as an ActionRequestEvent.
         self._subscribe(ActionRequestEvent, self._handle_action_request)
         self._initialize_clients()
 

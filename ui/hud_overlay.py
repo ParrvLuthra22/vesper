@@ -506,7 +506,11 @@ class VesperHUDOverlay:
             self._tick()
             root.mainloop()
         except Exception as exc:
-            logger.error(f"HUD failed to start: {exc}", exc_info=True)
+            # D4: the legacy tkinter overlay is best-effort. On any failure — an
+            # incompatible Tk/macOS build (the "requires macOS N" AppKit error),
+            # no window server, a headless session — degrade with ONE clean line
+            # instead of a traceback. The Tauri HUD (hud/) is the intended UI.
+            logger.warning(f"Legacy HUD overlay unavailable, continuing without it: {exc}")
         finally:
             self._running.clear()
             self._root = None

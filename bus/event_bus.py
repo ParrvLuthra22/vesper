@@ -224,8 +224,10 @@ class EventBus:
         self._processor_task: Optional[asyncio.Task] = None
         self._metrics = EventMetrics()
         self._initialized = True
-        
-        logger.info("EventBus initialized")
+
+        # Construction is logged at DEBUG so INFO shows exactly one authoritative
+        # bus line — main.py's "EventBus initialized | singleton id=..." (D1).
+        logger.debug(f"EventBus singleton constructed id={id(self):#x}")
     
     @classmethod
     def reset_instance(cls) -> None:
@@ -569,23 +571,25 @@ class EventBus:
         return events[-count:]
 
 
-# Global event bus instance
-event_bus = EventBus()
-
-
 def get_event_bus() -> EventBus:
     """
-    Get the global event bus instance.
-    
-    Use this function to get the singleton EventBus for emitting
-    and subscribing to events. This ensures all agents communicate
-    through the same event bus.
-    
+    Get the process-wide singleton EventBus.
+
+    This is the ONE authoritative way to obtain the bus. `EventBus()` returns
+    the same object too (enforced by ``__new__``), but always prefer
+    ``get_event_bus()``: it is the single, greppable entry point and — unlike
+    the old module-level ``event_bus = EventBus()`` global — it constructs the
+    bus lazily on first use rather than eagerly at import time (before the event
+    loop even exists).
+
+    Every agent MUST share this one instance. Two live buses would mean events
+    published on one are invisible to handlers on the other.
+
     Returns:
         The singleton EventBus instance
-    
+
     Example:
         bus = get_event_bus()
         await bus.emit(MyEvent(source="my_agent"))
     """
-    return event_bus
+    return EventBus()

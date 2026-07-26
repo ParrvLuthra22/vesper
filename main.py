@@ -480,7 +480,7 @@ async def main() -> int:
     # Import after logging is configured
     from utils.logger import get_logger
     from orchestrator import Brain
-    from bus.event_bus import EventBus
+    from bus.event_bus import get_event_bus
     
     logger = get_logger(__name__)
     logger.info("=" * 60)
@@ -502,11 +502,14 @@ async def main() -> int:
     # Set up signal handlers
     _create_shutdown_handler(loop, logger)
     
-    # Initialize EventBus singleton
+    # Initialize EventBus singleton. get_event_bus() is the single authoritative
+    # construction path — the Brain and every agent obtain this exact same object.
     logger.info("Initializing EventBus...")
-    event_bus = EventBus()
+    event_bus = get_event_bus()
     await event_bus.start()
-    logger.info("EventBus initialized")
+    # Print the singleton identity exactly once so a split-bus regression (events
+    # published on one instance, handlers on another) is obvious in the logs.
+    logger.info(f"EventBus initialized | singleton id={id(event_bus):#x}")
     
     # Create the Brain orchestrator
     logger.info("Creating Brain orchestrator...")
