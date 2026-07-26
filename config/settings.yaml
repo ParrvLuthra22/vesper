@@ -609,10 +609,20 @@ llm:
     model: "openai/gpt-oss-120b"
 
   # Fallback provider/model, used when the primary is rate-limited (after one
-  # retry) or unreachable. Tag verified locally via `ollama list`.
+  # retry) or unreachable.
+  #
+  # Set to Google Gemini — its free tier is far more generous than Groq's 8k
+  # tokens/min, so when Groq throttles a heavy turn this catches it, and it's
+  # still free. REQUIRES a valid GEMINI_API_KEY in .env: get one free (no
+  # billing) at https://aistudio.google.com/apikey. Until a valid key is set,
+  # this fallback will fail like any other — but the primary (Groq, trimmed
+  # tool results) already handles normal use on its own.
+  #
+  # Prefer a local, zero-limit fallback instead? Set provider: "ollama" with a
+  # tag you have pulled (e.g. "llama3.2" or "qwen2.5:7b-instruct") and run Ollama.
   fallback:
-    provider: "ollama"
-    model: "qwen3.5:latest"
+    provider: "gemini"
+    model: "gemini-2.0-flash"
 
   # Per-purpose overrides. Only the fields present here override the base
   # primary/fallback tier above (e.g. "chat" keeps provider=groq but swaps in
