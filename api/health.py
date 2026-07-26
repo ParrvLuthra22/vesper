@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 from threading import Thread
 from typing import Callable, Dict, Optional
 
@@ -9,7 +10,9 @@ from fastapi import FastAPI
 import uvicorn
 
 from agents.base_agent import BaseAgent
+from utils.logger import get_logger
 
+logger = get_logger(__name__)
 
 AgentsProvider = Callable[[], Dict[str, BaseAgent]]
 
@@ -47,7 +50,7 @@ class HealthServer:
     def __init__(
         self,
         agents_provider: AgentsProvider,
-        host: str = "0.0.0.0",
+        host: str = "127.0.0.1",  # localhost only — health API is local telemetry
         port: int = 8080,
         log_level: str = "warning",
     ) -> None:
@@ -58,8 +61,25 @@ class HealthServer:
         self._thread: Optional[Thread] = None
         self._server: Optional[uvicorn.Server] = None
 
+    @staticmethod
+    def _port_in_use(host: str, port: int) -> bool:
+        probe_host = "127.0.0.1" if host in ("0.0.0.0", "") else host
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            return sock.connect_ex((probe_host, int(port)) ) == 0
+
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
+            return
+
+        # Skip cleanly if the port is already taken (usually a leftover VESPER
+        # still running) instead of letting uvicorn crash the thread with a
+        # scary "address already in use" traceback. The health API is optional.
+        if self._port_in_use(self._host, self._port):
+            logger.info(
+                f"Health API not started — {self._host}:{self._port} already in use "
+                "(another VESPER instance may be running)."
+            )
             return
 
         app = create_app(self._agents_provider)

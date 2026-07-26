@@ -87,7 +87,7 @@ voice:
   # Install the voice deps first:  pip install -r voice/requirements.txt
   # ---------------------------------------------------------------------------
   input:
-    enabled: false
+    enabled: true 
     # Bundled pretrained name ("hey_jarvis", "alexa", "hey_mycroft") OR a path
     # to a custom .onnx in voice/models/ (e.g. "wake_up_daddys_home"). Hot-swap
     # is just this value + a restart — no code change. See voice/TRAINING.md.

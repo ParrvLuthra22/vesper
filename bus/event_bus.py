@@ -374,7 +374,10 @@ class EventBus:
             all_handlers = handlers + list(self._wildcard_handlers)
         
         if not all_handlers:
-            logger.warning(f"[EMIT] No handlers for event type: {event_type}")
+            # No subscribers is normal in a pub/sub bus with optional consumers
+            # (UI events like PlanCreatedEvent/ContextUpdatedEvent with no HUD
+            # attached, etc.). This is DEBUG, not a warning — it is not a problem.
+            logger.debug(f"[EMIT] No handlers for event type: {event_type}")
             self._record_event_history(event, "no_handlers")
             return
         

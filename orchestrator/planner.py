@@ -429,8 +429,20 @@ class Planner:
 
     @staticmethod
     def _tool_result_message(tool_call: ToolCall, result_text: str) -> Dict[str, str]:
+        # Cap one tool result so a big output (a full inbox, a long file) can't
+        # blow past tight free-tier token/minute limits — e.g. Groq's 8k TPM,
+        # which a whole unread inbox alone exceeded. ~8k chars ≈ ~2k tokens:
+        # plenty for the model to reason over, affordable for one turn.
+        max_chars = 8000
+        text = result_text or ""
+        if len(text) > max_chars:
+            omitted = len(text) - max_chars
+            text = text[:max_chars] + (
+                f"\n… [truncated {omitted} characters to stay within the model's "
+                "token/rate limit — ask for specifics to see the rest]"
+            )
         return {
             "role": "tool",
             "tool_call_id": tool_call.id or tool_call.name,
-            "content": result_text,
+            "content": text,
         }
