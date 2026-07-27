@@ -356,11 +356,30 @@ class VoiceAgent(BaseAgent):
         
         # Initialize components
         await self._initialize_components()
-        
-        # Start background listening
+
+        # This LEGACY agent needs a transcriber (Vosk/whisper.cpp/SpeechRecognition)
+        # to do anything with speech. Without one, listening only captures audio
+        # and logs "No transcriber available" on every utterance — so disable
+        # voice INPUT cleanly (one line) and release the mic, while keeping TTS.
+        # Wake-word voice lives in the rebuilt pipeline (python -m voice.input /
+        # ./scripts/run_voice.sh), not here.
+        if self._transcriber is None:
+            # The mic was never opened (see _initialize_components), so there is
+            # nothing to release here — just record the disabled state.
+            self._voice_input_disabled = True
+            self._mic_unavailable_reason = "no speech recognizer installed (legacy Vosk/whisper.cpp absent)"
+            self._logger.warning(
+                "Voice input unavailable: no speech recognizer installed. Typing/CLI is "
+                "unaffected; for wake-word voice run the rebuilt pipeline "
+                "(./scripts/run_voice.sh  or  python -m voice.input)."
+            )
+            self._set_voice_state(VoiceAgentState.IDLE)
+            return
+
+        # Start background listening (a usable transcriber is present).
         self._listen_task = asyncio.create_task(self._listen_loop())
         self._process_task = asyncio.create_task(self._process_loop())
-        
+
         self._set_voice_state(VoiceAgentState.LISTENING_WAKE_WORD)
         self._logger.info("Voice agent started - listening for wake word")
     
@@ -416,9 +435,15 @@ class VoiceAgent(BaseAgent):
         
         # Initialize TTS
         await self._initialize_tts()
-        
-        # Initialize microphone
-        await self._initialize_microphone()
+
+        # Only grab the microphone if we can actually transcribe speech. Without
+        # a transcriber, voice input is disabled (see _setup) and holding the mic
+        # open would be pointless — and stopping it later can block. TTS is
+        # unaffected either way.
+        if self._transcriber is not None:
+            await self._initialize_microphone()
+        else:
+            self._logger.debug("Microphone init skipped — no transcriber (voice input disabled)")
     
     async def _initialize_wake_word_detector(self) -> None:
         """Initialize Vosk wake word detector."""
