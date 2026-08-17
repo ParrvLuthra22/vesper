@@ -11,7 +11,7 @@ Tier assignment follows the P02 rules:
       hard to casually undo)
 
 `search_web` targets WebSearchAgent (not SystemAgent) — SystemAgent's
-search_web handler only opens a browser search URL; the real Tavily+Gemini
+search_web handler only opens a browser search URL; the real Tavily+OpenRouter
 search/summarize pipeline lives on WebSearchAgent.
 """
 

@@ -164,7 +164,7 @@ def log_startup_preflight(config: Dict[str, Any], logger: Any) -> None:
     This helps confirm .env keys are being applied when launching with
     `python3 main.py`.
     """
-    from utils.api_keys import get_gemini_api_key, get_openrouter_api_key
+    from utils.api_keys import get_groq_api_key, get_openrouter_api_key
 
     wake_word = str(config.get("voice", {}).get("wake_word", "vesper"))
     tavily_key = (
@@ -173,14 +173,17 @@ def log_startup_preflight(config: Dict[str, Any], logger: Any) -> None:
         or config.get("system", {}).get("apis", {}).get("tavily", {}).get("api_key")
     )
     openrouter_key = get_openrouter_api_key(lambda key: _dot_get(config, key))
-    gemini_key = get_gemini_api_key(lambda key: _dot_get(config, key))
+    # GROQ_API_KEY replaced GEMINI_API_KEY here in PF3: Groq is the only
+    # cloud LLM in the routing path now, and reporting a key nothing reads
+    # was actively misleading during the rate-limit debugging.
+    groq_key = get_groq_api_key(lambda key: _dot_get(config, key))
 
     logger.info(f"Startup preflight | wake_word={wake_word}")
     logger.info(
         "Startup preflight keys | "
         f"TAVILY_API_KEY={'set' if bool(tavily_key) else 'missing'} | "
         f"OPENROUTER_API_KEY={'set' if bool(openrouter_key) else 'missing'} | "
-        f"GEMINI_API_KEY={'set' if bool(gemini_key) else 'missing'}"
+        f"GROQ_API_KEY={'set' if bool(groq_key) else 'missing'}"
     )
 
 
@@ -235,10 +238,12 @@ def check_dependencies() -> bool:
     # Check for optional but recommended packages
     optional_missing = []
     
+    # The planner's LLM. Intent recognition is Groq tool-calling now, not
+    # Gemini — this check followed the actual dependency in PF3.
     try:
-        from google import genai
+        import groq
     except ImportError:
-        optional_missing.append("google-genai (for Gemini-based intent recognition)")
+        optional_missing.append("groq (the LLM behind the planner)")
     
     if missing:
         print("Missing required dependencies:")
@@ -305,7 +310,7 @@ Options:
 Environment Variables:
     VESPER_CONFIG       Path to configuration file
     VESPER_DEBUG        Enable debug mode (1/true/yes)
-    GEMINI_API_KEY      Gemini API key for intent recognition
+    GROQ_API_KEY        Groq API key — the LLM behind the planner
 
 Examples:
     python main.py

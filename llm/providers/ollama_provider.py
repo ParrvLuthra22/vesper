@@ -69,6 +69,13 @@ class OllamaProvider(LLMProvider):
         super().__init__(config)
         self._host = self._get_config("llm.ollama.endpoint", "http://127.0.0.1:11434")
         self._timeout = float(self._get_config("llm.ollama.timeout_seconds", 60.0))
+        # Sent per-request rather than relied on as server-wide env, so the
+        # unload-when-idle behavior holds even against an Ollama the user
+        # started themselves without OLLAMA_KEEP_ALIVE set. On an 8GB
+        # machine this is what returns the model's ~2GB to the OS between
+        # rescues instead of pinning it resident.
+        self._keep_alive = str(self._get_config("llm.ollama.keep_alive", "30s"))
+        self._context_length = int(self._get_config("llm.ollama.context_length", 2048))
         self._client: Optional["OllamaAsyncClient"] = None
 
     async def is_available(self) -> bool:
@@ -109,7 +116,8 @@ class OllamaProvider(LLMProvider):
                 model=model,
                 messages=_normalize_messages_for_ollama(messages),
                 tools=tools or None,
-                options={"temperature": temperature},
+                options={"temperature": temperature, "num_ctx": self._context_length},
+                keep_alive=self._keep_alive,
             )
         except _ollama_sdk.ResponseError as exc:  # type: ignore[union-attr]
             status = getattr(exc, "status_code", None)

@@ -584,3 +584,148 @@ async def test_ollama_provider_normalizes_stringified_tool_call_arguments(monkey
 
     sent_messages = fake_chat.call_args.kwargs["messages"]
     assert sent_messages[1]["tool_calls"][0]["function"]["arguments"] == {"tz": "UTC"}
+
+
+# =============================================================================
+# PF3: 429 survival — ride out the provider's stated reset instead of
+# dropping a turn onto the slow local fallback.
+# =============================================================================
+
+def _groq_rate_limit_error_with_headers(retry_after: str) -> Exception:
+    """A 429 carrying the `retry-after` header Groq actually sends."""
+    import groq
+
+    request = httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    response = httpx.Response(
+        status_code=429, request=request, headers={"retry-after": retry_after}
+    )
+    return groq.RateLimitError("rate limited", response=response, body=None)
+
+
+@pytest.mark.asyncio
+async def test_retry_after_header_is_honored_over_blind_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Groq tells us how long the TPM window needs; waiting exactly that long
+    and retrying keeps the turn on Groq. The old code slept a fixed 0.5s.
+    """
+    fake_create = _patch_groq_client(
+        monkeypatch,
+        [_groq_rate_limit_error_with_headers("1.5"), _groq_response(content="groq answer")],
+    )
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr("llm.router.asyncio.sleep", sleep_mock)
+
+    router = ModelRouter(config=BASE_CONFIG)
+    result = await router.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert isinstance(result, LLMResponse)
+    assert result.provider == "groq"          # never reached the fallback
+    assert fake_create.call_count == 2
+    sleep_mock.assert_awaited_once_with(1.5)  # the stated window, not 0.5s backoff
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_longer_than_the_ceiling_falls_back_without_waiting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 60s reset is not worth stalling the user for; the local model is faster."""
+    _patch_groq_client(monkeypatch, [_groq_rate_limit_error_with_headers("60")])
+    _patch_ollama_client(monkeypatch, _ollama_response(content="fallback answer"))
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr("llm.router.asyncio.sleep", sleep_mock)
+
+    router = ModelRouter(config=BASE_CONFIG)
+    result = await router.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert isinstance(result, LLMResponse)
+    assert result.provider == "ollama"
+    sleep_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_switching_to_local_notifies_the_user(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 3-5s cold model load has to read as deliberate, not as a freeze."""
+    _patch_groq_client(monkeypatch, _groq_connection_error())
+    _patch_ollama_client(monkeypatch, _ollama_response(content="fallback answer"))
+    notices: List[str] = []
+    router = _make_router(monkeypatch)
+
+    result = await router.complete(
+        messages=[{"role": "user", "content": "hi"}], on_status=notices.append
+    )
+
+    assert isinstance(result, LLMResponse)
+    assert any("local" in note.lower() for note in notices)
+
+
+@pytest.mark.asyncio
+async def test_staying_on_groq_emits_no_notice(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The happy path must stay silent — no chatter on a normal turn."""
+    _patch_groq_client(monkeypatch, _groq_response(content="groq answer"))
+    notices: List[str] = []
+    router = _make_router(monkeypatch)
+
+    await router.complete(
+        messages=[{"role": "user", "content": "hi"}], on_status=notices.append
+    )
+
+    assert notices == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_on_status_callback_never_breaks_the_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_groq_client(monkeypatch, _groq_connection_error())
+    _patch_ollama_client(monkeypatch, _ollama_response(content="fallback answer"))
+
+    def exploding(_message: str) -> None:
+        raise RuntimeError("renderer blew up")
+
+    router = _make_router(monkeypatch)
+    result = await router.complete(
+        messages=[{"role": "user", "content": "hi"}], on_status=exploding
+    )
+
+    assert isinstance(result, LLMResponse)
+    assert result.text == "fallback answer"
+
+
+@pytest.mark.asyncio
+async def test_pacing_delays_a_call_that_would_exceed_the_ceiling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Preemptive pacing: after a big spend, the next call waits briefly rather
+    than firing into a 429 it can predict.
+    """
+    _patch_groq_client(monkeypatch, _groq_response(content="ok"))
+    sleep_mock = AsyncMock()
+    monkeypatch.setattr("llm.router.asyncio.sleep", sleep_mock)
+
+    router = ModelRouter(config=BASE_CONFIG)
+    router._get_budget("groq").record(7900)  # over the 7200 effective limit
+
+    await router.complete(messages=[{"role": "user", "content": "hello there"}])
+
+    sleep_mock.assert_awaited_once()
+    assert 0 < sleep_mock.await_args.args[0] <= 4.0
+
+
+@pytest.mark.asyncio
+async def test_local_fallback_is_never_paced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A local model has no per-minute ceiling; pacing it is pure latency."""
+    router = ModelRouter(config=BASE_CONFIG)
+    assert not router._get_budget("ollama").enabled
+
+
+@pytest.mark.asyncio
+async def test_successful_calls_record_their_spend(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_groq_client(monkeypatch, _groq_response(content="ok"))
+    router = _make_router(monkeypatch)
+
+    await router.complete(messages=[{"role": "user", "content": "hi"}])
+
+    assert router._get_budget("groq").used() > 0

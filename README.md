@@ -92,7 +92,11 @@ have.
 
 **Core reasoning & safety**
 - **LLM tool-calling planner** — open vocabulary, no rule-based intent
-  switchboard. Groq primary, Ollama local fallback, automatic retry/backoff.
+  switchboard. Groq primary for every purpose, with a small local Ollama model
+  as the rate-limit/offline rescue. Prompts are trimmed per turn (only the
+  tools plausibly relevant to the request are sent) and calls are paced against
+  the provider's tokens-per-minute ceiling, so multi-step turns finish on Groq
+  instead of 429'ing — see [Tuning for an 8GB Mac](#tuning-for-an-8gb-mac).
 - **Guardian permission gate** — every tool is tiered `safe` / `confirm` /
   `dangerous`; confirm-tier needs an explicit yes, times out to a denial, and is
   appended to a local audit log. A **session policy** lets a restricted surface
@@ -195,7 +199,9 @@ A stranger should be able to reach a working greeting from this section alone.
   **Python 3.10+**.
 - A [Groq](https://console.groq.com) API key **or** [Ollama](https://ollama.com)
   running locally with a model pulled — either one alone is enough to get a
-  greeting; with both, Groq is primary and Ollama is the fallback.
+  greeting; with both, Groq is primary and Ollama is the rescue fallback. On a
+  machine with 8GB of RAM, pull `llama3.2:3b` and read
+  [Tuning for an 8GB Mac](#tuning-for-an-8gb-mac) before pulling anything larger.
 
 ### 1. Main application (Python 3.9–3.11)
 
@@ -277,10 +283,70 @@ python -m voice.output       # Kokoro TTS
 python main.py               # full voice-capable entry point (VoiceAgent instead of CLI)
 ```
 
+## Tuning for an 8GB Mac
+
+Vesper is tuned to stay on Groq for essentially everything and to treat a local
+model as a rescue path, not a daily driver. On 8GB that distinction is the
+whole ballgame: a 7B model at Q4 does not fit alongside macOS and the app, so it
+swaps and drags the entire machine down.
+
+**Staying under Groq's free tier (8k tokens/minute).** Three changes, largest
+first:
+
+| Lever | Effect |
+|---|---|
+| Per-turn tool filtering (`llm.tool_selection`) | Only the tools plausibly relevant to the request are sent, instead of all 27 on every call. ~67% off the tool schema. |
+| Trimmed persona | 813 → 519 tokens, same rules, less padding. |
+| Bounded history replay | Last 4 turns, hard-capped at 800 tokens, so a long session stops inflating every call. |
+
+Measured end to end against real Groq calls: **1,849 → 851 `tokens_in` per
+planning call (-54%)**, which takes an 8k minute from ~4 calls to ~9.
+
+Two mechanisms then keep a burst on Groq rather than dropping it to the local
+model — client-side pacing (a rolling 60s token budget briefly delays a call
+that would cross the ceiling) and honoring the `retry-after` Groq sends on a
+429. A four-turn burst of twelve planning calls completes 12/12 on Groq.
+
+Reproduce either measurement yourself:
+
+```bash
+.venv/bin/python scripts/smoke_token_budget.py   # before/after tokens_in
+.venv/bin/python scripts/smoke_rate_limit.py     # 4 rapid multi-step turns
+```
+
+**The local fallback.** Pull the 3B — not a 7B, and not the coder model:
+
+```bash
+ollama pull llama3.2:3b
+```
+
+Start Ollama with the memory settings that matter on 8GB:
+
+```bash
+./scripts/ollama_env.sh
+```
+
+That sets `OLLAMA_KEEP_ALIVE=30s` (unload when idle, handing ~2GB back to the
+OS), `OLLAMA_CONTEXT_LENGTH=2048` (smaller KV cache), and
+`OLLAMA_MAX_LOADED_MODELS=1`. Vesper also sends `keep_alive` and `num_ctx` on
+every request, so the unload behavior holds even against a server you started by
+hand. Crossing to the local model announces itself ("Switching to local, Sir —
+one moment") so the 3–5s cold load reads as deliberate rather than as a freeze.
+
+**Check headroom before you start:**
+
+```bash
+.venv/bin/python scripts/doctor.py
+```
+
+It reports total RAM, current memory pressure via `vm_stat`, and warns below
+3GB free — the point past which loading even a 3B will swap. It also pings
+Ollama and tells you whether the configured fallback model is actually pulled.
+
 ## Testing
 
 ```bash
-pytest                       # automated unit suite — 250 tests
+pytest                       # automated unit suite — 293 tests
 ```
 
 See [`docs/TESTPLAN.md`](docs/TESTPLAN.md) for the manual acceptance plan (33

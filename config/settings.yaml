@@ -193,17 +193,14 @@ voice:
 # Intent Agent Configuration
 # -----------------------------------------------------------------------------
 intent:
-  # NLU provider: 'ollama', 'pattern', 'gemini', 'openai'
+  # NLU provider: 'ollama', 'pattern', 'openai'
+  #
+  # Legacy v1 setting. IntentAgent is no longer registered (orchestrator/
+  # brain.py) — the Planner's tool-calling *is* intent recognition now, so
+  # nothing in the live path reads this. The Gemini option was removed in
+  # PF3 along with the rest of the dead Gemini plumbing.
   provider: "ollama"
-  
-  # Gemini settings (if using Gemini provider)
-  gemini:
-    model: "gemini-2.0-flash"
-    temperature: 0.3
-    max_tokens: 500
-    api_key: null
-    # API key should be in environment: GEMINI_API_KEY
-  
+
   # OpenAI settings (if using OpenAI provider)
   openai:
     model: "gpt-4"
@@ -578,11 +575,10 @@ web_search:
   # API key for Tavily Search
   tavily_api_key: null
   # You can also use env: TAVILY_API_KEY
-  # LLM provider for query extraction/summarization: auto | gemini | openrouter | local
+  # LLM provider for query extraction/summarization: auto | openrouter | local
+  # ("auto" = OpenRouter when a key is present, otherwise raw Tavily results.
+  # The Gemini option was removed in PF3.)
   llm_provider: "auto"
-  gemini:
-    api_key: null
-    model: "gemini-1.5-flash"
   openrouter:
     api_key: null
     model: "x-ai/grok-3-mini-beta"
@@ -608,29 +604,62 @@ llm:
     provider: "groq"
     model: "openai/gpt-oss-120b"
 
-  # Fallback provider/model, used when the primary is rate-limited (after one
-  # retry) or unreachable.
+  # Fallback provider/model — a RESCUE PATH, not a daily driver.
   #
-  # Set to Google Gemini — its free tier is far more generous than Groq's 8k
-  # tokens/min, so when Groq throttles a heavy turn this catches it, and it's
-  # still free. REQUIRES a valid GEMINI_API_KEY in .env: get one free (no
-  # billing) at https://aistudio.google.com/apikey. Until a valid key is set,
-  # this fallback will fail like any other — but the primary (Groq, trimmed
-  # tool results) already handles normal use on its own.
+  # Reached only when Groq is still rate-limited after riding out its stated
+  # reset window (see llm.rate_limit below), or is unreachable entirely.
   #
-  # Prefer a local, zero-limit fallback instead? Set provider: "ollama" with a
-  # tag you have pulled (e.g. "llama3.2" or "qwen2.5:7b-instruct") and run Ollama.
+  # Deliberately a 3B model. On an 8GB machine a 7B at Q4 does not fit
+  # alongside the OS and the app: it spills to swap and drags the whole Mac
+  # down, which is worse than a slow answer. llama3.2:3b at Q4 is ~2GB, loads
+  # in a few seconds, and answers without paging. Pull it once:
+  #
+  #     ollama pull llama3.2:3b
+  #
+  # Do NOT raise this to a 7B/coder model on 8GB — that is the exact change
+  # that made the machine unusable before.
   fallback:
-    provider: "gemini"
-    model: "gemini-2.0-flash"
+    provider: "ollama"
+    model: "llama3.2:3b"
 
   # Per-purpose overrides. Only the fields present here override the base
-  # primary/fallback tier above (e.g. "chat" keeps provider=groq but swaps in
-  # a smaller/faster model than the "planning" default).
+  # primary/fallback tier above.
+  #
+  # Every purpose stays on Groq as primary — planning, chat, briefing alike.
+  # There is no purpose on this hardware where a local model is the better
+  # default; Ollama is only ever the 429/offline rescue configured above.
   purposes:
     chat:
       primary:
         model: "openai/gpt-oss-20b"
+
+  # Client-side pacing + 429 survival, so a heavy turn stays on Groq rather
+  # than falling to the slow local path.
+  rate_limit:
+    # Groq free tier ceiling. The router tracks its own spend in a rolling
+    # 60s window and briefly delays a call that would cross it, instead of
+    # firing into a guaranteed 429.
+    tokens_per_minute: 8000
+    # Longest the router will wait for a limit to clear before giving up on
+    # the primary.
+    #
+    # Measured, not guessed: across 61 real 429s on this account Groq's stated
+    # reset ran 1.1-15.9s, and in the trimmed-prompt regime the common case
+    # clusters at 4.1-5.3s. A 4s ceiling therefore missed almost every
+    # recoverable limit by a fraction of a second and dropped the turn to the
+    # local model anyway. 6s converts that cluster into a successful Groq
+    # retry while still bailing out on the genuinely long (8s+) stalls, where
+    # a cold 3B really is the faster answer.
+    max_wait_seconds: 6.0
+
+  # Per-turn tool-schema filtering (tools/selection.py). The full catalog is
+  # the single largest fixed cost in every planning prompt, and it was re-sent
+  # on all six iterations of a turn. Filtering to the tools plausibly relevant
+  # to the request cuts it by ~67% on typical commands.
+  #
+  # Set enabled: false to always send the entire catalog (the old behavior).
+  tool_selection:
+    enabled: true
 
   groq:
     # Prefer the GROQ_API_KEY environment variable (.env supported); this is
@@ -640,11 +669,23 @@ llm:
 
   ollama:
     endpoint: "http://127.0.0.1:11434"
-    # qwen3.5:latest is only partially GPU-resident on typical dev hardware
-    # (59%/41% CPU/GPU split observed locally) — a trivial completion measured
-    # 110-160s end to end across runs, so 60s was clipping real (non-hung)
-    # responses. 240s gives headroom above the observed worst case.
-    timeout_seconds: 240
+    # A 3B at Q4 answers in seconds once resident; the cost that matters is
+    # the cold load after keep_alive has unloaded it (~3-5s on an M3). 120s
+    # covers a cold load plus a long generation without clipping a live
+    # response, and still fails fast if the server is wedged.
+    timeout_seconds: 120
+
+    # Passed to the Ollama server when Vesper launches it (scripts/ollama_env.sh,
+    # and documented in the README for an already-running server).
+    #
+    # keep_alive is the important one on 8GB: the model unloads 30s after the
+    # last call, handing its ~2GB back to the OS. Vesper uses Ollama rarely
+    # enough that paying a cold load per rescue is the right trade — a
+    # permanently resident model is 2GB the rest of the machine cannot have.
+    keep_alive: "30s"
+    # Small context = smaller KV cache = less RAM. The planner's trimmed
+    # prompts fit comfortably; this is a fallback, not the deep-context path.
+    context_length: 2048
 
 
 # -----------------------------------------------------------------------------

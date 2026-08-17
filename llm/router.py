@@ -4,13 +4,20 @@ ModelRouter — provider-agnostic entry point for LLM chat/tool-calling completi
 Routing behavior:
     1. Resolve the primary and fallback (provider, model) pair for the given
        `purpose`, honoring any per-purpose override in config.
-    2. Call the primary provider. On a rate-limit (429) response, retry once
-       with exponential backoff, then fall back. On any other provider
-       failure (network error, misconfiguration, ...), fall back immediately.
-    3. Call the fallback provider once. If that also fails, return a
-       `RouterError` (not raise) so the caller can surface a graceful message.
+    2. Pace: if this request's estimated size would push the rolling 60s
+       spend past the primary's tokens-per-minute ceiling, wait briefly
+       first rather than firing into a guaranteed 429.
+    3. Call the primary provider. On a rate-limit (429), wait the window the
+       provider asked for (`retry-after`, capped) and retry on the primary —
+       a TPM reset is usually a second or two, and riding it out keeps the
+       turn on the fast provider. On any other failure, fall back at once.
+    4. Only if the primary is still failing, call the fallback once. If that
+       also fails, return a `RouterError` (not raise) so the caller can
+       surface a graceful message.
 
-Not wired into the Brain yet — see P03.
+The fallback is expected to be a small *local* model (Ollama), which is
+slow to cold-load — so crossing that line emits an `on_status` notice, and
+the router treats it as a rescue path, never a routine one.
 """
 
 from __future__ import annotations
@@ -22,10 +29,18 @@ from typing import Any, Callable, Dict, List, Optional, Union
 from llm.errors import ProviderError, RateLimitError
 from llm.providers import get_provider_class
 from llm.providers.base import LLMProvider
+from llm.token_meter import TokenBudget, estimate_request_tokens
 from llm.types import LLMResponse, RouterError
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+#: Providers whose fallback is a local model that must load into RAM before
+#: it can answer. Crossing to one of these is worth telling the user about.
+LOCAL_PROVIDERS = frozenset({"ollama"})
+
+RATE_LIMIT_WAIT_MESSAGE = "One moment, Sir."
+LOCAL_FALLBACK_MESSAGE = "Switching to local, Sir — one moment."
 
 
 class ModelRouter:
@@ -34,8 +49,15 @@ class ModelRouter:
     #: Number of extra attempts against the primary provider after a 429
     #: before giving up on it and moving to the fallback.
     PRIMARY_MAX_RETRIES = 1
-    #: Base delay for exponential backoff between primary retries.
+    #: Base delay for exponential backoff between primary retries, used only
+    #: when the provider did not tell us how long to wait.
     BACKOFF_BASE_SECONDS = 0.5
+    #: Never wait longer than this for a rate limit to clear before giving
+    #: up on the primary — past it, the local fallback is the faster path.
+    DEFAULT_MAX_RATE_LIMIT_WAIT_SECONDS = 4.0
+    #: Groq's free tier. Used for client-side pacing only; the provider
+    #: remains the authority on whether a call is actually over the line.
+    DEFAULT_TOKENS_PER_MINUTE = 8000
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
@@ -46,6 +68,16 @@ class ModelRouter:
         """
         self._config = config or {}
         self._provider_instances: Dict[str, LLMProvider] = {}
+
+        self._max_rate_limit_wait = float(
+            self._get_config(
+                "llm.rate_limit.max_wait_seconds", self.DEFAULT_MAX_RATE_LIMIT_WAIT_SECONDS
+            )
+        )
+        #: One budget per provider name — only the primary's ceiling matters
+        #: in practice, but keying by provider keeps a local fallback (no
+        #: meaningful limit) from being paced against a cloud tier's numbers.
+        self._budgets: Dict[str, TokenBudget] = {}
 
     def _get_config(self, key: str, default: Any = None) -> Any:
         """Dot-path lookup against the full app config."""
@@ -75,6 +107,42 @@ class ModelRouter:
             provider_cls = get_provider_class(name)
             self._provider_instances[name] = provider_cls(config=self._config)
         return self._provider_instances[name]
+
+    def _get_budget(self, provider_name: str) -> TokenBudget:
+        """
+        The rolling token budget for one provider.
+
+        A local provider has no meaningful per-minute ceiling, so it gets a
+        disabled budget (0 TPM) and is never paced.
+        """
+        if provider_name not in self._budgets:
+            if provider_name in LOCAL_PROVIDERS:
+                tokens_per_minute = 0
+            else:
+                tokens_per_minute = int(
+                    self._get_config(
+                        f"llm.{provider_name}.tokens_per_minute",
+                        self._get_config(
+                            "llm.rate_limit.tokens_per_minute", self.DEFAULT_TOKENS_PER_MINUTE
+                        ),
+                    )
+                )
+            self._budgets[provider_name] = TokenBudget(
+                tokens_per_minute=tokens_per_minute,
+                max_wait_seconds=self._max_rate_limit_wait,
+            )
+        return self._budgets[provider_name]
+
+    @staticmethod
+    def _notify(on_status: Optional[Callable[[str], None]], message: str) -> None:
+        """Deliver an operational notice without ever letting a caller's
+        callback break the completion it is narrating."""
+        if on_status is None:
+            return
+        try:
+            on_status(message)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"[ROUTE] on_status callback raised, ignoring: {exc}")
 
     async def provider_status(self, purpose: str = "planning") -> List[Dict[str, Any]]:
         """
@@ -112,6 +180,7 @@ class ModelRouter:
         temperature: float = 0.3,
         purpose: str = "planning",
         on_token: Optional[Callable[[str], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> Union[LLMResponse, RouterError]:
         """
         Perform a chat/tool-calling completion, routing per config.
@@ -124,9 +193,15 @@ class ModelRouter:
         `on_token`, if given, streams text deltas as they arrive (only
         providers that support it will actually stream; others ignore it
         and return the complete response as usual).
+
+        `on_status`, if given, receives short operational notices — riding
+        out a rate limit, or crossing to the local fallback — so an
+        unavoidable pause reads as deliberate rather than as a hang.
         """
         primary_tier = self._resolve_tier(purpose, "primary")
         fallback_tier = self._resolve_tier(purpose, "fallback")
+
+        await self._pace(primary_tier, messages, tools, purpose, on_status)
 
         primary_result = await self._attempt_tier(
             tier=primary_tier,
@@ -138,6 +213,7 @@ class ModelRouter:
             purpose=purpose,
             max_retries=self.PRIMARY_MAX_RETRIES,
             on_token=on_token,
+            on_status=on_status,
         )
         if isinstance(primary_result, LLMResponse):
             return primary_result
@@ -146,6 +222,12 @@ class ModelRouter:
             f"[ROUTE] primary failed for purpose={purpose!r} ({primary_result}); "
             "falling back"
         )
+
+        # A local fallback has to load the model into RAM before it can
+        # answer — several seconds after an idle period. Say so, or it
+        # reads as a freeze.
+        if fallback_tier.get("provider") in LOCAL_PROVIDERS:
+            self._notify(on_status, LOCAL_FALLBACK_MESSAGE)
 
         fallback_result = await self._attempt_tier(
             tier=fallback_tier,
@@ -157,6 +239,7 @@ class ModelRouter:
             purpose=purpose,
             max_retries=0,
             on_token=on_token,
+            on_status=on_status,
         )
         if isinstance(fallback_result, LLMResponse):
             return fallback_result
@@ -171,6 +254,43 @@ class ModelRouter:
             purpose=purpose,
         )
 
+    async def _pace(
+        self,
+        tier: Dict[str, str],
+        messages: List[Dict[str, str]],
+        tools: Optional[List[Dict[str, Any]]],
+        purpose: str,
+        on_status: Optional[Callable[[str], None]],
+    ) -> None:
+        """
+        Delay briefly if sending this request now would exceed the primary
+        provider's tokens-per-minute ceiling.
+
+        Preemptive: a call that waits 1.2s here would otherwise have been a
+        429 followed by a longer wait *plus* a retry, or a drop to the slow
+        local fallback. Bounded by `llm.rate_limit.max_wait_seconds`.
+        """
+        provider_name = tier.get("provider")
+        if not provider_name:
+            return
+
+        budget = self._get_budget(provider_name)
+        if not budget.enabled:
+            return
+
+        estimated = estimate_request_tokens(messages, tools)
+        delay = budget.delay_for(estimated)
+        if delay <= 0:
+            return
+
+        logger.info(
+            f"[ROUTE] pacing {provider_name} for purpose={purpose!r}: "
+            f"est_tokens={estimated} used_60s={budget.used()} "
+            f"limit={budget.effective_limit} waiting={delay:.1f}s"
+        )
+        self._notify(on_status, RATE_LIMIT_WAIT_MESSAGE)
+        await asyncio.sleep(delay)
+
     async def _attempt_tier(
         self,
         tier: Dict[str, str],
@@ -182,6 +302,7 @@ class ModelRouter:
         purpose: str,
         max_retries: int,
         on_token: Optional[Callable[[str], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> Union[LLMResponse, str]:
         """
         Try one tier (primary or fallback), retrying on rate limits up to
@@ -222,16 +343,39 @@ class ModelRouter:
                     **extra_kwargs,
                 )
                 self._log_success(tier_label, provider_name, model, purpose, response)
+                self._get_budget(provider_name).record(
+                    response.usage.get("total_tokens")
+                    or estimate_request_tokens(messages, tools)
+                )
                 return response
             except RateLimitError as exc:
                 last_error = f"rate_limited: {exc}"
                 self._log_failure(tier_label, provider_name, model, purpose, last_error, attempt)
                 if attempt < max_retries:
-                    backoff = self.BACKOFF_BASE_SECONDS * (2**attempt)
+                    # Prefer the window the provider actually asked for; a
+                    # TPM reset is typically ~1-2s, so riding it out keeps
+                    # the turn on the fast provider. Blind backoff only
+                    # applies when no retry-after was sent.
+                    requested = getattr(exc, "retry_after", None)
+                    backoff = (
+                        float(requested)
+                        if requested
+                        else self.BACKOFF_BASE_SECONDS * (2**attempt)
+                    )
+                    if backoff > self._max_rate_limit_wait:
+                        logger.warning(
+                            f"[ROUTE] {tier_label} ({provider_name}/{model}) rate-limited for "
+                            f"{backoff:.1f}s — longer than the {self._max_rate_limit_wait:.1f}s "
+                            "ceiling; falling back instead of waiting"
+                        )
+                        break
                     logger.warning(
                         f"[ROUTE] {tier_label} ({provider_name}/{model}) rate-limited, "
-                        f"retrying in {backoff:.1f}s (attempt {attempt + 1}/{max_retries})"
+                        f"waiting {backoff:.1f}s then retrying "
+                        f"(attempt {attempt + 1}/{max_retries}, "
+                        f"source={'retry-after' if requested else 'backoff'})"
                     )
+                    self._notify(on_status, RATE_LIMIT_WAIT_MESSAGE)
                     await asyncio.sleep(backoff)
                     continue
                 break

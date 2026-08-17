@@ -574,3 +574,137 @@ async def test_malformed_arguments_gives_up_gracefully_after_max_iterations() ->
     assert result.aborted
     assert result.text == MAX_ITERATIONS_MESSAGE
     assert result.tool_trace == ["add_reminder:error", "add_reminder:error", "add_reminder:error"]
+
+
+# =============================================================================
+# PF3: prompt-size control — tool filtering and a bounded history replay
+# =============================================================================
+
+def _echo_registry() -> ToolRegistry:
+    """A registry spanning two clearly different groups."""
+
+    async def handler(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
+        return "ok"
+
+    registry = ToolRegistry()
+    for name, category in [
+        ("git_commit", "dev"),
+        ("git_status", "dev"),
+        ("set_volume", "system"),
+        ("get_time", "system"),
+        ("get_date", "system"),
+        ("search_web", "web"),
+    ]:
+        registry.register(
+            ToolSpec(name=name, description=f"{name} tool.", category=category, handler=handler)
+        )
+    return registry
+
+
+@pytest.mark.asyncio
+async def test_only_relevant_tools_are_sent_to_the_model() -> None:
+    """The tool schema is the largest fixed cost in the prompt; trim it."""
+    bus = EventBus()
+    registry = _echo_registry()
+    router = _mock_router([LLMResponse(text="Done, Sir.")])
+    planner = _make_planner(router, registry, bus)
+
+    await planner.run("commit this")
+
+    sent = {t["function"]["name"] for t in router.complete.await_args.kwargs["tools"]}
+    assert {"git_commit", "git_status"} <= sent
+    assert "set_volume" not in sent
+
+
+@pytest.mark.asyncio
+async def test_tool_filtering_can_be_disabled_by_config() -> None:
+    bus = EventBus()
+    registry = _echo_registry()
+    router = _mock_router([LLMResponse(text="Done, Sir.")])
+    planner = _make_planner(
+        router, registry, bus, config={"llm": {"tool_selection": {"enabled": False}}}
+    )
+
+    await planner.run("commit this")
+
+    sent = {t["function"]["name"] for t in router.complete.await_args.kwargs["tools"]}
+    assert sent == {spec.name for spec in registry.list_all()}
+
+
+@pytest.mark.asyncio
+async def test_filter_miss_widens_to_the_full_catalog_and_retries() -> None:
+    """
+    A filtering mistake must cost one extra call, never a wrong answer: if
+    the model names a real tool the subset left out, re-ask with everything.
+    """
+    bus = EventBus()
+    registry = _echo_registry()
+    router = _mock_router(
+        [
+            # Model asks for a tool that "commit this" would not have selected.
+            LLMResponse(tool_calls=[ToolCall(name="set_volume", arguments={"level": 20})]),
+            LLMResponse(text="Volume set, Sir."),
+        ]
+    )
+    planner = _make_planner(router, registry, bus)
+
+    result = await planner.run("commit this")
+
+    assert result.text == "Volume set, Sir."
+    assert router.complete.await_count == 2
+    second_call = {t["function"]["name"] for t in router.complete.await_args_list[1].kwargs["tools"]}
+    assert second_call == {spec.name for spec in registry.list_all()}
+
+
+@pytest.mark.asyncio
+async def test_a_genuinely_unknown_tool_still_reports_no_such_tool() -> None:
+    """Widening only helps for tools that exist; hallucinations fall through."""
+    bus = EventBus()
+    registry = _echo_registry()
+    router = _mock_router(
+        [
+            LLMResponse(tool_calls=[ToolCall(name="launch_missiles", arguments={})]),
+            LLMResponse(text="I couldn't, Sir."),
+        ]
+    )
+    planner = _make_planner(router, registry, bus)
+
+    result = await planner.run("commit this")
+
+    assert "launch_missiles:unknown_tool" in result.tool_trace
+
+
+@pytest.mark.asyncio
+async def test_history_replay_is_capped_to_recent_turns() -> None:
+    """Unbounded history is what silently inflated every planning call."""
+    bus = EventBus()
+    router = _mock_router([LLMResponse(text="Noted, Sir.")])
+    planner = _make_planner(router, _echo_registry(), bus)
+
+    history = [{"user": f"question {i}", "response": f"answer {i}"} for i in range(20)]
+    await planner.run("and now", recent_context=history)
+
+    messages = router.complete.await_args.kwargs["messages"]
+    replayed = [m["content"] for m in messages if m["role"] in ("user", "assistant")]
+    assert "question 19" in replayed          # newest kept
+    assert "question 0" not in replayed       # oldest dropped
+    assert len(replayed) <= 9                 # 4 turns x 2 + the new user message
+
+
+@pytest.mark.asyncio
+async def test_a_huge_single_turn_is_dropped_from_history() -> None:
+    """One pasted log must not blow the whole token budget on its own."""
+    bus = EventBus()
+    router = _mock_router([LLMResponse(text="Noted, Sir.")])
+    planner = _make_planner(router, _echo_registry(), bus)
+
+    history = [
+        {"user": "here is a log", "response": "x " * 20000},
+        {"user": "short one", "response": "fine"},
+    ]
+    await planner.run("and now", recent_context=history)
+
+    messages = router.complete.await_args.kwargs["messages"]
+    replayed = [m["content"] for m in messages if m["role"] in ("user", "assistant")]
+    assert "short one" in replayed
+    assert not any(len(str(c)) > 10000 for c in replayed)

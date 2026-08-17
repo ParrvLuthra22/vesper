@@ -159,9 +159,18 @@ class VesperCLI:
             streamed["tokens"] += 1
             self._console.print(token, style=self._vesper_style, markup=False, highlight=False, end="")
 
+        def on_status(message: str) -> None:
+            # Operational notice (rate-limit wait, local-model switch), not
+            # part of the reply. Printed dim on its own line so a multi-second
+            # pause reads as deliberate; deliberately does NOT touch
+            # streamed["tokens"], which tracks reply text only.
+            if streamed["tokens"] > 0:
+                self._console.print()
+            self._console.print(message, style="dim", markup=False, highlight=False)
+
         self._suppress_voice_output = True
         try:
-            result = await self._brain.handle_user_text(text, on_token=on_token)
+            result = await self._brain.handle_user_text(text, on_token=on_token, on_status=on_status)
         finally:
             self._suppress_voice_output = False
 

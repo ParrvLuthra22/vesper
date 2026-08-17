@@ -131,8 +131,14 @@ def _register() -> None:
             "may be a place name, a 'lat,lon' pair, or omitted to use the configured "
             "default. Returns a one-line summary."
         ),
+        # `location` accepts null as well as a string: it is genuinely optional,
+        # and models routinely express "no location given" as an explicit null.
+        # Declaring only "string" made Groq's tool-call validator reject that
+        # with a 400 (tool_use_failed), which broke plain "what's the weather"
+        # — the handler already treats null and "" the same way.
         parameters={"type": "object", "properties": {
-            "location": {"type": "string", "description": "Place name or 'lat,lon'; optional."}}},
+            "location": {"type": ["string", "null"],
+                         "description": "Place name or 'lat,lon'; optional."}}},
         tier="safe", handler=current_weather, category="general",
     ))
 

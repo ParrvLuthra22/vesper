@@ -43,8 +43,10 @@ from schemas.events import (
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
 )
+from llm.token_meter import estimate_tokens
 from tasks.queue import TaskQueue
 from tools.registry import ToolRegistry, ToolSpec, get_registry
+from tools.selection import select_tools, to_schema
 from tracing.tracer import IterationTrace, ToolTrace, Tracer, TurnTrace
 from utils.logger import get_logger
 
@@ -56,6 +58,18 @@ logger = get_logger(__name__)
 
 MAX_ITERATIONS = 6
 TOOL_EXECUTION_TIMEOUT_SECONDS = 30.0
+
+#: How many prior user/assistant exchanges to replay into the prompt. The
+#: whole history was previously re-sent every iteration, so a long session
+#: silently inflated every planning call until it hit the provider's
+#: tokens/minute ceiling. Four turns keeps referential phrasing ("do that
+#: again", "the second one") working without unbounded growth.
+MAX_CONTEXT_TURNS = 4
+
+#: Hard ceiling on the replayed history, applied after the turn cap — one
+#: pathological turn (a pasted log, a long briefing) can exceed the token
+#: budget on its own, so the oldest turns are dropped until it fits.
+MAX_CONTEXT_TOKENS = 800
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PERSONA_PATH = PROJECT_ROOT / "config" / "persona.md"
@@ -106,6 +120,7 @@ class Planner:
         persona_path: Path = DEFAULT_PERSONA_PATH,
         max_iterations: int = MAX_ITERATIONS,
         tool_timeout_seconds: float = TOOL_EXECUTION_TIMEOUT_SECONDS,
+        config: Optional[Dict[str, Any]] = None,
     ):
         self._router = router
         self._registry = registry or get_registry()
@@ -116,6 +131,9 @@ class Planner:
         self._persona = _load_persona(persona_path)
         self._max_iterations = max_iterations
         self._tool_timeout_seconds = tool_timeout_seconds
+        self._tool_selection_enabled = bool(
+            ((config or {}).get("llm", {}).get("tool_selection", {}) or {}).get("enabled", True)
+        )
 
     async def run(
         self,
@@ -126,6 +144,7 @@ class Planner:
         observations: Optional[List[str]] = None,
         memories: Optional[List[str]] = None,
         on_token: Optional[Callable[[str], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> PlannerResult:
         """
         Run the tool-calling loop for one piece of user text.
@@ -140,6 +159,11 @@ class Planner:
         iteration so a caller (e.g. the CLI) can render Vesper's final
         text reply as it streams in — iterations that end up calling a
         tool instead simply have little or no text to stream.
+
+        `on_status`, if given, receives short operational notices from the
+        router — waiting out a rate limit, or switching to the local
+        fallback — so a several-second pause reads as deliberate rather
+        than as a freeze. These are never part of the reply text.
         """
         turn_start = time.monotonic()
         turn_trace = self._tracer.start_turn(user_text)
@@ -153,13 +177,18 @@ class Planner:
         messages.extend(self._context_to_messages(recent_context or []))
         messages.append({"role": "user", "content": user_text})
 
-        tools_schema = self._registry.to_llm_schema()
+        tools_schema, sent_tool_names = self._select_tools_for(user_text)
+        widened = False
         trace: List[str] = []
 
         for iteration in range(self._max_iterations):
             iteration_trace = turn_trace.start_iteration(iteration, list(messages), purpose)
             response = await self._router.complete(
-                messages=messages, tools=tools_schema, purpose=purpose, on_token=on_token
+                messages=messages,
+                tools=tools_schema,
+                purpose=purpose,
+                on_token=on_token,
+                on_status=on_status,
             )
             iteration_trace.end(response)
 
@@ -172,6 +201,21 @@ class Planner:
                 await self._emit_plan_trace(user_text, trace)
                 result = PlannerResult(text=response.text, tool_trace=trace)
                 return self._finish_turn(turn_trace, turn_start, result)
+
+            # Safety net for tool filtering: if the model named a real tool
+            # that this turn's subset left out, the filter guessed wrong.
+            # Re-ask once with the full catalog rather than reporting a
+            # bogus "no such tool" — a filtering miss costs one extra call,
+            # never a wrong answer.
+            if not widened and self._names_missing_from_subset(response.tool_calls, sent_tool_names):
+                widened = True
+                tools_schema = self._registry.to_llm_schema()
+                sent_tool_names = {t["function"]["name"] for t in tools_schema}
+                logger.info(
+                    "[Planner] tool filter missed a needed tool; widening to the "
+                    f"full catalog ({len(tools_schema)} tools) and retrying"
+                )
+                continue
 
             messages.append(self._assistant_tool_call_message(response))
             for tool_call in response.tool_calls:
@@ -400,17 +444,73 @@ class Planner:
             )
         )
 
+    def _select_tools_for(self, user_text: str) -> tuple:
+        """
+        Choose this turn's tool subset and report what it saved.
+
+        Returns `(schema, sent_names)`. Filtering can be disabled with
+        `llm.tool_selection.enabled: false`, which restores the previous
+        behavior of sending the entire catalog on every call.
+        """
+        full_schema = self._registry.to_llm_schema()
+        if not self._tool_selection_enabled:
+            return full_schema, {t["function"]["name"] for t in full_schema}
+
+        selected, reason = select_tools(self._registry, user_text)
+        schema = to_schema(selected)
+
+        before = estimate_tokens(full_schema)
+        after = estimate_tokens(schema)
+        saved_pct = (100.0 * (1 - after / before)) if before else 0.0
+        logger.info(
+            f"[Planner] tool selection: {len(schema)}/{len(full_schema)} tools "
+            f"({reason}) tokens_tools_before={before} tokens_tools_after={after} "
+            f"saved={saved_pct:.0f}%"
+        )
+        return schema, {t["function"]["name"] for t in schema}
+
+    def _names_missing_from_subset(
+        self, tool_calls: List[ToolCall], sent_names: set
+    ) -> bool:
+        """
+        True if the model called a tool that exists in the registry but was
+        not offered this turn — i.e. the filter, not the model, is at fault.
+
+        A name that is in neither the subset nor the registry is an ordinary
+        hallucination; widening would not help, so it falls through to the
+        normal "no such tool" path.
+        """
+        return any(
+            call.name not in sent_names and self._registry.get(call.name) is not None
+            for call in tool_calls
+        )
+
     @staticmethod
     def _context_to_messages(recent_context: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-        messages: List[Dict[str, str]] = []
-        for turn in recent_context:
-            user_text = turn.get("user")
-            if user_text:
-                messages.append({"role": "user", "content": str(user_text)})
-            response_text = turn.get("response")
-            if response_text:
-                messages.append({"role": "assistant", "content": str(response_text)})
-        return messages
+        """
+        Replay recent history as chat messages, newest-biased and bounded.
+
+        Two caps apply, tightest-first: at most MAX_CONTEXT_TURNS exchanges,
+        then oldest turns are dropped until the replay fits inside
+        MAX_CONTEXT_TOKENS. Without these the prompt grew for the length of
+        the session and every planning call got more expensive than the last.
+        """
+        recent = list(recent_context)[-MAX_CONTEXT_TURNS:]
+
+        while recent:
+            messages: List[Dict[str, str]] = []
+            for turn in recent:
+                user_text = turn.get("user")
+                if user_text:
+                    messages.append({"role": "user", "content": str(user_text)})
+                response_text = turn.get("response")
+                if response_text:
+                    messages.append({"role": "assistant", "content": str(response_text)})
+            if estimate_tokens(messages) <= MAX_CONTEXT_TOKENS or len(recent) == 1:
+                return messages
+            recent = recent[1:]
+
+        return []
 
     @staticmethod
     def _assistant_tool_call_message(response: LLMResponse) -> Dict[str, Any]:

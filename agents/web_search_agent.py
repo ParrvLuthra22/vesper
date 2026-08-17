@@ -1,4 +1,4 @@
-"""WebSearchAgent - web search + summarization pipeline using Tavily and Gemini."""
+"""WebSearchAgent - web search + summarization pipeline using Tavily and OpenRouter."""
 
 from __future__ import annotations
 
@@ -10,13 +10,6 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional
 from urllib import request as urlrequest
 
-try:
-    import google.generativeai as genai
-
-    GEMINI_AVAILABLE = True
-except Exception:  # pragma: no cover - optional dependency import
-    genai = None  # type: ignore
-    GEMINI_AVAILABLE = False
 
 try:
     from tavily import TavilyClient
@@ -35,7 +28,7 @@ from schemas.events import (
     VoiceOutputEvent,
 )
 from utils.applescript import run_applescript
-from utils.api_keys import get_gemini_api_key, get_openrouter_api_key
+from utils.api_keys import get_openrouter_api_key
 
 
 TRIGGER_PHRASES = [
@@ -68,7 +61,6 @@ class WebSearchAgent(BaseAgent):
     ):
         super().__init__(name=name or "WebSearchAgent", event_bus=event_bus, config=config)
         self._tavily_client: Optional[TavilyClient] = None
-        self._gemini_model = None
         self._openrouter_api_key: Optional[str] = None
         self._openrouter_model: str = "x-ai/grok-3-mini-beta"
         self._openrouter_endpoint: str = "https://openrouter.ai/api/v1/chat/completions"
@@ -82,7 +74,7 @@ class WebSearchAgent(BaseAgent):
         return [
             AgentCapability(
                 name="web_search",
-                description="Searches web with Tavily and summarizes with Gemini",
+                description="Searches web with Tavily and summarizes with OpenRouter",
                 input_events=["IntentRecognizedEvent"],
                 output_events=["VoiceOutputEvent", "HUDSearchResultsEvent"],
             )
@@ -96,7 +88,6 @@ class WebSearchAgent(BaseAgent):
 
     async def _teardown(self) -> None:
         self._tavily_client = None
-        self._gemini_model = None
         self._cache.clear()
 
     def _initialize_clients(self) -> None:
@@ -124,14 +115,6 @@ class WebSearchAgent(BaseAgent):
         else:
             self._logger.warning("TAVILY_API_KEY not configured; web results retrieval disabled")
 
-        gemini_key = get_gemini_api_key(self._get_config)
-        if gemini_key and GEMINI_AVAILABLE and genai is not None:
-            genai.configure(api_key=gemini_key)
-            self._gemini_model = genai.GenerativeModel(model_name="gemini-1.5-flash")
-        elif gemini_key and (not GEMINI_AVAILABLE or genai is None):
-            self._logger.warning("Gemini key found but google-generativeai SDK is unavailable")
-        else:
-            self._logger.info("Gemini not configured for web search LLM tasks")
 
         if self._openrouter_api_key:
             self._logger.info(f"OpenRouter enabled for web search LLM tasks: model={self._openrouter_model}")
@@ -143,23 +126,18 @@ class WebSearchAgent(BaseAgent):
             and not self._openrouter_api_key
         ):
             self._logger.warning("web_search.llm_provider=openrouter but OPENROUTER_API_KEY is missing")
-        if self._llm_provider == "gemini" and self._gemini_model is None:
-            self._logger.warning("web_search.llm_provider=gemini but Gemini is not available")
-
-        if self._llm_provider not in {"auto", "gemini", "openrouter", "local"}:
+        if self._llm_provider not in {"auto", "openrouter", "local"}:
             self._logger.warning(
                 f"Unknown web_search.llm_provider='{self._llm_provider}', falling back to auto"
             )
             self._llm_provider = "auto"
 
     def _is_configured(self) -> bool:
-        return bool(self._tavily_client and (self._gemini_model is not None or self._openrouter_api_key))
+        return bool(self._tavily_client and self._openrouter_api_key)
 
     def _should_prefer_openrouter(self) -> bool:
         if self._llm_provider == "openrouter":
             return True
-        if self._llm_provider == "gemini":
-            return False
         if self._llm_provider == "local":
             return False
         # auto
@@ -168,39 +146,15 @@ class WebSearchAgent(BaseAgent):
     def _has_any_llm(self) -> bool:
         if self._llm_provider == "local":
             return True
-        if self._should_prefer_openrouter():
-            return bool(self._openrouter_api_key)
-        return self._gemini_model is not None or bool(self._openrouter_api_key)
+        return bool(self._openrouter_api_key)
 
     async def _generate_text(self, prompt: str) -> str:
-        if self._llm_provider == "local":
+        # OpenRouter is the only LLM this agent has left (Gemini's path was
+        # removed in PF3), so the old prefer-then-fall-back ladder collapses
+        # to a single call.
+        if self._llm_provider == "local" or not self._openrouter_api_key:
             return ""
-        if self._should_prefer_openrouter() and self._openrouter_api_key:
-            text = await self._call_openrouter(prompt)
-            if text:
-                return text
-        if self._gemini_model is not None:
-            text = await self._call_gemini(prompt)
-            if text:
-                return text
-        if self._openrouter_api_key:
-            return await self._call_openrouter(prompt)
-        return ""
-
-    async def _call_gemini(self, prompt: str) -> str:
-        if self._gemini_model is None:
-            return ""
-
-        def _run() -> str:
-            response = self._gemini_model.generate_content(prompt)
-            return (getattr(response, "text", "") or "").strip()
-
-        loop = asyncio.get_running_loop()
-        try:
-            return await loop.run_in_executor(None, _run)
-        except Exception as exc:
-            self._logger.warning(f"Gemini call failed in WebSearchAgent: {exc}")
-            return ""
+        return await self._call_openrouter(prompt)
 
     async def _call_openrouter(self, prompt: str) -> str:
         if not self._openrouter_api_key:
@@ -343,7 +297,7 @@ class WebSearchAgent(BaseAgent):
         """
         Handle a Planner tool-call routed over the bus (the search_web tool).
 
-        Runs the same Tavily+Gemini/OpenRouter search-and-summarize pipeline
+        Runs the same Tavily+OpenRouter search-and-summarize pipeline
         as _handle_intent, but takes an explicit query parameter and answers
         with an ActionResultEvent instead of only speaking the result.
         """

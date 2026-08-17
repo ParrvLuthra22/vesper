@@ -32,6 +32,31 @@ except Exception:  # pragma: no cover - optional dependency
     GROQ_SDK_AVAILABLE = False
 
 
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    """
+    Pull the wait Groq asked for out of a 429 response.
+
+    Groq sends `retry-after` (seconds) and the more precise
+    `x-ratelimit-reset-tokens` (e.g. "2.5s") on a token-per-minute trip.
+    Either is far better than guessing: the reset on an 8k TPM limit is
+    typically a second or two, so the turn can stay on Groq.
+    """
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+
+    for name in ("retry-after", "x-ratelimit-reset-tokens", "x-ratelimit-reset-requests"):
+        raw = headers.get(name)
+        if not raw:
+            continue
+        try:
+            return float(str(raw).strip().rstrip("s"))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
 @register_provider("groq")
 class GroqProvider(LLMProvider):
     """Routes completions through Groq's OpenAI-compatible chat API."""
@@ -82,11 +107,15 @@ class GroqProvider(LLMProvider):
                 return await self._complete_streamed(client, kwargs, model, on_token, start)
             response = await client.chat.completions.create(**kwargs)
         except _GroqRateLimitError as exc:
-            raise RateLimitError(f"Groq rate limit: {exc}") from exc
+            raise RateLimitError(
+                f"Groq rate limit: {exc}", retry_after=_retry_after_seconds(exc)
+            ) from exc
         except _GroqAPIStatusError as exc:
             status = getattr(exc, "status_code", None)
             if status == 429:
-                raise RateLimitError(f"Groq rate limit ({status}): {exc}") from exc
+                raise RateLimitError(
+                    f"Groq rate limit ({status}): {exc}", retry_after=_retry_after_seconds(exc)
+                ) from exc
             raise ProviderError(f"Groq API error ({status}): {exc}") from exc
         except (_GroqAPIConnectionError, _GroqAPITimeoutError) as exc:
             raise ProviderError(f"Groq network error: {exc}") from exc

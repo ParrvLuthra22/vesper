@@ -417,6 +417,7 @@ class Brain:
             event_bus=self._event_bus,
             tracer=self._tracer,
             task_queue=self._task_queue,
+            config=self._config,
         )
 
         # MCP bridge (P07): connects to configured MCP servers (Gmail, ...)
@@ -1158,6 +1159,7 @@ class Brain:
         text: str,
         correlation_id: Optional[UUID] = None,
         on_token: Optional[Callable[[str], None]] = None,
+        on_status: Optional[Callable[[str], None]] = None,
     ) -> PlannerResult:
         """
         Run one piece of user text (voice or typed) through the Planner and
@@ -1179,6 +1181,11 @@ class Brain:
         streaming (see Planner.run) — callers that use it should treat
         the still-emitted VoiceOutputEvent as informational only, since
         they've already rendered the reply as it streamed in.
+
+        `on_status`, if given, receives short operational notices from the
+        routing layer (waiting out a rate limit, switching to the local
+        model). They are display-only and never enter the reply text or
+        the conversation history.
         """
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
@@ -1201,6 +1208,7 @@ class Brain:
                 observations=pending_observations,
                 memories=relevant_memories,
                 on_token=on_token,
+                on_status=on_status,
             )
         finally:
             self._active_turns -= 1
