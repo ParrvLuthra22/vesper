@@ -149,8 +149,12 @@ have.
   confirmations, `/trace` `/tools` `/status`.
 - **HUD** (Tauri) — frameless always-on-top panel: serif voice lines, collapsing
   mono traces, gold call-outs, confirmation cards, a breathing star.
-- **Voice** — openWakeWord → VAD → faster-whisper in; Kokoro-82M TTS out; a
-  cinematic wake reveal.
+- **Voice** — openWakeWord → VAD → faster-whisper (`base.en`) in; Kokoro-82M TTS
+  out (`bm_lewis`, the lowest-register British voice by measurement); a
+  cinematic wake reveal. Verified end to end: wake → flare → transcript →
+  Groq → spoken reply. Speech is queued while the local LLM rescue holds
+  memory, so an 8GB machine never carries both. See
+  [Voice](#voice-wake--stt--tts).
 - **Discord remote** — mobile access with no app: owner-only, dangerous tools
   disabled entirely, confirm-tier requiring an explicit remote approval (the
   request id or a ✅ reaction — never a bare "yes").
@@ -286,6 +290,48 @@ python -m voice.input        # wake word + STT   (needs voice/requirements.txt)
 python -m voice.output       # Kokoro TTS
 python main.py               # full voice-capable entry point (VoiceAgent instead of CLI)
 ```
+
+## Voice (wake · STT · TTS)
+
+Three local models, none of them large: openWakeWord for the wake word,
+faster-whisper `base.en` for speech-to-text, Kokoro-82M for speech-out.
+Nothing but the planning call leaves the machine.
+
+**Setup** (model files are gitignored — download once):
+
+```bash
+pip install -r voice/requirements.txt
+brew install espeak-ng                      # Kokoro's phonemizer data
+cd voice/models
+curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
+curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+```
+
+**Run** (three processes — voice is just another gateway client):
+
+```bash
+python -m gateway.server     # the brain
+python -m voice.input        # wake word + STT
+python -m voice.output       # Kokoro TTS
+# or: ./scripts/run_voice.sh  (starts gateway + input with a shared token)
+```
+
+**Measured on an 8GB M3:**
+
+| stage | model | load | run |
+|---|---|---|---|
+| wake | openWakeWord `hey_jarvis` | 0.4s | per-frame, negligible |
+| STT | faster-whisper `base.en` int8 | 3.5s | 0.14× realtime |
+| TTS | Kokoro-82M `bm_lewis` | 1.9s | 0.55× realtime, ~520MB resident |
+
+Both STT and TTS run faster than realtime, so neither is the bottleneck — the
+LLM call is.
+
+**The custom wake word** is the one piece not finished: `hey_jarvis` is the
+working default, and "wake up daddy's home" needs ~30 recordings of your voice
+plus a 4–8 hour GPU run. `voice/TRAINING.md` has the exact steps including a
+free Colab path; `voice.input.wake_model_fallback` lets you set the custom name
+now and keep working until the `.onnx` exists.
 
 ## Semantic memory
 

@@ -133,6 +133,24 @@ class ModelRouter:
             )
         return self._budgets[provider_name]
 
+    async def _announce_local_model(self, active: bool, model: str) -> None:
+        """
+        Broadcast that the local LLM is (no longer) holding memory.
+
+        Best-effort and never fatal: the router is a library and may run with
+        no bus at all (tests, scripts), so a missing or failing bus simply
+        means no one is listening — never a failed completion.
+        """
+        try:
+            from bus.event_bus import get_event_bus
+            from schemas.events import LocalModelStateEvent
+
+            await get_event_bus().emit(
+                LocalModelStateEvent(active=active, model=model, source="ModelRouter")
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"[ROUTE] could not announce local-model state: {exc}")
+
     @staticmethod
     def _notify(on_status: Optional[Callable[[str], None]], message: str) -> None:
         """Deliver an operational notice without ever letting a caller's
@@ -226,21 +244,32 @@ class ModelRouter:
         # A local fallback has to load the model into RAM before it can
         # answer. Measured on an 8GB M3: ~0.9s warm, but 37.8s cold when the
         # machine is already down to ~1GB free. Say so, or it reads as a hang.
-        if fallback_tier.get("provider") in LOCAL_PROVIDERS:
+        is_local_fallback = fallback_tier.get("provider") in LOCAL_PROVIDERS
+        if is_local_fallback:
             self._notify(on_status, LOCAL_FALLBACK_MESSAGE)
+            # 8GB guard (PF6): announce that ~2.5GB is about to be resident so
+            # voice output queues synthesis instead of loading Kokoro alongside.
+            await self._announce_local_model(True, str(fallback_tier.get("model", "")))
 
-        fallback_result = await self._attempt_tier(
-            tier=fallback_tier,
-            tier_label="fallback",
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            temperature=temperature,
-            purpose=purpose,
-            max_retries=0,
-            on_token=on_token,
-            on_status=on_status,
-        )
+        try:
+            fallback_result = await self._attempt_tier(
+                tier=fallback_tier,
+                tier_label="fallback",
+                messages=messages,
+                tools=tools,
+                tool_choice=tool_choice,
+                temperature=temperature,
+                purpose=purpose,
+                max_retries=0,
+                on_token=on_token,
+                on_status=on_status,
+            )
+        finally:
+            # Always clear the flag, including on failure — a crashed fallback
+            # must not leave voice output muted for the rest of the session.
+            if is_local_fallback:
+                await self._announce_local_model(False, str(fallback_tier.get("model", "")))
+
         if isinstance(fallback_result, LLMResponse):
             return fallback_result
 

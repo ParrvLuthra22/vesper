@@ -91,7 +91,17 @@ voice:
     # Bundled pretrained name ("hey_jarvis", "alexa", "hey_mycroft") OR a path
     # to a custom .onnx in voice/models/ (e.g. "wake_up_daddys_home"). Hot-swap
     # is just this value + a restart — no code change. See voice/TRAINING.md.
+    #
+    # Currently "hey_jarvis": the custom "wake up daddy's home" model has NOT
+    # been trained (it needs ~30 recordings of your own voice and a 4-8hr GPU
+    # run — voice/TRAINING.md has the exact steps, including a free Colab
+    # path). Once voice/models/wake_up_daddys_home.onnx exists, change this
+    # one line to "wake_up_daddys_home" and restart.
     wake_model: "hey_jarvis"
+    # Used when wake_model names a custom .onnx that isn't on disk yet, so the
+    # custom phrase can be set here *before* it is trained without leaving
+    # voice input dead. Set to "" to make a missing model a hard failure.
+    wake_model_fallback: "hey_jarvis"
     wake_threshold: 0.5
     # faster-whisper: small/base English models keep latency low on M-series.
     whisper_model: "base.en"
@@ -111,14 +121,33 @@ voice:
   # and the Kokoro model files in voice/models/ (see voice/output/README.md).
   # ---------------------------------------------------------------------------
   output:
-    enabled: false
-    tts_voice: "bm_george"      # measured British male — butler restraint
+    enabled: true
+    # bm_lewis, chosen by measurement rather than taste: median F0 across the
+    # candidate British/American male voices on the same line was
+    #   am_onyx 88Hz | bm_lewis 100Hz | am_michael 122Hz | bm_fable 123Hz
+    #   bm_daniel 126Hz | bm_george 142Hz | am_eric 161Hz
+    # bm_lewis is the lowest-register *British* voice — 42Hz below the previous
+    # bm_george default — and its delivery is unhurried, which is the butler
+    # restraint the persona asks for. am_onyx sits lower still but is American.
+    tts_voice: "bm_lewis"
     speed: 0.92                 # a touch slower — composed
     lang: "en-gb"
     streaming: true             # speak sentence-by-sentence (no long first-word wait)
     speak_observations: true    # also speak proactive call-outs (serif, not traces)
     model_path: "voice/models/kokoro-v1.0.onnx"
     voices_path: "voice/models/voices-v1.0.bin"
+
+    # 8GB guard (PF6). Kokoro resident is ~520MB and the Ollama rescue model is
+    # ~2.5GB; loading both while the app holds the rest is what pushes this
+    # machine into swap. While the gateway reports the local LLM as active,
+    # synthesis is queued rather than run concurrently, then drains in order.
+    #
+    # This only ever engages on the Ollama rescue path — with Groq primary
+    # (PF3) the local model is not loaded, so nothing is deferred.
+    defer_while_local_llm: true
+    #: Longest a queued line will wait before being spoken anyway, so a stuck
+    #: local model can never silence Vesper permanently.
+    defer_timeout_seconds: 20.0
 
   # Wake word settings (legacy VoiceAgent)
   wake_word: "vesper"

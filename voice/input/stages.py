@@ -6,6 +6,7 @@ the pipeline and its tests import cleanly with none of them installed.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional
@@ -13,6 +14,8 @@ from typing import List, Optional
 import numpy as np
 
 from voice.input.config import VoiceInputConfig
+
+logger = logging.getLogger("vesper.voice")
 
 #: openWakeWord processes 80 ms (1280-sample) windows at 16 kHz.
 _WAKE_WINDOW = 1280
@@ -98,13 +101,40 @@ class WakeDetector:
         try:
             model_ref = self._local_model_path()
             if model_ref is None:
-                # Bundled pretrained name: ensure the base models are downloaded
-                # once, then resolve the name to its shipped .onnx.
-                try:
-                    openwakeword.utils.download_models()
-                except Exception:
-                    pass
-                model_ref = self._resolve_bundled(self._config.wake_model) or self._config.wake_model
+                # Bundled pretrained name. Resolve from disk FIRST: the model
+                # is usually already there, and download_models() is an
+                # unbounded network call that otherwise ran on every single
+                # start — it hung startup for >10 minutes when the release
+                # host was slow. Only reach for the network when the file is
+                # genuinely absent.
+                model_ref = self._resolve_bundled(self._config.wake_model)
+
+                # A custom name (e.g. "wake_up_daddys_home") that is neither a
+                # file on disk nor a bundled model has simply not been trained
+                # yet. Fall back to the configured pretrained model rather than
+                # leaving voice input dead — one line, then carry on.
+                if model_ref is None and self._config.wake_model_fallback:
+                    fallback = self._config.wake_model_fallback
+                    if fallback != self._config.wake_model:
+                        resolved = self._resolve_bundled(fallback)
+                        if resolved is not None:
+                            logger.warning(
+                                "wake model %r not found (not trained yet?); falling back to %r. "
+                                "See voice/TRAINING.md.",
+                                self._config.wake_model, fallback,
+                            )
+                            model_ref = resolved
+
+                if model_ref is None:
+                    logger.info(
+                        "wake model %r not found locally; downloading openWakeWord "
+                        "pretrained models (one time)", self._config.wake_model,
+                    )
+                    try:
+                        openwakeword.utils.download_models()
+                    except Exception as exc:
+                        logger.warning("openWakeWord model download failed: %s", exc)
+                    model_ref = self._resolve_bundled(self._config.wake_model) or self._config.wake_model
 
             self._model = Model(wakeword_models=[model_ref], inference_framework="onnx")
             # The dict key openWakeWord reports scores under (basename without ext).

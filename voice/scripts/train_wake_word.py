@@ -30,11 +30,59 @@ import sys
 SAMPLE_RATE = 16000
 
 
-def synthesize_positives(phrase: str, out_dir: str, n_per_voice: int) -> int:
-    """Generate synthetic positives across every Kokoro voice, with small
-    pitch/speed jitter so the model doesn't overfit one delivery."""
-    import random
+def _write_wav(path: str, audio_float, rate: int) -> None:
     import wave
+
+    import numpy as np
+
+    audio16 = np.clip(np.asarray(audio_float) * 32767, -32768, 32767).astype(np.int16)
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(audio16.tobytes())
+
+
+def _synthesize_kokoro_onnx(phrase: str, out_dir: str, n_per_voice: int) -> int:
+    """
+    Preferred synthesizer: the same kokoro-onnx + model files Vesper already
+    uses for speech output (voice/models/). No extra dependency, no second
+    model download, and it exposes all 54 voices rather than a hand-picked
+    seven — more speaker variety is exactly what a wake model wants.
+    """
+    import random
+
+    import numpy as np
+    import scipy.signal as ss
+
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from voice.output.config import VoiceOutputConfig
+    from voice.output.tts import KokoroTTS
+
+    config = VoiceOutputConfig.from_app_config({"voice": {"output": {"enabled": True}}})
+    tts = KokoroTTS(config)
+    tts.load()
+
+    voices = sorted(tts._kokoro.get_voices())
+    os.makedirs(out_dir, exist_ok=True)
+    count = 0
+    for voice in voices:
+        for i in range(n_per_voice):
+            speed = random.uniform(0.85, 1.15)
+            lang = "en-gb" if voice.startswith("b") else "en-us"
+            audio, rate = tts._kokoro.create(phrase, voice=voice, speed=speed, lang=lang)
+            audio = np.asarray(audio, dtype=np.float32)
+            # openWakeWord features are computed at 16 kHz; Kokoro emits 24 kHz.
+            if rate != SAMPLE_RATE:
+                audio = ss.resample_poly(audio, SAMPLE_RATE, rate)
+            _write_wav(os.path.join(out_dir, f"{voice}_{i:03d}.wav"), audio, SAMPLE_RATE)
+            count += 1
+    return count
+
+
+def _synthesize_kokoro_torch(phrase: str, out_dir: str, n_per_voice: int) -> int:
+    """Fallback: the PyTorch `kokoro` package (pip install kokoro)."""
+    import random
 
     import numpy as np
     from kokoro import KPipeline
@@ -47,13 +95,19 @@ def synthesize_positives(phrase: str, out_dir: str, n_per_voice: int) -> int:
         for i in range(n_per_voice):
             speed = random.uniform(0.85, 1.15)
             audio = np.concatenate([seg.audio for seg in pipe(phrase, voice=voice, speed=speed)])
-            audio16 = np.clip(audio * 32767, -32768, 32767).astype(np.int16)
-            path = os.path.join(out_dir, f"{voice}_{i:03d}.wav")
-            with wave.open(path, "wb") as wf:
-                wf.setnchannels(1); wf.setsampwidth(2); wf.setframerate(SAMPLE_RATE)
-                wf.writeframes(audio16.tobytes())
+            _write_wav(os.path.join(out_dir, f"{voice}_{i:03d}.wav"), audio, SAMPLE_RATE)
             count += 1
     return count
+
+
+def synthesize_positives(phrase: str, out_dir: str, n_per_voice: int) -> int:
+    """Generate synthetic positives across every Kokoro voice, with small
+    speed jitter so the model doesn't overfit one delivery."""
+    try:
+        return _synthesize_kokoro_onnx(phrase, out_dir, n_per_voice)
+    except Exception as exc:
+        print(f"kokoro-onnx synthesis unavailable ({exc}); trying the PyTorch kokoro package")
+        return _synthesize_kokoro_torch(phrase, out_dir, n_per_voice)
 
 
 def main() -> int:

@@ -15,6 +15,7 @@ from schemas.events import (
     BaseEvent,
     BriefingRequestedEvent,
     ConfirmationRequestedEvent,
+    LocalModelStateEvent,
     ObservationEvent,
     PlanCreatedEvent,
     ToolCallFinishedEvent,
@@ -71,6 +72,13 @@ WIRE_SPEC: Dict[Type[BaseEvent], Tuple[str, Extractor]] = {
     WakeEvent: (
         "wake",
         lambda e: {"animate": e.animate},
+    ),
+    # 8GB guard (PF6): tells memory-hungry clients (voice output) that the
+    # local LLM rescue is holding ~2.5GB, so they should queue rather than
+    # load alongside it.
+    LocalModelStateEvent: (
+        "local_model",
+        lambda e: {"active": e.active, "model": e.model},
     ),
 }
 

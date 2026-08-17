@@ -42,6 +42,12 @@ class VoiceInputConfig:
     # Wake stage (openWakeWord). `wake_model` is either a bundled pretrained
     # name ("hey_jarvis", "alexa", "hey_mycroft") or a path to a custom .onnx.
     wake_model: str = "hey_jarvis"
+    #: Used when `wake_model` names a custom .onnx that is not on disk yet —
+    #: e.g. "wake_up_daddys_home" before its one-time training run has been
+    #: done (voice/TRAINING.md). Lets the custom phrase be configured ahead of
+    #: time without leaving voice input dead in the meantime. Set to "" to
+    #: make a missing custom model a hard failure instead.
+    wake_model_fallback: str = "hey_jarvis"
     wake_threshold: float = 0.5
     wake_vad_threshold: float = 0.0  # openWakeWord's optional built-in VAD gate
 
@@ -95,6 +101,7 @@ class VoiceInputConfig:
         return cls(
             enabled=bool(g("enabled", cls.enabled)),
             wake_model=str(g("wake_model", cls.wake_model)),
+            wake_model_fallback=str(g("wake_model_fallback", cls.wake_model_fallback)),
             wake_threshold=float(g("wake_threshold", cls.wake_threshold)),
             wake_vad_threshold=float(g("wake_vad_threshold", cls.wake_vad_threshold)),
             vad_backend=str(g("vad_backend", cls.vad_backend)),

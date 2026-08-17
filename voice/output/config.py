@@ -10,9 +10,10 @@ from typing import Any, Dict
 class VoiceOutputConfig:
     enabled: bool = False
 
-    # Kokoro-82M. A measured, lower-register voice fits the butler restraint;
-    # bm_* are British male (see voice/output/README notes / voices test).
-    tts_voice: str = "bm_george"
+    # Kokoro-82M. A measured, lower-register voice fits the butler restraint.
+    # bm_lewis measured lowest among the British male voices (median F0 ~100Hz
+    # vs bm_george's ~142Hz) — see voice/output/README.md for the full table.
+    tts_voice: str = "bm_lewis"
     speed: float = 0.92  # a touch slower — composed, unhurried
     lang: str = "en-gb"
 
@@ -25,6 +26,11 @@ class VoiceOutputConfig:
     model_path: str = "voice/models/kokoro-v1.0.onnx"
     voices_path: str = "voice/models/voices-v1.0.bin"
     sample_rate: int = 24000  # Kokoro output rate
+
+    # 8GB guard (PF6): queue synthesis while the local LLM rescue holds ~2.5GB,
+    # rather than loading Kokoro's ~520MB alongside it and swapping the machine.
+    defer_while_local_llm: bool = True
+    defer_timeout_seconds: float = 20.0
 
     # Gateway to subscribe to (VoiceOutputEvent -> wire "reply").
     gateway_host: str = "127.0.0.1"
@@ -51,6 +57,8 @@ class VoiceOutputConfig:
             model_path=str(g("model_path", cls.model_path)),
             voices_path=str(g("voices_path", cls.voices_path)),
             sample_rate=int(g("sample_rate", cls.sample_rate)),
+            defer_while_local_llm=bool(g("defer_while_local_llm", cls.defer_while_local_llm)),
+            defer_timeout_seconds=float(g("defer_timeout_seconds", cls.defer_timeout_seconds)),
             gateway_host=str(gw.get("host", cls.gateway_host)),
             gateway_port=int(gw.get("port", cls.gateway_port)),
             gateway_token=str(token),

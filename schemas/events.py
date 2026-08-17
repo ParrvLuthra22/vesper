@@ -607,6 +607,29 @@ class WakeEvent(BaseEvent):
 
 
 @dataclass(frozen=True)
+class LocalModelStateEvent(BaseEvent):
+    """
+    Emitted when the local LLM rescue path (Ollama) becomes active or goes
+    idle, so memory-hungry clients can stay out of its way.
+
+    This exists for the 8GB case (PF6): the Ollama rescue model is ~2.5GB
+    resident and Kokoro TTS is ~520MB, and loading both while the app holds
+    the rest is what pushes the machine into swap. Voice output queues
+    synthesis while `active` is true rather than competing for RAM.
+
+    On the normal Groq path no local model is loaded, so this never fires.
+
+    Attributes:
+        active: True when a local-model call is in flight.
+        model: Which local model, for logs/display.
+    """
+
+    active: bool = False
+    model: str = ""
+    source: str = field(default="router")
+
+
+@dataclass(frozen=True)
 class RoutineTriggeredEvent(BaseEvent):
     """Emitted by the Proactive Engine to request a composed day-routine run
     (proactive/morning_routine.py). The routine itself owns all the
