@@ -15,7 +15,7 @@ from voice.input.audio import FileSource, MicSource
 from voice.input.config import VoiceInputConfig, VoiceTransition
 from voice.input.pipeline import VoiceInputPipeline
 from voice.input.sink import GatewayRestSink
-from voice.input.stages import Transcriber, WakeDetector
+from voice.input.stages import Transcriber, VoiceInputUnavailable, WakeDetector
 
 logger = logging.getLogger("vesper.voice")
 
@@ -79,6 +79,25 @@ def main() -> int:
     except KeyboardInterrupt:
         pipeline.stop()
         logger.info("voice input stopped")
+        return 0
+    except VoiceInputUnavailable as exc:
+        # Raised before the frame loop starts (e.g. sounddevice missing, or
+        # the mic is held by another process). One line, then exit — never a
+        # retry loop against a device that is not coming back this session.
+        logger.warning("Voice input disabled for this session — %s", exc)
+        return 1
+    except Exception as exc:
+        logger.warning(
+            "Voice input disabled for this session — microphone unavailable: %s. "
+            "Run scripts/doctor.py to check the audio stack.",
+            exc,
+        )
+        return 1
+
+    # A permanent stage failure stops run() without raising; report it here so
+    # the exit status reflects that voice never actually started.
+    if pipeline.disabled_reason is not None:
+        return 1
     return 0
 
 

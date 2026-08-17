@@ -892,7 +892,25 @@ class HUDOverlayController:
         self._use_process_mode = platform.system() == "Darwin"
 
     async def start(self) -> None:
-        ui_cfg = (self._config.get("ui") or {}).get("hud") or {}
+        ui_section = self._config.get("ui") or {}
+        ui_cfg = ui_section.get("hud") or {}
+
+        # D4/PF5: this is the LEGACY tkinter overlay, superseded by the Tauri
+        # HUD in hud/. It is off unless explicitly opted back in, and it now
+        # reads the flag that actually describes it. Previously it gated on
+        # `ui.hud.enabled` — which defaults to true — so `ui.legacy_overlay.
+        # enabled: false` documented an intent the code never enforced. Nothing
+        # constructs this controller today, so that gap was latent rather than
+        # live, but "disabled by default" has to be true in the code, not only
+        # in the comment beside it.
+        legacy_cfg = ui_section.get("legacy_overlay") or {}
+        if not bool(legacy_cfg.get("enabled", False)):
+            logger.debug(
+                "Legacy tkinter HUD overlay is disabled (ui.legacy_overlay.enabled); "
+                "the Tauri HUD in hud/ is the active UI"
+            )
+            return
+
         if ui_cfg.get("enabled", True) is False:
             logger.info("HUD disabled via config")
             return
@@ -907,18 +925,29 @@ class HUDOverlayController:
             "background": str(ui_cfg.get("background", "#0a0e1a")),
         }
 
-        if self._use_process_mode:
-            self._hud_process_queue = mp.Queue()
-            self._hud_process = mp.Process(
-                target=_hud_process_main,
-                args=(hud_kwargs, self._hud_process_queue),
-                name="VesperHUDProcess",
-                daemon=True,
-            )
-            self._hud_process.start()
-        else:
-            self._hud = VesperHUDOverlay(**hud_kwargs)
-            self._hud.start()
+        # Every window-system touch is best-effort. Spawning the UI process,
+        # constructing Tk, or an AppKit version mismatch must degrade to "no
+        # overlay" — never take down the startup path that called us. The
+        # child process guards its own Tk import separately (_hud_process_main).
+        try:
+            if self._use_process_mode:
+                self._hud_process_queue = mp.Queue()
+                self._hud_process = mp.Process(
+                    target=_hud_process_main,
+                    args=(hud_kwargs, self._hud_process_queue),
+                    name="VesperHUDProcess",
+                    daemon=True,
+                )
+                self._hud_process.start()
+            else:
+                self._hud = VesperHUDOverlay(**hud_kwargs)
+                self._hud.start()
+        except Exception as exc:
+            logger.warning(f"Legacy HUD overlay could not start, continuing without it: {exc}")
+            self._hud = None
+            self._hud_process = None
+            self._hud_process_queue = None
+            return
 
         self._tokens.append(self._event_bus.subscribe(BaseEvent, self._on_any_event))
         self._tokens.append(self._event_bus.subscribe(ListeningStateChangedEvent, self._on_listening_state))

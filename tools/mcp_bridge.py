@@ -132,16 +132,83 @@ class MCPServerConnection:
         if self._stderr_task is not None:
             self._stderr_task.cancel()
         if self._process is not None:
-            try:
-                if self._process.stdin is not None:
-                    self._process.stdin.close()
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(self._process.wait(), timeout=3.0)
-            except asyncio.TimeoutError:
-                self._process.kill()
+            await self._shutdown_process()
         self._fail_pending(RuntimeError(f"MCP server '{self._name}' stopped"))
+
+    async def _shutdown_process(self) -> None:
+        """
+        Bring the MCP subprocess down cleanly and silently.
+
+        Escalates politely — close stdin (most MCP servers exit on EOF),
+        then SIGTERM, then SIGKILL — waiting briefly at each step. Every
+        signal is guarded: between our check and our call the child may
+        already have exited, and on POSIX that races into ProcessLookupError.
+        That exception surfacing during interpreter shutdown is what printed
+        a "CLI fatal error" traceback on an otherwise clean Ctrl+C.
+
+        A process that is already gone is a success, not an error.
+        """
+        process = self._process
+        if process is None:
+            return
+
+        # 1. EOF on stdin: the standard way an MCP server is asked to stop.
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+        except (ProcessLookupError, BrokenPipeError, OSError, RuntimeError):
+            pass
+
+        if await self._wait_for_exit(process, timeout=2.0):
+            return
+
+        # 2. SIGTERM: give it a chance to run its own cleanup.
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            return  # already exited between the wait timing out and here
+        except Exception as exc:  # pragma: no cover - platform edge cases
+            logger.debug(f"[MCPBridge:{self._name}] terminate() failed: {exc}")
+
+        if await self._wait_for_exit(process, timeout=2.0):
+            return
+
+        # 3. SIGKILL: it had its chance.
+        try:
+            process.kill()
+        except ProcessLookupError:
+            return
+        except Exception as exc:  # pragma: no cover - platform edge cases
+            logger.debug(f"[MCPBridge:{self._name}] kill() failed: {exc}")
+            return
+
+        if not await self._wait_for_exit(process, timeout=2.0):
+            logger.debug(
+                f"[MCPBridge:{self._name}] subprocess did not exit after SIGKILL; "
+                "abandoning it to the OS"
+            )
+
+    async def _wait_for_exit(self, process: Any, timeout: float) -> bool:
+        """
+        Wait up to `timeout` for `process` to exit. True if it is gone.
+
+        Never raises: a lookup error means the child is already reaped, and
+        cancellation during shutdown must not become a visible traceback.
+        """
+        try:
+            await asyncio.wait_for(process.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
+        except ProcessLookupError:
+            return True
+        except asyncio.CancelledError:
+            # We are being torn down mid-wait. Treat the child as handled
+            # rather than propagating a cancellation into the exit path.
+            return True
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"[MCPBridge:{self._name}] wait() failed: {exc}")
+            return True
 
     def _fail_pending(self, exc: BaseException) -> None:
         for future in self._pending.values():
@@ -411,10 +478,24 @@ class MCPBridge:
         )
 
     async def stop(self) -> None:
+        """
+        Stop every connected MCP server.
+
+        One server failing to shut down must not strand the others: each
+        stop is isolated, so the loop always reaches the last connection.
+        Shutdown is best-effort and silent by design — nothing here is
+        worth a traceback on the way out.
+        """
         self._stopping = True
         for task in self._reconnect_tasks.values():
             task.cancel()
         self._reconnect_tasks.clear()
-        for connection in self._connections.values():
-            await connection.stop()
+
+        for name, connection in list(self._connections.items()):
+            try:
+                await connection.stop()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(f"[MCPBridge] '{name}' did not stop cleanly: {exc}")
         self._connections.clear()

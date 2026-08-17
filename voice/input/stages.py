@@ -18,6 +18,23 @@ from voice.input.config import VoiceInputConfig
 _WAKE_WINDOW = 1280
 
 
+class VoiceInputUnavailable(RuntimeError):
+    """
+    A stage cannot work at all and never will this session — a missing
+    dependency, or a model that will not load.
+
+    Distinct from a transient per-frame error on purpose. Stage `load()`
+    is called on every frame, so without this distinction a missing
+    `openwakeword` raised ModuleNotFoundError 16,000 times a second into
+    the pipeline's catch-all, which logged a full traceback for each. The
+    pipeline treats this exception as terminal: one line, then stop.
+    """
+
+
+def _permanent(stage: str, exc: BaseException, fix: str) -> "VoiceInputUnavailable":
+    return VoiceInputUnavailable(f"{stage} unavailable: {exc}. {fix}")
+
+
 class WakeDetector:
     """Wraps openWakeWord. `wake_model` is either a bundled pretrained name
     (e.g. "hey_jarvis") or a path to a custom .onnx (e.g. a trained
@@ -28,6 +45,9 @@ class WakeDetector:
         self._model = None
         self._model_key: Optional[str] = None
         self._buf = np.zeros(0, dtype=np.int16)
+        #: Set once a load has permanently failed, so the next frame re-raises
+        #: from memory instead of retrying the same import.
+        self._load_error: Optional[VoiceInputUnavailable] = None
 
     def _local_model_path(self) -> Optional[str]:
         """A custom model on disk (explicit path or under models_dir)?"""
@@ -61,22 +81,41 @@ class WakeDetector:
     def load(self) -> None:
         if self._model is not None:
             return
-        import openwakeword
-        from openwakeword.model import Model
+        # Called per frame: a previous permanent failure must re-raise
+        # immediately rather than re-attempting the import.
+        if self._load_error is not None:
+            raise self._load_error
 
-        model_ref = self._local_model_path()
-        if model_ref is None:
-            # Bundled pretrained name: ensure the base models are downloaded once,
-            # then resolve the name to its shipped .onnx.
-            try:
-                openwakeword.utils.download_models()
-            except Exception:
-                pass
-            model_ref = self._resolve_bundled(self._config.wake_model) or self._config.wake_model
+        try:
+            import openwakeword
+            from openwakeword.model import Model
+        except ImportError as exc:
+            self._load_error = _permanent(
+                "wake word (openwakeword)", exc, "Install it: pip install openwakeword"
+            )
+            raise self._load_error from exc
 
-        self._model = Model(wakeword_models=[model_ref], inference_framework="onnx")
-        # The dict key openWakeWord reports scores under (basename without ext).
-        self._model_key = Path(model_ref).stem if model_ref.endswith(".onnx") else model_ref
+        try:
+            model_ref = self._local_model_path()
+            if model_ref is None:
+                # Bundled pretrained name: ensure the base models are downloaded
+                # once, then resolve the name to its shipped .onnx.
+                try:
+                    openwakeword.utils.download_models()
+                except Exception:
+                    pass
+                model_ref = self._resolve_bundled(self._config.wake_model) or self._config.wake_model
+
+            self._model = Model(wakeword_models=[model_ref], inference_framework="onnx")
+            # The dict key openWakeWord reports scores under (basename without ext).
+            self._model_key = Path(model_ref).stem if model_ref.endswith(".onnx") else model_ref
+        except Exception as exc:
+            self._load_error = _permanent(
+                f"wake model '{self._config.wake_model}'",
+                exc,
+                "Check voice.input.wake_model in settings.yaml.",
+            )
+            raise self._load_error from exc
 
     def reset(self) -> None:
         self._buf = np.zeros(0, dtype=np.int16)
@@ -205,17 +244,35 @@ class Transcriber:
     def __init__(self, config: VoiceInputConfig):
         self._config = config
         self._model = None
+        self._load_error: Optional[VoiceInputUnavailable] = None
 
     def load(self) -> None:
         if self._model is not None:
             return
-        from faster_whisper import WhisperModel
+        if self._load_error is not None:
+            raise self._load_error
 
-        self._model = WhisperModel(
-            self._config.whisper_model,
-            device=self._config.whisper_device,
-            compute_type=self._config.whisper_compute_type,
-        )
+        try:
+            from faster_whisper import WhisperModel
+        except ImportError as exc:
+            self._load_error = _permanent(
+                "transcription (faster-whisper)", exc, "Install it: pip install faster-whisper"
+            )
+            raise self._load_error from exc
+
+        try:
+            self._model = WhisperModel(
+                self._config.whisper_model,
+                device=self._config.whisper_device,
+                compute_type=self._config.whisper_compute_type,
+            )
+        except Exception as exc:
+            self._load_error = _permanent(
+                f"whisper model '{self._config.whisper_model}'",
+                exc,
+                "Check voice.input.whisper_model in settings.yaml.",
+            )
+            raise self._load_error from exc
 
     def transcribe(self, audio_int16: np.ndarray) -> str:
         self.load()
