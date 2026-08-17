@@ -102,8 +102,12 @@ have.
   appended to a local audit log. A **session policy** lets a restricted surface
   (the remote interface) lower the ceiling further.
 - **Long-term memory** — a nightly + session-end reflection pass distils durable
-  facts/preferences into semantic memory; relevant memories resurface on later
-  turns; "forget X" deletes them.
+  facts/preferences into semantic memory (at most 5 items per reflection, each
+  typed `preference` / `fact` / `pattern`); relevant memories resurface on later
+  turns; "forget X" deletes them. Recall is genuinely semantic — embeddings come
+  from a local MiniLM model, so *"when should I not schedule meetings?"* surfaces
+  *"I train at the gym at 6pm and it's non-negotiable"* despite the two sharing
+  no words. See [Semantic memory](#semantic-memory).
 
 **Productivity (MCP)**
 - **Gmail** — triage, search, thread summarization, reply *drafting* (never
@@ -282,6 +286,59 @@ python -m voice.input        # wake word + STT   (needs voice/requirements.txt)
 python -m voice.output       # Kokoro TTS
 python main.py               # full voice-capable entry point (VoiceAgent instead of CLI)
 ```
+
+## Semantic memory
+
+Memory recall uses **all-MiniLM-L6-v2** running locally on CPU — 384-dim,
+~90MB on disk, no API calls, nothing leaves the machine.
+
+This replaced a hash-based fallback that only ever matched on shared words.
+The difference is not subtle. Against a six-item memory bank with five queries
+each phrased to share as little vocabulary as possible with its target
+(`tests/test_embeddings.py`):
+
+| Embedding | Top-1 accuracy |
+|---|---|
+| Hash (old) | **2/5** — and both hits were stopword accidents; the three misses scored exactly 0.000 on the correct memory |
+| MiniLM (new) | **5/5** |
+
+The acceptance case, stored in one session and retrieved in a new process:
+
+```
+query  : 'when should I not schedule meetings?'
+stored : "I train at the gym at 6pm and it's non-negotiable"
+shared content words: NONE — keyword matching cannot work here
+
+[RAG] retrieve embedding=all-MiniLM-L6-v2 hits=3/37
+      sim=0.355 score=0.523 :: user has a regular gym session scheduled at 6 pm
+```
+
+Reproduce it:
+
+```bash
+.venv/bin/python scripts/smoke_semantic_memory.py --store
+.venv/bin/python scripts/smoke_semantic_memory.py --retrieve   # new process
+```
+
+**Loading is lazy.** Importing torch costs ~4s and ~360MB RSS, and the model
+adds only ~12MB on top of that — so the load is deferred to the first embed
+call and cached process-wide. A session that never touches memory never pays
+it. If the model can't load at all (package missing, no network for the first
+download), the service logs one warning and degrades to the old hash
+embeddings rather than failing.
+
+**Migrating an existing store.** Old and new vectors are the same width but
+mean different things, so anything stored before this change must be
+re-embedded once:
+
+```bash
+.venv/bin/python scripts/migrate_embeddings.py --dry-run   # report first
+.venv/bin/python scripts/migrate_embeddings.py
+```
+
+It backs up `data/chroma_memory` to a timestamped copy, re-embeds into a
+staging collection, and swaps it in only once the counts match — an
+interrupted run leaves the original untouched.
 
 ## Tuning for an 8GB Mac
 

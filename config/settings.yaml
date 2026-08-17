@@ -316,7 +316,19 @@ memory:
     provider: "chroma"  # 'chroma', 'pinecone', 'weaviate'
     persist_directory: "data/chroma_memory"
     collection_name: "vesper_memory"
-    embedding_model: null  # Optional: e.g. sentence-transformers/all-MiniLM-L6-v2
+    # Local sentence embeddings (PF4). all-MiniLM-L6-v2 is 6-layer, 384-dim,
+    # ~90MB on disk, CPU-only — chosen to sit comfortably on an 8GB machine.
+    #
+    # It is loaded lazily on first use and cached process-wide: importing
+    # torch costs ~4s and ~360MB RSS, so a session that never touches memory
+    # never pays it. If the load fails (package missing, no network for the
+    # first download) the service logs one warning and degrades to the old
+    # hash embeddings rather than failing.
+    #
+    # Set to "" (empty string) to force the hash fallback and skip the model
+    # entirely. Changing this value requires re-embedding what is already
+    # stored — run: .venv/bin/python scripts/migrate_embeddings.py
+    embedding_model: "all-MiniLM-L6-v2"
     chunk_size_tokens: 400
     chunk_overlap_tokens: 64
 

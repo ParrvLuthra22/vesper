@@ -12,53 +12,20 @@ Phase 1 goals:
 
 from __future__ import annotations
 
-import hashlib
-import math
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from rag.embeddings import (
+    DEFAULT_MODEL_NAME,
+    HashEmbeddingFunction as _HashEmbeddingFunction,  # re-exported for callers/tests
+    build_embedding_function,
+)
 from utils.logger import get_logger
 
 
 logger = get_logger(__name__)
-
-
-class _HashEmbeddingFunction:
-    """
-    Deterministic local fallback embedding function.
-
-    This is not as semantically strong as transformer embeddings, but keeps the
-    system operational when optional embedding backends are unavailable.
-    """
-
-    def __init__(self, dimension: int = 384):
-        self.dimension = max(64, int(dimension))
-
-    def name(self) -> str:
-        return "hash_fallback_embedding"
-
-    def __call__(self, input: List[str]) -> List[List[float]]:
-        return self.embed_documents(input)
-
-    def embed_documents(self, input: List[str]) -> List[List[float]]:
-        vectors: List[List[float]] = []
-        for text in input:
-            vec = [0.0] * self.dimension
-            for token in (text or "").lower().split():
-                digest = hashlib.sha256(token.encode("utf-8")).digest()
-                idx = int.from_bytes(digest[:4], "big") % self.dimension
-                sign = 1.0 if digest[4] % 2 == 0 else -1.0
-                vec[idx] += sign
-
-            # L2 normalize
-            norm = math.sqrt(sum(v * v for v in vec)) or 1.0
-            vectors.append([v / norm for v in vec])
-        return vectors
-
-    def embed_query(self, input: List[str]) -> List[List[float]]:
-        return self.embed_documents(input)
 
 
 @dataclass
@@ -84,50 +51,56 @@ class ChromaRAGMemoryService:
     ):
         self.persist_directory = persist_directory
         self.collection_name = collection_name
-        self.embedding_model = embedding_model
+        # `embedding_model=None` from a caller means "use the project default"
+        # (local MiniLM). Passing an explicit empty string is how a caller
+        # opts out into the hash fallback — see build_embedding_function.
+        self.embedding_model = DEFAULT_MODEL_NAME if embedding_model is None else embedding_model
         self.chunk_size_tokens = chunk_size_tokens
         self.chunk_overlap_tokens = chunk_overlap_tokens
         self.recency_half_life_days = max(1.0, recency_half_life_days)
 
         self._client = None
         self._collection = None
-        self._embedding_name = "hash-fallback"
+        self._embedding_fn: Any = None
 
         self._init_chroma()
 
+    @property
+    def _embedding_name(self) -> str:
+        """
+        What is actually producing vectors right now.
+
+        Resolved live rather than at construction because the model loads
+        lazily: until the first embed call we do not yet know whether it
+        succeeded or quietly degraded to hashing.
+        """
+        fn = self._embedding_fn
+        if fn is None:
+            return "unknown"
+        effective = getattr(fn, "effective_name", None)
+        return effective if effective is not None else fn.name()
+
     def _init_chroma(self) -> None:
-        """Initialize Chroma client and collection with safe embedding fallback."""
+        """Initialize the Chroma client and collection."""
         try:
             import chromadb
-            from chromadb.utils import embedding_functions
 
-            embedding_fn = None
-
-            if self.embedding_model:
-                try:
-                    embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-                        model_name=self.embedding_model
-                    )
-                    self._embedding_name = self.embedding_model
-                except Exception as exc:
-                    logger.warning(
-                        f"[RAG] Failed to init sentence-transformer embedding '{self.embedding_model}', "
-                        f"falling back to hash embedding. Error: {exc}"
-                    )
-
-            if embedding_fn is None:
-                embedding_fn = _HashEmbeddingFunction()
+            # Construction is cheap and never touches the model — the actual
+            # load happens on the first embed, so importing torch is deferred
+            # out of startup entirely.
+            self._embedding_fn = build_embedding_function(self.embedding_model)
 
             self._client = chromadb.PersistentClient(path=self.persist_directory)
             self._collection = self._client.get_or_create_collection(
                 name=self.collection_name,
-                embedding_function=embedding_fn,
+                embedding_function=self._embedding_fn,
                 metadata={"hnsw:space": "cosine"},
             )
 
             logger.info(
                 f"[RAG] Chroma initialized at '{self.persist_directory}' "
-                f"collection='{self.collection_name}' embedding='{self._embedding_name}'"
+                f"collection='{self.collection_name}' "
+                f"embedding='{self.embedding_model or 'hash-fallback'}' (loads on first use)"
             )
         except Exception as exc:
             raise RuntimeError(f"Failed to initialize Chroma RAG service: {exc}") from exc
@@ -240,6 +213,20 @@ class ChromaRAGMemoryService:
         # Score sort before MMR
         candidates.sort(key=lambda x: x.final_score, reverse=True)
         diversified = self._mmr_select(candidates, top_k=top_k, lambda_mult=mmr_lambda)
+
+        # One line per retrieval showing what matched and how strongly. This
+        # is the evidence that recall is semantic rather than keyword-ish:
+        # a high similarity between a query and a document sharing no words
+        # is only possible with real embeddings.
+        if diversified:
+            preview = "; ".join(
+                f"sim={item.similarity:.3f} score={item.final_score:.3f} :: {item.text[:60]}"
+                for item in diversified
+            )
+            logger.info(
+                f"[RAG] retrieve embedding={self._embedding_name} "
+                f"query={query[:60]!r} hits={len(diversified)}/{len(candidates)} | {preview}"
+            )
 
         return [
             {

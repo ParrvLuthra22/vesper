@@ -97,10 +97,20 @@ opencv-python>=4.10.0     # Local face detection/authentication and camera acces
 numpy>=1.24.0             # Numeric arrays for local face embeddings
 
 # ------------------------------------------------------------------------------
-# Future: Vector Database (for semantic memory)
+# Semantic memory embeddings (PF4)
 # ------------------------------------------------------------------------------
-# chromadb>=0.4.0         # ChromaDB for vector storage
-# sentence-transformers>=2.2.0  # For generating embeddings
+# chromadb itself is pinned in the AI/LLM block above. This is the local
+# embedding model that makes memory recall meaning-based rather than
+# keyword-based: all-MiniLM-L6-v2, 384-dim, ~90MB on disk, CPU-only.
+#
+# It is optional in the strict sense — rag/embeddings.py degrades to the old
+# hash embeddings with a warning if it is missing — but recall is markedly
+# worse without it (measured 2/5 vs 5/5 top-1 on the ranking benchmark in
+# tests/test_embeddings.py), so it is installed by default.
+#
+# Note the footprint: this pulls torch, and importing it costs ~360MB RSS.
+# Loading is lazy and cached, so only sessions that actually touch memory pay.
+sentence-transformers>=2.2.0  # local MiniLM sentence embeddings
 
 # ------------------------------------------------------------------------------
 # Development Dependencies
