@@ -326,12 +326,26 @@ Start Ollama with the memory settings that matter on 8GB:
 ./scripts/ollama_env.sh
 ```
 
-That sets `OLLAMA_KEEP_ALIVE=30s` (unload when idle, handing ~2GB back to the
+That sets `OLLAMA_KEEP_ALIVE=30s` (unload when idle, handing ~2.5GB back to the
 OS), `OLLAMA_CONTEXT_LENGTH=2048` (smaller KV cache), and
 `OLLAMA_MAX_LOADED_MODELS=1`. Vesper also sends `keep_alive` and `num_ctx` on
 every request, so the unload behavior holds even against a server you started by
-hand. Crossing to the local model announces itself ("Switching to local, Sir —
-one moment") so the 3–5s cold load reads as deliberate rather than as a freeze.
+hand. Verified on an 8GB M3: the model loads 100% on GPU at 2.5GB, and
+`ollama ps` shows it gone ~30s after the last call.
+
+Crossing to the local model announces itself ("Switching to local, Sir — one
+moment"), because the cold load is not fast. Measured on this machine:
+
+| | Latency |
+|---|---|
+| Warm (model already resident) | **0.9s** |
+| Cold load with healthy free RAM | a few seconds |
+| Cold load at ~1GB free (real memory pressure) | **37.8s** |
+
+That last row is the case the notice exists for, and the reason `doctor.py`
+warns below 3GB free: the load itself is fine, but paging a 2.5GB model into a
+full machine is not. It is also why this path is a rescue and not the default —
+Groq answers the same prompt in under a second.
 
 **Check headroom before you start:**
 

@@ -224,8 +224,8 @@ class ModelRouter:
         )
 
         # A local fallback has to load the model into RAM before it can
-        # answer — several seconds after an idle period. Say so, or it
-        # reads as a freeze.
+        # answer. Measured on an 8GB M3: ~0.9s warm, but 37.8s cold when the
+        # machine is already down to ~1GB free. Say so, or it reads as a hang.
         if fallback_tier.get("provider") in LOCAL_PROVIDERS:
             self._notify(on_status, LOCAL_FALLBACK_MESSAGE)
 
