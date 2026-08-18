@@ -497,3 +497,17 @@ body {
     transition: none;
   }
 }
+
+/* ------------------------- Local-model rescue -------------------------- */
+/* PF6: Groq is primary; the local Ollama model is the rate-limit rescue and
+   is markedly slower. The star cools toward the ember while it is serving, so
+   a slow turn is legible as "running local" rather than "Vesper hung" — and
+   so a recording session can see it happening before it reaches the cut. */
+.panel.local .star {
+  background: var(--vsp-gold-soft);
+  box-shadow: 0 0 6px 1px rgba(201, 169, 106, 0.25);
+  animation-duration: calc(var(--vsp-breath) * 2);
+}
+.panel.local .composer-input::placeholder {
+  color: var(--vsp-dim);
+}

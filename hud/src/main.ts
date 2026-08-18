@@ -67,6 +67,14 @@ const link = new GatewayLink(
       wakeFlow(msg.animate !== false);
       return;
     }
+    if (msg && msg.type === "local_model") {
+      // PF6: the Ollama rescue is holding memory and answers far slower than
+      // Groq. Worth seeing at a glance — especially while recording, where a
+      // local-model turn is the difference between a composed reel and a
+      // visible stall. Deliberately not body text: the star carries it.
+      panel.classList.toggle("local", msg.active === true);
+      return;
+    }
     stream.handle(msg);
   },
   (state, port) => setConn(state, port),

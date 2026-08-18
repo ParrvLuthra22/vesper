@@ -10,6 +10,7 @@ const TYPE_MS = 30; // typewriter per character
 const IDLE_MS = 9000; // fall idle after this much quiet
 const MAX_NODES = 40; // prune the stream beyond this
 const CONFIRM_MS = 120_000; // Guardian confirmation timeout
+const ECHO_MS = 20_000; // window in which an identical reply is a replayed echo
 
 type ConfirmFn = (requestId: string, approved: boolean) => void;
 
@@ -78,6 +79,8 @@ export class Stream {
   private idleTimer: number | undefined;
   private greetingShown = false;
   private expectingBriefing = false;
+  private lastVoiceText = "";
+  private lastVoiceAt = 0;
 
   constructor(
     private el: HTMLElement,
@@ -106,7 +109,13 @@ export class Stream {
         this.onReply(String(msg.text ?? ""));
         break;
       case "plan":
-        this.startTrace();
+        // PlanCreatedEvent is a SUMMARY the Planner emits when the turn ends
+        // (orchestrator/planner.py calls _emit_plan_trace on every exit path),
+        // so it arrives AFTER the tool events, not before. Treating it as
+        // "start a trace" collapsed the real group and left a spurious empty
+        // one behind for the next reply to clean up. The trace is created by
+        // the first tool_started instead; here it just closes the group.
+        this.collapseTrace();
         break;
       case "tool_started":
         this.stepStart(msg);
@@ -224,6 +233,17 @@ export class Stream {
   // ------------------------------ replies --------------------------------
   private onReply(text: string): void {
     this.collapseTrace();
+
+    // The gateway replays the session greeting in its connect snapshot, and a
+    // wake fires a fresh greeting moments later — on the wake shot that read
+    // as Vesper saying "Good evening, Sir." twice in a row. Collapse an exact
+    // repeat that lands within the echo window onto the existing line instead
+    // of appending a duplicate. Deliberately narrow: a genuine repeat later in
+    // the session still gets its own line.
+    if (text && text === this.lastVoiceText && Date.now() - this.lastVoiceAt < ECHO_MS) {
+      this.scheduleIdle();
+      return;
+    }
     const briefing = this.expectingBriefing || looksLikeBriefing(text);
     this.expectingBriefing = false;
     if (briefing) {
@@ -236,6 +256,8 @@ export class Stream {
 
   private voiceLine(text: string): void {
     this.completeTyping();
+    this.lastVoiceText = text;
+    this.lastVoiceAt = Date.now();
     const line = document.createElement("div");
     line.className = "line voice";
     this.append(line);
