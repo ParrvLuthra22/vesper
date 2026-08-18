@@ -1,472 +1,189 @@
 # Vesper
 
-Vesper is a macOS personal assistant built as an **operator with judgment**, not
-another task executor. It doesn't wait for a command and dispatch it — it watches
-your day through local sensors, reasons over a registry of real capabilities
-(email, calendar, code, music, research, team chat, the shell) with an LLM
-planner, and gates every consequential action behind a permission tier that asks
-before it acts. It notices when something is worth raising — a third context
-switch this hour, an inbox surge, a deep-work block starting — forms a view, and
-says so once, then drops it. It remembers what you tell it across sessions,
-degrades gracefully when a dependency is down, and can run the whole morning for
-you before you've asked: weather, what matters today, the three things that need
-action, and an offer to set up your workspace — spoken aloud and on a heads-up
-display, or reached from your phone over a private Discord channel.
+**An operator with judgment — a proactive AI chief of staff for macOS that observes, reasons, and acts, then tells you when you're getting in your own way.**
+
+Vesper runs locally on a Mac, plans over a registry of ~40 tools with an LLM, and gates every consequential action behind a permission tier before it executes. It watches what you're actually doing — which app has focus, what's on your calendar, what's unread — and when that context is worth raising, it raises it. Voice in, voice out, and a slim always-on-top panel that shows its reasoning as it works.
+
+![Vesper HUD — wake, work, and a call-out](docs/images/vesper-hud-demo.gif)
+
+*The HUD across one exchange: idle → wake flare → spoken greeting → tool traces → reply → the call-out → back to idle.*
+
+---
 
 ## What makes it different
 
-Most assistants are reactive: you ask, they execute. Vesper is written to have a
-point of view. **It observes** — local sensors feed a proactive engine that
-tracks focus, calendar, and inbox pressure. **It forms a view** — cooldown-gated
-rules decide whether what it noticed is actually worth your attention. **It says
-something — respectfully, once** — framed as information plus a question, never a
-command, never repeated, dropped the moment you wave it off. That restraint is
-enforced in code (cooldowns, once-per-day gates, a single call-out doctrine), not
-left to a prompt.
+Most assistants are reactive executors: you ask, they do, they wait. Vesper has a **sensor → proactive engine → persona** loop that lets it *initiate* — sensors observe machine state, the engine decides whether anything is worth saying, and the persona governs how it's said.
+
+The respectful call-out is a first-class feature, not a gimmick: *"Sir, that's your third context switch this hour — are you sure you've finished with the report?"* It is raised once, never repeated, framed as information plus a question rather than a command, and it never blocks what you actually asked for.
+
+![The call-out](docs/images/call-out.png)
+
+That restraint is enforced in code — cooldowns, once-only delivery, and a persona that bans moralising — because an assistant that interrupts badly is worse than one that stays quiet.
+
+---
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Sensing["Sensors (local only)"]
-        Focus["FocusSensor"]
-        Cal["CalendarSensor"]
-        Inbox["InboxSensor"]
+    subgraph Interfaces
+        CLI["CLI<br/><i>rich terminal</i>"]
+        HUD["HUD<br/><i>Tauri panel</i>"]
+        VOICE["Voice<br/><i>wake · STT · TTS</i>"]
+        REMOTE["Discord<br/><i>remote, restricted</i>"]
     end
 
-    subgraph Proactive["Proactive Engine"]
-        Rules["Cooldown-gated rules<br/>context_switch / meeting / focus_block"]
-        Sched["Scheduled routines<br/>morning routine / briefing / reflection"]
+    GW["Gateway<br/><i>FastAPI over the event bus · localhost only</i>"]
+
+    subgraph Proactive["Second input path — Vesper initiates"]
+        SENSORS["Sensors<br/><i>focus · calendar · inbox</i>"]
+        ENGINE["Proactive engine<br/><i>rules · cooldowns · schedules</i>"]
     end
 
-    Bus(["Event Bus (pub/sub)"])
-    Sensing --> Bus
-    Bus --> Proactive
-    Proactive -.->|Observation / RoutineTriggered| Bus
+    PLANNER["LLM Planner<br/><i>tool-calling loop</i>"]
+    ROUTER["Model router<br/><i>Groq primary · Ollama rescue</i>"]
+    GUARD["Guardian<br/><i>safe · confirm · dangerous</i>"]
+    TOOLS["Tool registry<br/><i>27 built-in + MCP</i>"]
+    MCP["MCP servers<br/><i>Gmail · Calendar/Reminders · Notion · GitHub · Spotify · Slack · Discord</i>"]
+    MEM["Semantic memory<br/><i>Chroma + local MiniLM</i>"]
 
-    Bus --> Planner["Planner<br/>LLM tool-calling loop"]
-    Router["ModelRouter<br/>Groq primary · Ollama fallback"] <--> Planner
-    Planner <--> Memory["MemoryAgent<br/>SQLite + Chroma (semantic)"]
-
-    Planner --> Guardian["Guardian<br/>safe · confirm · dangerous<br/>+ remote session policy"]
-    Guardian -->|allow| Registry["Tool Registry"]
-    Guardian -.->|needs confirmation| Bus
-
-    Registry --> Builtin["Builtin + native tools<br/>research · scripts · automation · weather · git"]
-    Registry --> MCP["MCP Bridge"]
-    MCP --> Servers["Gmail · Calendar/Reminders · Notion<br/>GitHub · Spotify · Slack · Discord"]
-
-    Planner --> Tracer["Tracer<br/>LangSmith / local JSONL"]
-
-    subgraph Clients["Interaction surfaces (stateless clients)"]
-        HUD["HUD (Tauri)"]
-        Voice["Voice in/out<br/>wake · STT · TTS"]
-        Remote["Discord remote<br/>(owner-only, restricted)"]
-        Term["Terminal CLI"]
-    end
-    Gateway["Gateway<br/>FastAPI · localhost only"] <--> Bus
-    Clients <--> Gateway
-    Term <--> Bus
+    CLI <--> GW
+    HUD <--> GW
+    VOICE <--> GW
+    REMOTE <--> GW
+    GW <--> PLANNER
+    SENSORS --> ENGINE --> PLANNER
+    PLANNER <--> ROUTER
+    PLANNER --> GUARD --> TOOLS --> MCP
+    PLANNER <--> MEM
+    MEM -. "relevant memories" .-> PLANNER
+    TOOLS -. "results" .-> PLANNER
 ```
 
-One **Brain** owns the state. Sensors publish onto a shared event bus; the
-Proactive Engine turns sensor events into cooldown-gated observations and runs
-scheduled routines. Every turn — spoken, typed, proactive, or remote — goes
-through the Planner's tool-calling loop, which asks the **Guardian** whether each
-call may run before the **Tool Registry** (builtin/native tools plus anything
-bridged from an MCP server) executes it. Memory backs both conversational context
-and long-term semantic recall. Every interaction surface — CLI, HUD, voice, and
-the Discord remote — is a stateless client of that one Brain over the gateway;
-**adding a surface never touches the planner.**
+Every surface is a client of the same gateway, so the CLI, the HUD, voice, and the remote interface all drive one brain — there is no privileged path.
 
-## The persona
+---
 
-Vesper is written as a British butler in temperament, not caricature: measured,
-dry when it lands, never enthusiastic, never performative. It addresses you as
-"Sir", says what needs saying and stops — three sentences by default,
-observations raised once and dropped if ignored. Honesty is non-negotiable: a
-failed tool call is reported plainly, and it never invents a result it doesn't
-have.
+## How it works
 
-## What ships (v3.0.0)
+- **The planner plans over tools.** There is no intent catalogue and no `unknown intent` branch. Every input goes to an LLM tool-calling loop that either calls a tool or answers in plain text — an open vocabulary rather than a fixed switchboard. → [`orchestrator/planner.py`](orchestrator/planner.py)
+- **The Guardian gates.** Every tool carries a tier: `safe` runs, `confirm` needs an explicit yes and times out into a denial, `dangerous` is refused outright on restricted surfaces. Consequential actions cannot reach execution without passing it. → [`guardian/gate.py`](guardian/gate.py)
+- **Sensors observe.** Focus changes, upcoming meetings, and unread mail become *pending observations* that ride into the planner's context block — the second input path that lets Vesper speak first. → [`sensors/`](sensors/), [`proactive/engine.py`](proactive/engine.py)
+- **Memory reflects.** A session-end pass distils a transcript into at most five durable items, each typed `preference` / `fact` / `pattern`, embedded locally with MiniLM so recall is by meaning, not keywords. → [`proactive/reflection.py`](proactive/reflection.py), [`rag/rag_service.py`](rag/rag_service.py)
+- **Everything is a tool.** Built-ins and MCP servers register into one registry with one schema, so adding a capability is a registration, not a new code path. → [`tools/registry.py`](tools/registry.py), [`tools/mcp_bridge.py`](tools/mcp_bridge.py)
 
-**Core reasoning & safety**
-- **LLM tool-calling planner** — open vocabulary, no rule-based intent
-  switchboard. Groq primary for every purpose, with a small local Ollama model
-  as the rate-limit/offline rescue. Prompts are trimmed per turn (only the
-  tools plausibly relevant to the request are sent) and calls are paced against
-  the provider's tokens-per-minute ceiling, so multi-step turns finish on Groq
-  instead of 429'ing — see [Tuning for an 8GB Mac](#tuning-for-an-8gb-mac).
-- **Guardian permission gate** — every tool is tiered `safe` / `confirm` /
-  `dangerous`; confirm-tier needs an explicit yes, times out to a denial, and is
-  appended to a local audit log. A **session policy** lets a restricted surface
-  (the remote interface) lower the ceiling further.
-- **Long-term memory** — a nightly + session-end reflection pass distils durable
-  facts/preferences into semantic memory (at most 5 items per reflection, each
-  typed `preference` / `fact` / `pattern`); relevant memories resurface on later
-  turns; "forget X" deletes them. Recall is genuinely semantic — embeddings come
-  from a local MiniLM model, so *"when should I not schedule meetings?"* surfaces
-  *"I train at the gym at 6pm and it's non-negotiable"* despite the two sharing
-  no words. See [Semantic memory](#semantic-memory).
+---
 
-**Productivity (MCP)**
-- **Gmail** — triage, search, thread summarization, reply *drafting* (never
-  sending — a deliberate choice).
-- **Calendar + Reminders** — read and create (confirm-gated) via EventKit.
-- **Notion** — read-only search, pages, database queries.
-- **GitHub** — notifications, PRs, issues, code search (read safe; comment/branch
-  confirm). No merge/close/force-push is ever surfaced.
-- **Slack / Discord** — mentions, DMs, search (safe); posting/replying
-  (confirm — the exact channel + full text is shown before it sends).
+## What ships
 
-**Capability layer (native tools)**
-- **Developer tools** — `git status/diff`, gated `git_commit` (shows exact repo +
-  branch + message), and `run_tests` on the background task queue.
-- **Music** — Spotify playback that's context-aware: name a track and it plays;
-  say "focus time" and it *chooses*, honouring remembered preferences.
-- **Deep research** — a Search → Reader → Writer → Critic pipeline; runs on the
-  queue, announces when ready, writes a sourced report to `data/research/`.
-- **Script writer** — template-driven from `config/formats/*.md` (new formats =
-  new markdown, no code).
-- **Automation composer** — `run_shell` / `run_applescript`, DANGEROUS-tier: the
-  command is shown **verbatim**, approved every time, and a denylist refuses
-  `rm -rf /`, `sudo`, disk utilities, `curl | sh`, and writes outside `$HOME`
-  **outright — even after approval.**
-- **Weather** — Open-Meteo, no API key.
+| Capability | Detail |
+|---|---|
+| **LLM planner** | Tool-calling loop, ~40 tools, 6-iteration cap, per-turn tool filtering (−54% prompt tokens) |
+| **Guardian** | 3 tiers, confirmation cards with a 120s window, local audit log, per-surface policy |
+| **Proactive engine** | Focus / calendar / inbox sensors, once-only call-outs, cooldowns, scheduled routines |
+| **Semantic memory** | Chroma + `all-MiniLM-L6-v2` locally; 5/5 vs 2/5 top-1 recall against the previous hash embeddings |
+| **Voice in** | openWakeWord → WebRTC VAD → faster-whisper `base.en` (0.14× realtime) |
+| **Voice out** | Kokoro-82M, `bm_lewis` (lowest-register British voice by measured F0), 0.55× realtime |
+| **HUD** | Tauri always-on-top panel: serif voice lines, mono plan traces, gold call-outs, confirmation cards |
+| **Gateway** | FastAPI over the event bus, localhost-bound, bearer-token auth |
+| **MCP** | Gmail and Apple Calendar/Reminders enabled; Notion, GitHub, Spotify, Slack, Discord shipped behind config flags |
+| **Remote** | Discord interface: owner-only, `dangerous` disabled entirely, confirms need an explicit approval |
+| **Tracing** | LangSmith when configured, always-on local JSONL otherwise |
+| **Tests** | 331 automated |
 
-**Proactive & routines**
-- **Morning routine** — fires at a wake time or on your first activity of the
-  day; delivers one composed briefing (weather → what matters → top-3 → day plan)
-  spoken + on the HUD, then offers to set up your workspace as a single
-  confirmation. At most once per day; "not now" defers it, twice cancels it.
-- **Sensing** — context-switch, meeting, focus-block, and inbox-surge rules, all
-  cooldown-gated so nothing nags.
-- **Morning briefing & day planning** — on schedule or on demand ("brief me",
-  "plan my day").
+### Deliberately not built (and why)
 
-**Interaction surfaces**
-- **Terminal CLI** — live plan traces, streamed replies, inline `[y/N]`
-  confirmations, `/trace` `/tools` `/status`.
-- **HUD** (Tauri) — frameless always-on-top panel: serif voice lines, collapsing
-  mono traces, gold call-outs, confirmation cards, a breathing star.
-- **Voice** — openWakeWord → VAD → faster-whisper (`base.en`) in; Kokoro-82M TTS
-  out (`bm_lewis`, the lowest-register British voice by measurement); a
-  cinematic wake reveal. Verified end to end: wake → flare → transcript →
-  Groq → spoken reply. Speech is queued while the local LLM rescue holds
-  memory, so an 8GB machine never carries both. See
-  [Voice](#voice-wake--stt--tts).
-- **Discord remote** — mobile access with no app: owner-only, dangerous tools
-  disabled entirely, confirm-tier requiring an explicit remote approval (the
-  request id or a ✅ reaction — never a bare "yes").
-- **Gateway** — FastAPI over the bus, **localhost only** (binds `127.0.0.1` and
-  refuses anything else), bearer-token auth.
-- **Tracing** — every turn as `turn → plan_iteration → tool_execution` in
-  LangSmith, with an always-on local JSONL fallback.
-- **Resilience** — a crashed MCP server drops out of the model's schema and
-  reconnects on its own with backoff. See [`docs/TESTPLAN.md`](docs/TESTPLAN.md).
+- **WhatsApp integration.** Automating a personal WhatsApp account risks a ban under their terms. The value doesn't justify handing someone a bricked account.
+- **Autonomous browser agent.** A tool that can click anything on any page cannot be meaningfully bounded by a permission tier. The safety model here is per-tool and legible; a browser agent breaks it.
+- **Heavy always-on local LLM.** This runs on an 8GB M3. A 7B model at Q4 does not fit beside macOS and the app — it swaps and drags the whole machine down. Groq serves the planner; a 3B Ollama model exists purely as a rate-limit/offline rescue and unloads after 30s idle. Constraint honesty beats a spec-sheet feature.
 
-## What is deliberately *not* built
-
-Restraint is a feature. These were considered and left out on purpose:
-
-- **WhatsApp integration** — the unofficial APIs are a terms-of-service and
-  account-ban risk; I won't ship something that can get a user's number banned.
-- **A general browser agent** — driving arbitrary sites with real credentials is
-  a safety and prompt-injection surface I'm not willing to expose behind an
-  autonomous planner.
-- **Home automation** — no hardware to control, and simulating it would be
-  theatre, not a capability.
+---
 
 ## Screenshots
 
-**The HUD in a live session** — serif voice lines, mono plan-traces, and the
-breathing star:
+| HUD, live session | LangSmith trace tree |
+|---|---|
+| ![HUD](docs/images/hud-session.png) | ![Trace](docs/images/langsmith-trace.png) |
+| Serif voice lines over collapsed mono traces; the gold call-out is the only gold body text. | One turn: nested plan iterations and tool execution with real latencies. |
 
-![Vesper HUD live session](hud/docs/pv2-reel.gif)
+---
 
-**A call-out moment / the wake reveal** — the star flares as Vesper wakes and
-greets:
+## Tech stack
 
-![Vesper wake reveal and call-out](hud/docs/pv4-wake-reel.gif)
+Python 3.11 · Groq (`gpt-oss-120b`) with an Ollama `llama3.2:3b` rescue · Chroma + sentence-transformers · Model Context Protocol · FastAPI + WebSockets · Tauri 2 + TypeScript · openWakeWord · faster-whisper · Kokoro-82M · LangSmith.
 
-**A real LangSmith trace** — `turn → plan_iteration → tool_execution`, exactly as
-instrumented in `tracing/tracer.py` (a real "plan my day" call):
-
-![A LangSmith trace tree with real input/output](docs/images/langsmith_trace.png)
+---
 
 ## Setup
 
-A stranger should be able to reach a working greeting from this section alone.
+**Requires macOS** (Vesper drives AppleScript and EventKit) and **Python 3.11**.
 
-### Prerequisites
-
-- **macOS** (EventKit/AppleScript integrations are Apple-only).
-- **Python 3.9–3.11** for the main app (verified on 3.9 and 3.11). Use an
-  explicit `python3.11` (or `python3.9`) — a bare `python3` that resolves to
-  3.12+ may lack wheels for the pinned native deps. The MCP servers need
-  **Python 3.10+**.
-- A [Groq](https://console.groq.com) API key **or** [Ollama](https://ollama.com)
-  running locally with a model pulled — either one alone is enough to get a
-  greeting; with both, Groq is primary and Ollama is the rescue fallback. On a
-  machine with 8GB of RAM, pull `llama3.2:3b` and read
-  [Tuning for an 8GB Mac](#tuning-for-an-8gb-mac) before pulling anything larger.
-
-### 1. Main application (Python 3.9–3.11)
+> Use an explicit `python3.11`. A bare `python3` resolving to 3.12+ may lack wheels for the pinned native audio dependencies. The MCP servers need their own 3.10+ virtualenv.
 
 ```bash
 git clone <this-repo> vesper && cd vesper
-python3.11 -m venv .venv        # explicit version — not a bare `python3`
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-pip install -e .
+brew install portaudio espeak-ng          # microphone + TTS phonemizer
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install --upgrade pip && pip install -r requirements.txt && pip install -e .
 ```
 
-### 2. Minimum to a greeting
+Add a [Groq](https://console.groq.com) key — the only cloud dependency, free tier is enough:
 
 ```bash
-cp .env.example .env   # if present; otherwise create .env (see below)
+echo "GROQ_API_KEY=..." >> .env
 ```
 
-`.env` needs just one working model provider to start:
+Run it:
 
 ```bash
-GROQ_API_KEY=...        # from console.groq.com — the fastest path to a greeting
-# (or run `ollama serve` with the fallback model pulled and skip the key)
+vesper            # rich terminal CLI
 ```
 
-Then run:
+You should get **"Good morning, Sir."** That is the verification target; everything below is optional.
+
+<details>
+<summary><b>Optional — voice, HUD, local rescue</b></summary>
 
 ```bash
-vesper                  # rich terminal CLI  (or: python -m vesper)
-```
-
-You should get **"Good morning, Sir."** (or the time-appropriate greeting). That
-is the verification target — everything below is optional capability.
-
-### 3. Optional — MCP servers (Python 3.10+)
-
-Gmail, Calendar/Reminders, and Notion each run as a separate MCP process under
-their own virtualenv (the official `mcp` SDK needs 3.10+, which the main app
-doesn't run on):
-
-```bash
-cd mcp_servers
-python3.11 -m venv .venv        # any 3.10+ interpreter
-.venv/bin/pip install -r requirements.txt
-cd ..
-```
-
-### 4. Optional — more environment variables (`.env`)
-
-```bash
-LANGSMITH_API_KEY=...           # traces fall back to local JSONL without it
-GOOGLE_CLIENT_ID=...            # Gmail OAuth (Desktop app client type)
-GOOGLE_CLIENT_SECRET=...
-NOTION_API_KEY=...              # internal integration token
-NOTION_DATABASES={"tasks":"<id>","projects":"<id>"}
-GITHUB_PERSONAL_ACCESS_TOKEN=...# GitHub MCP
-TAVILY_API_KEY=...              # deep-research web search
-VESPER_DISCORD_TOKEN=...        # Discord remote interface bot token
-```
-
-Gmail's first API call opens a browser for one-time OAuth (token cached at
-`data/google_token.json`, gitignored). Calendar/Reminders is a native macOS
-prompt on first use.
-
-### 5. Optional — enable what you want in `config/settings.yaml`
-
-Every integration and surface is independently toggleable and **defaults off**:
-`mcp.servers.*` (gmail/apple_pim on by default, others off), `sensors.*`,
-`proactive.morning_routine.*`, `remote.*`, `gateway.*`, `voice.*`. Enable only
-what you have credentials for.
-
-### 6. Optional — the other surfaces
-
-```bash
-python -m gateway.server     # localhost API gateway (needed by HUD/voice/remote)
-cd hud && npm install && npm run tauri dev   # the HUD
-python -m voice.input        # wake word + STT   (needs voice/requirements.txt)
-python -m voice.output       # Kokoro TTS
-python main.py               # full voice-capable entry point (VoiceAgent instead of CLI)
-```
-
-## Voice (wake · STT · TTS)
-
-Three local models, none of them large: openWakeWord for the wake word,
-faster-whisper `base.en` for speech-to-text, Kokoro-82M for speech-out.
-Nothing but the planning call leaves the machine.
-
-**Setup** (model files are gitignored — download once):
-
-```bash
+# Local LLM rescue for when Groq rate-limits (8k tokens/min free tier).
+# The 3B is deliberate — do not raise it to a 7B on an 8GB machine.
+ollama pull llama3.2:3b
+./scripts/ollama_env.sh        # sets OLLAMA_KEEP_ALIVE=30s so it unloads when
+                               # idle and hands its ~2.5GB back to the OS
+# Voice (model files are gitignored, ~340MB once):
 pip install -r voice/requirements.txt
-brew install espeak-ng                      # Kokoro's phonemizer data
 cd voice/models
 curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
 curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
+
+# Then, in separate terminals:
+python -m gateway.server                    # the brain
+cd hud && npm install && npm run tauri dev  # the panel
+python -m voice.input                       # wake word + STT
+python -m voice.output                      # Kokoro TTS
 ```
 
-**Run** (three processes — voice is just another gateway client):
+`python scripts/doctor.py` checks every dependency and reports memory headroom before you start a local model.
+</details>
+
+---
+
+## Roadmap
+
+**Shipped** — LLM planner · Guardian tiers · proactive sensors and call-outs · semantic memory with reflection · Gmail and Calendar over MCP · gateway · Tauri HUD with the wake flow · voice in and out · Discord remote · tracing · 8GB-tuned routing with rate-limit survival.
+
+**Planned**
+- Custom wake word (`"wake up daddy's home"`). The pipeline, trainer, and config swap are done and verified on a pretrained model; the phrase itself needs ~30 voice recordings and a one-time GPU run — see [`voice/TRAINING.md`](voice/TRAINING.md).
+- Enabling the built-but-dormant MCP servers (Notion, GitHub, Spotify, Slack) beyond Gmail and Calendar.
+- Screen-context vision, reworked from the retired v1 implementation.
+- Multi-step routine authoring from natural language.
+
+---
+
+## Documentation
+
+[Architecture](docs/ARCHITECTURE.md) · [Test plan](docs/TESTPLAN.md) · [Demo checklist](docs/DEMO.md) · [Wake-word training](voice/TRAINING.md) · [Voice output](voice/output/README.md)
 
 ```bash
-python -m gateway.server     # the brain
-python -m voice.input        # wake word + STT
-python -m voice.output       # Kokoro TTS
-# or: ./scripts/run_voice.sh  (starts gateway + input with a shared token)
+pytest    # 331 tests
 ```
-
-**Measured on an 8GB M3:**
-
-| stage | model | load | run |
-|---|---|---|---|
-| wake | openWakeWord `hey_jarvis` | 0.4s | per-frame, negligible |
-| STT | faster-whisper `base.en` int8 | 3.5s | 0.14× realtime |
-| TTS | Kokoro-82M `bm_lewis` | 1.9s | 0.55× realtime, ~520MB resident |
-
-Both STT and TTS run faster than realtime, so neither is the bottleneck — the
-LLM call is.
-
-**The custom wake word** is the one piece not finished: `hey_jarvis` is the
-working default, and "wake up daddy's home" needs ~30 recordings of your voice
-plus a 4–8 hour GPU run. `voice/TRAINING.md` has the exact steps including a
-free Colab path; `voice.input.wake_model_fallback` lets you set the custom name
-now and keep working until the `.onnx` exists.
-
-## Semantic memory
-
-Memory recall uses **all-MiniLM-L6-v2** running locally on CPU — 384-dim,
-~90MB on disk, no API calls, nothing leaves the machine.
-
-This replaced a hash-based fallback that only ever matched on shared words.
-The difference is not subtle. Against a six-item memory bank with five queries
-each phrased to share as little vocabulary as possible with its target
-(`tests/test_embeddings.py`):
-
-| Embedding | Top-1 accuracy |
-|---|---|
-| Hash (old) | **2/5** — and both hits were stopword accidents; the three misses scored exactly 0.000 on the correct memory |
-| MiniLM (new) | **5/5** |
-
-The acceptance case, stored in one session and retrieved in a new process:
-
-```
-query  : 'when should I not schedule meetings?'
-stored : "I train at the gym at 6pm and it's non-negotiable"
-shared content words: NONE — keyword matching cannot work here
-
-[RAG] retrieve embedding=all-MiniLM-L6-v2 hits=3/37
-      sim=0.355 score=0.523 :: user has a regular gym session scheduled at 6 pm
-```
-
-Reproduce it:
-
-```bash
-.venv/bin/python scripts/smoke_semantic_memory.py --store
-.venv/bin/python scripts/smoke_semantic_memory.py --retrieve   # new process
-```
-
-**Loading is lazy.** Importing torch costs ~4s and ~360MB RSS, and the model
-adds only ~12MB on top of that — so the load is deferred to the first embed
-call and cached process-wide. A session that never touches memory never pays
-it. If the model can't load at all (package missing, no network for the first
-download), the service logs one warning and degrades to the old hash
-embeddings rather than failing.
-
-**Migrating an existing store.** Old and new vectors are the same width but
-mean different things, so anything stored before this change must be
-re-embedded once:
-
-```bash
-.venv/bin/python scripts/migrate_embeddings.py --dry-run   # report first
-.venv/bin/python scripts/migrate_embeddings.py
-```
-
-It backs up `data/chroma_memory` to a timestamped copy, re-embeds into a
-staging collection, and swaps it in only once the counts match — an
-interrupted run leaves the original untouched.
-
-## Tuning for an 8GB Mac
-
-Vesper is tuned to stay on Groq for essentially everything and to treat a local
-model as a rescue path, not a daily driver. On 8GB that distinction is the
-whole ballgame: a 7B model at Q4 does not fit alongside macOS and the app, so it
-swaps and drags the entire machine down.
-
-**Staying under Groq's free tier (8k tokens/minute).** Three changes, largest
-first:
-
-| Lever | Effect |
-|---|---|
-| Per-turn tool filtering (`llm.tool_selection`) | Only the tools plausibly relevant to the request are sent, instead of all 27 on every call. ~67% off the tool schema. |
-| Trimmed persona | 813 → 519 tokens, same rules, less padding. |
-| Bounded history replay | Last 4 turns, hard-capped at 800 tokens, so a long session stops inflating every call. |
-
-Measured end to end against real Groq calls: **1,849 → 851 `tokens_in` per
-planning call (-54%)**, which takes an 8k minute from ~4 calls to ~9.
-
-Two mechanisms then keep a burst on Groq rather than dropping it to the local
-model — client-side pacing (a rolling 60s token budget briefly delays a call
-that would cross the ceiling) and honoring the `retry-after` Groq sends on a
-429. A four-turn burst of twelve planning calls completes 12/12 on Groq.
-
-Reproduce either measurement yourself:
-
-```bash
-.venv/bin/python scripts/smoke_token_budget.py   # before/after tokens_in
-.venv/bin/python scripts/smoke_rate_limit.py     # 4 rapid multi-step turns
-```
-
-**The local fallback.** Pull the 3B — not a 7B, and not the coder model:
-
-```bash
-ollama pull llama3.2:3b
-```
-
-Start Ollama with the memory settings that matter on 8GB:
-
-```bash
-./scripts/ollama_env.sh
-```
-
-That sets `OLLAMA_KEEP_ALIVE=30s` (unload when idle, handing ~2.5GB back to the
-OS), `OLLAMA_CONTEXT_LENGTH=2048` (smaller KV cache), and
-`OLLAMA_MAX_LOADED_MODELS=1`. Vesper also sends `keep_alive` and `num_ctx` on
-every request, so the unload behavior holds even against a server you started by
-hand. Verified on an 8GB M3: the model loads 100% on GPU at 2.5GB, and
-`ollama ps` shows it gone ~30s after the last call.
-
-Crossing to the local model announces itself ("Switching to local, Sir — one
-moment"), because the cold load is not fast. Measured on this machine:
-
-| | Latency |
-|---|---|
-| Warm (model already resident) | **0.9s** |
-| Cold load with healthy free RAM | a few seconds |
-| Cold load at ~1GB free (real memory pressure) | **37.8s** |
-
-That last row is the case the notice exists for, and the reason `doctor.py`
-warns below 3GB free: the load itself is fine, but paging a 2.5GB model into a
-full machine is not. It is also why this path is a rescue and not the default —
-Groq answers the same prompt in under a second.
-
-**Check headroom before you start:**
-
-```bash
-.venv/bin/python scripts/doctor.py
-```
-
-It reports total RAM, current memory pressure via `vm_stat`, and warns below
-3GB free — the point past which loading even a 3B will swap. It also pings
-Ollama and tells you whether the configured fallback model is actually pulled.
-
-## Testing
-
-```bash
-pytest                       # automated unit suite — 293 tests
-```
-
-See [`docs/TESTPLAN.md`](docs/TESTPLAN.md) for the manual acceptance plan (33
-scripted interactions against real services) and
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the design decisions and *why*
-they were made.
