@@ -1,0 +1,125 @@
+name: Eval Gate
+
+# Triggers only on paths that can actually change routing behavior in a way
+# vantage's eval harness can observe. Deliberately excludes agents/ and
+# guardian/: the eval adapter mocks every tool execution and auto-allows
+# every Guardian check (see vantage's vantage_eval/agents/vesper.py), so
+# changes there are invisible to this gate regardless -- triggering on them
+# would just be wasted, misleading CI runs.
+on:
+  pull_request:
+    paths:
+      - "orchestrator/**"
+      - "tools/**"
+      - "llm/**"
+      - "config/persona.md"
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+
+    steps:
+      - name: Checkout Vesper (PR branch)
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install this PR's Vesper (no-deps)
+        # requirements.txt's full dependency set (pyobjc, torch via
+        # sentence-transformers, chromadb, opencv, vosk, langgraph/langchain,
+        # ...) is for the full voice/vision assistant, none of which
+        # orchestrator.planner's tool-calling loop touches -- and
+        # pyobjc-framework-Cocoa/EventKit only ship macOS wheels, so a plain
+        # `pip install -e .` cannot even complete on ubuntu-latest. Install
+        # Vesper's own code without triggering that resolution at all, then
+        # install exactly what the eval path needs explicitly, below.
+        run: uv pip install --system --no-deps -e .
+
+      - name: Checkout Vantage (eval harness + suites)
+        uses: actions/checkout@v4
+        with:
+          repository: ParrvLuthra22/vantage
+          path: vantage-src
+
+      - name: Install Vantage packages (no-deps)
+        # --no-deps again: vantage-eval's own pyproject.toml lists
+        # `vesper @ git+https://github.com/ParrvLuthra22/vesper.git@vesper`
+        # (the main branch) as a dependency -- installing it normally would
+        # silently reinstall and test main's Vesper instead of this PR's.
+        run: |
+          uv pip install --system --no-deps -e vantage-src/packages/sdk
+          uv pip install --system --no-deps -e vantage-src/packages/api
+          uv pip install --system --no-deps -e vantage-src/packages/eval_engine
+
+      - name: Install runtime dependencies
+        # Union of what orchestrator.planner's tool-calling loop needs
+        # (confirmed by constructing a real Planner end-to-end with only
+        # these installed) plus vantage-sdk/vantage-api/vantage-eval's own
+        # real dependencies (both --no-deps above, so nothing pulled them
+        # in). No DB driver beyond asyncpg/sqlalchemy is needed at RUNTIME
+        # here -- compare runs entirely off JSON files below -- but
+        # vantage_eval.persistence (imported at module load by cli.py)
+        # still needs vantage_api.models importable either way.
+        run: |
+          uv pip install --system \
+            pyyaml python-dotenv pydantic pydantic-settings fastapi "uvicorn[standard]" \
+            groq ollama tavily-python langsmith apscheduler colorama certifi rich \
+            httpx "sqlalchemy[asyncio]" asyncpg alembic click openai jinja2
+
+      - name: Run smoke suite against this PR's Vesper
+        # orchestrator_v1_smoke (10 of orchestrator_v1's 40 scenarios, 2 per
+        # category) is a separate, narrower suite scoped to CI's time
+        # budget -- see its suite.yaml for why these particular ten. No
+        # --mark-baseline, no DATABASE_URL: this run is compared against
+        # eval-baseline.json (committed in this repo) purely via JSON, no
+        # Postgres involved at all.
+        run: |
+          vantage eval run vantage-src/packages/eval_engine/suites/orchestrator_v1_smoke \
+            --adapter vesper --no-judge -v --output current.json
+
+      - name: Compare against baseline
+        id: compare
+        run: |
+          set +e
+          vantage eval compare current.json --baseline .github/eval-baseline.json \
+            --fail-on-regression > compare_output.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat compare_output.txt
+
+      - name: Upload eval outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results
+          path: |
+            current.json
+            compare_output.txt
+
+      - name: Post regression report to PR
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const compare = fs.readFileSync('compare_output.txt', 'utf8');
+            const body = `## Vantage Eval Report\n\n\`\`\`\n${compare}\n\`\`\``;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
+
+      - name: Fail if regressions
+        if: steps.compare.outputs.exit_code != '0'
+        run: exit 1

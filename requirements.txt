@@ -66,8 +66,8 @@ langsmith>=0.4.0             # LangSmith tracing client (RunTree)
 # Sensors & Proactive Engine (sensors/, proactive/) - local-only sensing
 # ------------------------------------------------------------------------------
 apscheduler>=3.10.0             # Cron-style scheduled jobs (morning briefing, etc.)
-pyobjc-framework-Cocoa>=11.1    # NSWorkspace: frontmost-app polling (FocusSensor)
-pyobjc-framework-EventKit>=11.1 # EventKit: calendar polling (CalendarSensor)
+pyobjc-framework-Cocoa>=11.1; sys_platform == "darwin"    # NSWorkspace: frontmost-app polling (FocusSensor)
+pyobjc-framework-EventKit>=11.1; sys_platform == "darwin" # EventKit: calendar polling (CalendarSensor)
 # Optional: Enhanced TTS
 # ------------------------------------------------------------------------------
 # elevenlabs>=0.2.0       # ElevenLabs TTS (high quality voices)
