@@ -1,5 +1,8 @@
 # Vesper
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Tested by Vantage](https://img.shields.io/badge/tested%20by-Vantage-blueviolet.svg)](https://github.com/ParrvLuthra22/vantage)
+
 **An operator with judgment — a proactive AI chief of staff for macOS that observes, reasons, and acts, then tells you when you're getting in your own way.**
 
 Vesper runs locally on a Mac, plans over a registry of ~40 tools with an LLM, and gates every consequential action behind a permission tier before it executes. It watches what you're actually doing — which app has focus, what's on your calendar, what's unread — and when that context is worth raising, it raises it. Voice in, voice out, and a slim always-on-top panel that shows its reasoning as it works.
@@ -7,6 +10,16 @@ Vesper runs locally on a Mac, plans over a registry of ~40 tools with an LLM, an
 ![Vesper HUD — wake, work, and a call-out](docs/images/vesper-hud-demo.gif)
 
 *The HUD across one exchange: idle → wake flare → spoken greeting → tool traces → reply → the call-out → back to idle.*
+
+Read [ARCHITECTURE.md](docs/ARCHITECTURE.md) for the decision-by-decision reasoning behind the system below. Routing behavior is regression-tested on every PR by [Vantage](https://github.com/ParrvLuthra22/vantage), a purpose-built eval harness — see [Evaluation](#evaluation).
+
+---
+
+## Demo
+
+TODO(parrv): record the 60–90s demo and link it here.
+
+Shot-by-shot script: [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md) · Recording pre-flight checklist: [docs/DEMO.md](docs/DEMO.md)
 
 ---
 
@@ -99,6 +112,27 @@ Every surface is a client of the same gateway, so the CLI, the HUD, voice, and t
 
 ---
 
+## Evaluation
+
+Routing behavior — which agent or tool a turn should reach — is regression-tested on every PR that touches `orchestrator/`, `tools/`, `llm/`, or `config/persona.md` by [Vantage](https://github.com/ParrvLuthra22/vantage), a purpose-built eval harness that runs Vesper's planner end-to-end against real scenarios. See [`.github/workflows/eval-gate.yml`](.github/workflows/eval-gate.yml) for the CI gate and [`.github/eval-baseline.json`](.github/eval-baseline.json) for the committed baseline it compares against.
+
+| Suite | Scenarios | Pass rate | Date | Commit |
+|---|---|---|---|---|
+| `orchestrator_v1_smoke` | 10 | 70% (7/10) | 2026-09-23 | [`1c779c5`](https://github.com/ParrvLuthra22/vesper/commit/1c779c514392eac03378b7624984f21b5d6f678a) |
+
+That number is a single live run against Groq, reproduced locally for this table with:
+
+```bash
+vantage eval run vantage-src/packages/eval_engine/suites/orchestrator_v1_smoke \
+  --adapter vesper --no-judge -v --output current.json
+```
+
+(requires cloning [ParrvLuthra22/vantage](https://github.com/ParrvLuthra22/vantage) alongside this repo, installing its `sdk`/`api`/`eval_engine` packages, and a `GROQ_API_KEY` — see the install steps in [`eval-gate.yml`](.github/workflows/eval-gate.yml) for the exact package set.)
+
+The committed baseline scores 90% (9/10) on this exact code — `orchestrator/`, `tools/`, `llm/`, and `config/persona.md` have not changed since the baseline was recorded at commit `ea0be64`. The 20-point gap is not a code regression: one failure (`context_dependent_005`) was already failing in the baseline too, and the other two (a latency-budget miss on `clear_007`, a routing choice that landed on `git_diff` instead of `chat_agent` on `out_of_scope_006`) are the model answering differently against an unchanged prompt on a different run. An eval that calls a live LLM instead of a mock will show that variance — reporting the number this run actually produced, rather than the more flattering baseline, is the point of not inventing numbers.
+
+---
+
 ## Screenshots
 
 | HUD, live session | LangSmith trace tree |
@@ -111,6 +145,16 @@ Every surface is a client of the same gateway, so the CLI, the HUD, voice, and t
 ## Tech stack
 
 Python 3.11 · Groq (`gpt-oss-120b`) with an Ollama `llama3.2:3b` rescue · Chroma + sentence-transformers · Model Context Protocol · FastAPI + WebSockets · Tauri 2 + TypeScript · openWakeWord · faster-whisper · Kokoro-82M · LangSmith.
+
+---
+
+## Hardware constraints
+
+Vesper is built and run day to day on an **8GB M3**, and that number is a design input, not an apology. A 7B local model at Q4 is ~4.5GB resident — next to macOS, the HUD, and the local embedding model, that swaps, and a swapping 8GB Mac degrades everything on it, including the assistant meant to remove friction. This was measured, not assumed: an earlier local-7B configuration ran a 59/41 CPU/GPU split with trivial completions taking 110–160 seconds.
+
+The response was to route by cost, not to drop capability: the planner runs on **Groq** (`gpt-oss-120b`, sub-second, 0 bytes of local RAM), and a **3B Ollama model** (`llama3.2:3b`) exists purely as a rate-limit/offline rescue, sending `keep_alive=30s` so it unloads and hands memory back the moment it's idle. Wake word, STT, TTS, and embeddings stay local because they're small enough to and need to run continuously or with no network round trip. That split doubles as the privacy boundary: sensors, memory, and voice never leave the machine — only the planning prompt does.
+
+Full numbers and the alternatives rejected (a bigger local model, cloud-only with no fallback) are in [ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-the-model-router-and-the-8gb-story).
 
 ---
 
@@ -182,8 +226,14 @@ python -m voice.output                      # Kokoro TTS
 
 ## Documentation
 
-[Architecture](docs/ARCHITECTURE.md) · [Test plan](docs/TESTPLAN.md) · [Demo checklist](docs/DEMO.md) · [Wake-word training](voice/TRAINING.md) · [Voice output](voice/output/README.md)
+[Architecture](docs/ARCHITECTURE.md) · [Test plan](docs/TESTPLAN.md) · [Demo script](docs/DEMO_SCRIPT.md) · [Demo recording checklist](docs/DEMO.md) · [Wake-word training](voice/TRAINING.md) · [Voice output](voice/output/README.md)
 
 ```bash
 pytest    # 331 tests
 ```
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 Parrv Luthra
