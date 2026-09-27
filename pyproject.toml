@@ -38,3 +38,17 @@ include = [
     "utils*",
     "vesper*",
 ]
+
+# setuptools only bundles .py files for a found package by default — non-Python
+# data files need an explicit package-data entry or they're silently dropped
+# from any install that isn't running in-place from this checkout (e.g. a pip
+# git-dependency install, as packages/eval_engine in the vantage repo does).
+# config/settings.yaml is the one that actually breaks behavior: with it
+# missing, config.settings.load_settings() falls through to LLMTierSettings'
+# Pydantic default (a stale "qwen3.5:latest", 6.6GB) instead of this repo's
+# real, deliberately-tuned "llama3.2:3b" fallback (see settings.yaml's own
+# comment) — the direct cause of the Ollama fallback's 53/53 observed
+# failures under Vantage's eval harness, which installs vesper as a package
+# rather than running from this checkout.
+[tool.setuptools.package-data]
+config = ["*.yaml", "*.md", "formats/*.md"]
