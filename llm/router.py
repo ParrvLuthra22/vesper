@@ -241,6 +241,32 @@ class ModelRouter:
             "falling back"
         )
 
+        # A fallback tier can restrict which purposes it's allowed to serve
+        # (llm.fallback.purposes: [...] in config). Added after the 2026-09-28
+        # baseline showed llama3.2:3b's routing quality is materially worse
+        # than the primary's for purpose="planning" — not marginally noisier,
+        # visibly wrong tool choices (see vantage's docs/interview_exhibits/
+        # fallback_model_routing_degradation.md). Skipping straight to the
+        # same RouterError a fully-exhausted fallback would produce, rather
+        # than degrading silently into a weaker model for a purpose where
+        # that's worse than a clean failure.
+        allowed_purposes = fallback_tier.get("purposes")
+        if allowed_purposes is not None and purpose not in allowed_purposes:
+            logger.warning(
+                f"[ROUTE] fallback ({fallback_tier.get('provider')}/"
+                f"{fallback_tier.get('model')}) is scoped to purposes="
+                f"{allowed_purposes!r}, not {purpose!r} — skipping rather than "
+                "using a weaker model for a routing-quality-sensitive purpose"
+            )
+            return RouterError(
+                primary_error=primary_result,
+                fallback_error=(
+                    f"fallback not attempted: scoped to {allowed_purposes!r}, "
+                    f"purpose was {purpose!r}"
+                ),
+                purpose=purpose,
+            )
+
         # A local fallback has to load the model into RAM before it can
         # answer. Measured on an 8GB M3: ~0.9s warm, but 37.8s cold when the
         # machine is already down to ~1GB free. Say so, or it reads as a hang.

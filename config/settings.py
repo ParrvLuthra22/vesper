@@ -329,6 +329,13 @@ class LLMTierSettings(BaseModel):
 
     provider: str = ""
     model: str = ""
+    # Restricts which `purpose=` values (see ModelRouter.complete) this tier
+    # will actually be used for. None (the default) means unrestricted — used
+    # for every purpose, the original behavior. Currently only meaningful on
+    # the fallback tier: ModelRouter.complete skips straight to a RouterError
+    # for a purpose not in this list, rather than degrading into a weaker
+    # model. See llm.fallback's comment in settings.yaml for why this exists.
+    purposes: Optional[List[str]] = None
 
 
 class LLMGroqSettings(BaseModel):

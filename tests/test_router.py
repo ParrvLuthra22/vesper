@@ -291,6 +291,74 @@ async def test_both_providers_fail_returns_router_error(monkeypatch: pytest.Monk
 
 
 # =============================================================================
+# Purpose-scoped fallback (llm.fallback.purposes)
+# =============================================================================
+
+SCOPED_FALLBACK_CONFIG: Dict[str, Any] = {
+    "llm": {
+        "primary": {"provider": "groq", "model": "openai/gpt-oss-120b"},
+        "fallback": {"provider": "ollama", "model": "llama3.2:3b", "purposes": ["reflection"]},
+        "groq": {"timeout_seconds": 5},
+        "ollama": {"endpoint": "http://127.0.0.1:11434", "timeout_seconds": 5},
+    }
+}
+
+
+@pytest.mark.asyncio
+async def test_fallback_scoped_to_other_purposes_is_skipped_for_planning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The 2026-09-28 vantage baseline showed llama3.2:3b's routing quality is
+    materially worse than the primary's for purpose="planning" (wrong tool
+    family, hallucinated success on top of it — see vantage's docs/
+    interview_exhibits/fallback_model_routing_degradation.md). A fallback
+    scoped away from "planning" must be skipped entirely — never even
+    attempted — rather than silently degrading into it."""
+    _patch_groq_client(monkeypatch, _groq_connection_error("groq down"))
+    fake_ollama = _patch_ollama_client(monkeypatch, _ollama_response(content="would have answered"))
+    router = _make_router(monkeypatch, config=SCOPED_FALLBACK_CONFIG)
+
+    result = await router.complete(messages=[{"role": "user", "content": "hi"}], purpose="planning")
+
+    assert isinstance(result, RouterError)
+    assert "scoped to" in result.fallback_error
+    assert "planning" in result.fallback_error
+    fake_ollama.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_fallback_scoped_to_a_purpose_is_still_used_for_that_purpose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same scoped fallback config must still work normally for a purpose
+    it IS allowed for (reflection: background self-review, not live tool
+    routing — a weaker model degrading gracefully there is an acceptable,
+    zero-cost trade)."""
+    _patch_groq_client(monkeypatch, _groq_connection_error("groq down"))
+    _patch_ollama_client(monkeypatch, _ollama_response(content="reflection answer"))
+    router = _make_router(monkeypatch, config=SCOPED_FALLBACK_CONFIG)
+
+    result = await router.complete(messages=[{"role": "user", "content": "hi"}], purpose="reflection")
+
+    assert isinstance(result, LLMResponse)
+    assert result.provider == "ollama"
+
+
+@pytest.mark.asyncio
+async def test_unscoped_fallback_is_unrestricted_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No `purposes` key (the existing BASE_CONFIG, and every config before
+    this change) must behave exactly as before: unrestricted."""
+    _patch_groq_client(monkeypatch, _groq_connection_error("groq down"))
+    _patch_ollama_client(monkeypatch, _ollama_response(content="fallback answer"))
+    router = _make_router(monkeypatch)  # BASE_CONFIG has no fallback.purposes
+
+    result = await router.complete(messages=[{"role": "user", "content": "hi"}], purpose="planning")
+
+    assert isinstance(result, LLMResponse)
+    assert result.provider == "ollama"
+
+
+# =============================================================================
 # Provider extensibility: registering a third provider requires no router changes
 # =============================================================================
 

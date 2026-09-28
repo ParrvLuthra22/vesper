@@ -659,9 +659,29 @@ llm:
   #
   # Do NOT raise this to a 7B/coder model on 8GB — that is the exact change
   # that made the machine unusable before.
+  #
+  # Scoped narrower after the 2026-09-28 vantage baseline (orchestrator_v1):
+  # llama3.2:3b's routing quality is materially worse than gpt-oss-120b's,
+  # not marginally noisier — it picked git_diff for "turn off the lights"
+  # and hallucinated success, run_shell for a unit conversion the LLM could
+  # answer directly, and broke entity extraction on a weather query (see
+  # vantage's docs/interview_exhibits/fallback_model_routing_degradation.md).
+  # Three eval samples on identical code varied 38.5%-69.2% purely by how
+  # much of the run happened to fall back, which poisons any downstream
+  # measurement (e.g. Week 5's judge-agreement work) built on top of it.
+  # `purposes` restricts which purpose= values ModelRouter.complete() will
+  # actually use this fallback for (see llm/router.py) — omitted here means
+  # "planning" (the live tool-routing loop, and the only purpose vantage's
+  # eval harness exercises) no longer falls back to a weaker model; it fails
+  # cleanly as PLANNER_FAILURE instead, which vantage's eval pipeline already
+  # excludes from the judge/pass-rate denominator rather than scoring as a
+  # real quality failure. "reflection" (proactive/reflection.py's background
+  # self-review, not live routing) is the one purpose where a weaker model
+  # degrading gracefully is an acceptable trade for zero cost.
   fallback:
     provider: "ollama"
     model: "llama3.2:3b"
+    purposes: ["reflection"]
 
   # Per-purpose overrides. Only the fields present here override the base
   # primary/fallback tier above.
