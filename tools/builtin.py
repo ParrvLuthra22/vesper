@@ -247,6 +247,7 @@ def _register_builtin_tools() -> None:
             target_agent="WebSearchAgent",
             action="search_web",
             category="web",
+            untrusted_output=True,  # returns summarized third-party web content
         ),
         ToolSpec(
             name="lock_screen",

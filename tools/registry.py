@@ -57,6 +57,12 @@ class ToolSpec:
     #: may enrich/mutate `arguments` in place — e.g. git_commit generating a
     #: message from the diff so it appears in the confirmation before running).
     confirm_summary: Optional[Callable[[Dict[str, Any]], Awaitable[str]]] = None
+    #: True if this tool's RESULT carries content written by third parties
+    #: (email, web pages, calendar entries, chat messages). Once such a result is
+    #: in the conversation, later tool calls in the same turn whose arguments the
+    #: user did not supply are "tainted" and the Guardian bumps them up a tier
+    #: (see guardian/gate.py, "Tainted-input rule").
+    untrusted_output: bool = False
 
     def __post_init__(self) -> None:
         if self.tier not in VALID_TIERS:

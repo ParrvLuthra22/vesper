@@ -81,6 +81,9 @@ async def run_tests(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
     """Run the project's test suite (pytest); return a pass/fail summary +
     the first failure. slow=True → runs on the task queue."""
     path = str(arguments.get("path") or "").strip()
+    if path.startswith("-"):
+        # A leading '-' would be parsed by pytest as an option (e.g. `-p <plugin>`).
+        return "Refused: path must not start with '-'."
     cmd = [sys.executable, "-m", "pytest", "-q", "--no-header", "--tb=line"]
     if path:
         cmd.append(path)
@@ -157,6 +160,9 @@ async def open_in_editor(arguments: Dict[str, Any], context: Dict[str, Any]) -> 
     path = str(arguments.get("path") or "").strip()
     if not path:
         return "No path given."
+    if path.startswith("-"):
+        # A leading '-' would be parsed by `code` as an option (e.g. --install-extension).
+        return "Refused: path must not start with '-'."
     rc, out, err = await _run(["code", path])
     if rc != 0:
         return f"Could not open in VS Code (is the `code` command installed?): {(err or out).strip()[:120]}"

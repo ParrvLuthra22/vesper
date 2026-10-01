@@ -348,6 +348,20 @@ class LLMOllamaSettings(BaseModel):
     timeout_seconds: float = 60.0
 
 
+class LLMRateLimitSettings(BaseModel):
+    """Client-side pacing + 429 survival (llm/router.py). Defaults mirror the
+    router's own constants, so an absent block behaves exactly as before."""
+
+    tokens_per_minute: int = 8000
+    max_wait_seconds: float = 4.0
+
+
+class LLMToolSelectionSettings(BaseModel):
+    """Per-turn tool-schema filtering (tools/selection.py, orchestrator/planner.py)."""
+
+    enabled: bool = True
+
+
 class LLMSettings(BaseModel):
     primary: LLMTierSettings = Field(
         default_factory=lambda: LLMTierSettings(provider="groq", model="openai/gpt-oss-120b")
@@ -360,6 +374,8 @@ class LLMSettings(BaseModel):
     purposes: Dict[str, Any] = Field(default_factory=dict)
     groq: LLMGroqSettings = Field(default_factory=LLMGroqSettings)
     ollama: LLMOllamaSettings = Field(default_factory=LLMOllamaSettings)
+    rate_limit: LLMRateLimitSettings = Field(default_factory=LLMRateLimitSettings)
+    tool_selection: LLMToolSelectionSettings = Field(default_factory=LLMToolSelectionSettings)
 
 
 class SensorFocusSettings(BaseModel):

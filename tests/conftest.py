@@ -1,10 +1,37 @@
 import json
 import os
 import sys
+import tempfile
 import types
+from pathlib import Path
 from typing import Any
 
 import pytest
+
+# Guardian audit isolation — runs at import, before any test can construct a
+# Guardian. Tests must never write to the real data/audit.jsonl.
+_TEST_AUDIT_DIR = tempfile.mkdtemp(prefix="vesper-test-audit-")
+os.environ["VESPER_AUDIT_LOG"] = str(Path(_TEST_AUDIT_DIR) / "audit.jsonl")
+_REAL_AUDIT_LOG = Path(__file__).resolve().parents[1] / "data" / "audit.jsonl"
+
+
+def _audit_fingerprint():
+    try:
+        st = _REAL_AUDIT_LOG.stat()
+        return (st.st_size, st.st_mtime_ns)
+    except FileNotFoundError:
+        return None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _real_audit_log_untouched():
+    """Fail the run if anything in it modified (or created) the real audit log."""
+    before = _audit_fingerprint()
+    yield
+    assert _audit_fingerprint() == before, (
+        "the test run modified the real data/audit.jsonl — a test is not using "
+        "an isolated audit path (see VESPER_AUDIT_LOG in tests/conftest.py)"
+    )
 
 
 class _FakeGeminiResponse:

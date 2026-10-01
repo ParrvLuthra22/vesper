@@ -146,7 +146,9 @@ r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}",                     # fork bomb
 
 Config can *add* patterns; it can never weaken these. This exists because confirmation fatigue is real: a user approving their ninth prompt of the day is not meaningfully consenting. Some actions should not be reachable by clicking yes while distracted.
 
-**The audit log.** Every non-safe verdict appends to `data/audit.jsonl` — tool, arguments, verdict, who approved. Local, append-only, greppable. Without it, "did it do that because I told it to?" is unanswerable, and for a system that acts autonomously that question must have an answer.
+**4. The tainted-input rule.** Text written by third parties (email, web pages, calendar entries, chat messages) can carry instructions aimed at the model. Tools whose *results* contain such text are marked `untrusted_output` (every MCP tool, `search_web`, `research`, the briefing/day-plan tools). Once one has returned in a turn, any later tool call whose arguments include a string the user did not say is passed to the Guardian as `tainted_input`, and the Guardian raises its tier one rung: `safe → confirm`, `confirm → dangerous`. The confirmation card says why. It is intentionally coarse — turn-level, not data-flow tracking — and does not cover background-task results surfaced later as observations, or memory content. Separately, tools never interpolate model-supplied values into a shell or AppleScript string: values travel as `subprocess` argv (shell=False) or `on run argv` arguments (`utils/safe_exec.py`), and URLs are limited to http(s).
+
+**The audit log.** Every non-safe verdict appends to `data/audit.jsonl` (override with `VESPER_AUDIT_LOG`; the test suite always does) — tool, arguments, verdict, who approved, and `tainted_input` when the rule above fired. Local, append-only, greppable. Without it, "did it do that because I told it to?" is unanswerable, and for a system that acts autonomously that question must have an answer.
 
 **Alternatives rejected:**
 

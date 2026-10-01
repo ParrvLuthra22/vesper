@@ -180,6 +180,9 @@ class Planner:
         tools_schema, sent_tool_names = self._select_tools_for(user_text)
         widened = False
         trace: List[str] = []
+        #: Labels of untrusted content (email, web, calendar...) read so far
+        #: this turn — drives the Guardian's tainted-input rule.
+        taint_sources: List[str] = []
 
         for iteration in range(self._max_iterations):
             iteration_trace = turn_trace.start_iteration(iteration, list(messages), purpose)
@@ -219,7 +222,9 @@ class Planner:
 
             messages.append(self._assistant_tool_call_message(response))
             for tool_call in response.tool_calls:
-                result_text = await self._execute_tool_call(tool_call, trace, iteration_trace)
+                result_text = await self._execute_tool_call(
+                    tool_call, trace, iteration_trace, user_text=user_text, taint_sources=taint_sources
+                )
                 messages.append(self._tool_result_message(tool_call, result_text))
 
         await self._emit_plan_trace(user_text, trace)
@@ -297,7 +302,12 @@ class Planner:
         return "\n".join(lines)
 
     async def _execute_tool_call(
-        self, tool_call: ToolCall, trace: List[str], iteration_trace: IterationTrace
+        self,
+        tool_call: ToolCall,
+        trace: List[str],
+        iteration_trace: IterationTrace,
+        user_text: str = "",
+        taint_sources: Optional[List[str]] = None,
     ) -> str:
         tool_spec = self._registry.get(tool_call.name)
         tool_trace = iteration_trace.start_tool(tool_call.name, tool_call.arguments)
@@ -319,7 +329,19 @@ class Planner:
             )
             return f"Error: {error}"
 
-        verdict = await self._guardian.check(tool_spec, tool_call.arguments, context={})
+        # Tainted-input rule (guardian/gate.py): untrusted content was read earlier
+        # this turn and this call carries an argument the user never said.
+        context: Dict[str, Any] = {}
+        if taint_sources and self._has_unsupplied_argument(tool_call.arguments, user_text):
+            context = {
+                "tainted_input": True,
+                "taint_reason": " and ".join(dict.fromkeys(taint_sources)),
+            }
+            logger.info(
+                f"[Planner] tainted input: '{tool_call.name}' has arguments not from the user "
+                f"after reading {context['taint_reason']}; Guardian tier raised one rung"
+            )
+        verdict = await self._guardian.check(tool_spec, tool_call.arguments, context=context)
         if verdict.outcome == VerdictType.NEEDS_CONFIRMATION:
             verdict = await self._guardian.await_resolution(verdict.request_id)
 
@@ -334,6 +356,8 @@ class Planner:
 
         try:
             result_text = await self._run_tool(tool_spec, tool_call.arguments)
+            if tool_spec.untrusted_output and taint_sources is not None and not tool_spec.slow:
+                taint_sources.append(self._taint_label(tool_spec))
             trace.append(f"{tool_call.name}:ok")
             await self._finish_tool_call(
                 tool_trace, tool_call.name, guardian_verdict=verdict.outcome.value, result=result_text,
@@ -355,6 +379,41 @@ class Planner:
                 latency_ms=_elapsed_ms(start), success=False, error=str(exc),
             )
             return f"Error: {exc}"
+
+    @staticmethod
+    def _taint_label(tool_spec: ToolSpec) -> str:
+        category = tool_spec.category or ""
+        if category == "mcp:gmail":
+            return "email"
+        if category == "mcp:apple_pim":
+            return "calendar entries"
+        if category in ("mcp:slack", "mcp:discord"):
+            return "chat messages"
+        if category in ("web", "creator"):
+            return "web content"
+        return "external content"
+
+    @staticmethod
+    def _has_unsupplied_argument(arguments: Dict[str, Any], user_text: str) -> bool:
+        """True if any string argument (at any depth) is not something the user
+        said — i.e. it came from the model, which may be echoing untrusted
+        content. Numbers and booleans can't carry an injected instruction."""
+
+        def norm(text: str) -> str:
+            return " ".join(str(text).lower().split())
+
+        def strings(value: Any):
+            if isinstance(value, str):
+                yield value
+            elif isinstance(value, dict):
+                for v in value.values():
+                    yield from strings(v)
+            elif isinstance(value, (list, tuple)):
+                for v in value:
+                    yield from strings(v)
+
+        haystack = norm(user_text)
+        return any(norm(v) and norm(v) not in haystack for v in strings(arguments))
 
     async def _finish_tool_call(
         self,

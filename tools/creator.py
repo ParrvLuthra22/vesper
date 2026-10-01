@@ -308,6 +308,7 @@ def _register() -> None:
             "depth": {"type": "string", "enum": ["standard", "deep"], "description": "Research depth."},
         }, "required": ["question"]},
         tier="safe", handler=research, category="creator", slow=True,
+        untrusted_output=True,  # summarizes arbitrary web pages
     ))
     registry.register(ToolSpec(
         name="write_script",

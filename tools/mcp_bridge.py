@@ -397,6 +397,9 @@ class MCPBridge:
                     handler=self._make_handler(server_name, tool_name),
                     category=f"mcp:{server_name}",
                     slow=tool_name in slow_tools,
+                    # Mail / calendar / Slack / Notion / GitHub text is written
+                    # by third parties: its output must not steer later calls.
+                    untrusted_output=True,
                 )
             )
 

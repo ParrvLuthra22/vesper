@@ -849,6 +849,7 @@ class Brain:
                 ),
                 parameters={"type": "object", "properties": {}},
                 tier="safe",
+                untrusted_output=True,  # embeds email subjects/senders and calendar titles
                 handler=make_get_daily_briefing_handler(
                     registry=registry,
                     calendar_sensor=self._calendar_sensor,
@@ -920,6 +921,7 @@ class Brain:
                 ),
                 parameters={"type": "object", "properties": {}},
                 tier="safe",
+                untrusted_output=True,  # embeds calendar, reminders, Notion and mail text
                 handler=make_plan_my_day_handler(registry=registry, memory_agent=memory_agent),
                 category="day_planning",
             )

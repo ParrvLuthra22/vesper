@@ -12,12 +12,28 @@ tool call may proceed:
 
 Every non-safe execution's final outcome (approved, denied, or expired) is
 appended to a JSONL audit log.
+
+Tainted-input rule
+------------------
+Text written by third parties (email, web pages, calendar entries, chat
+messages) can contain instructions aimed at the model. When the Planner has read
+such content earlier in the turn AND a later tool call carries an argument the
+user did not say, the Planner marks the call tainted
+(`context={"tainted_input": True, ...}`) and the Guardian raises its tier by one:
+
+    safe -> confirm        confirm -> dangerous        dangerous -> dangerous
+
+so a `safe` tool steered by an email still needs an explicit approval, with a
+summary that says why. It is deliberately a one-rung bump, not a taint-tracking
+system: it works at turn granularity and does not cover background-task results
+surfaced later as observations, or memory content.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -35,6 +51,10 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 DEFAULT_AUDIT_LOG_PATH = Path("data/audit.jsonl")
+#: Overrides the default audit path (an explicit `audit_log_path=` still wins).
+#: The test suite points this at a temp file so tests can never write to the
+#: real audit trail.
+AUDIT_LOG_ENV_VAR = "VESPER_AUDIT_LOG"
 DEFAULT_CONFIRMATION_TIMEOUT_SECONDS = 120.0
 
 
@@ -77,6 +97,15 @@ def session_policy(policy: SessionPolicy) -> Iterator[None]:
         _active_policy.reset(token)
 
 
+_TIER_ORDER = ("safe", "confirm", "dangerous")
+
+
+def bump_tier(tier: str) -> str:
+    """One rung up the tier ladder (dangerous stays dangerous)."""
+    idx = _TIER_ORDER.index(tier)
+    return _TIER_ORDER[min(idx + 1, len(_TIER_ORDER) - 1)]
+
+
 class VerdictType(str, Enum):
     ALLOW = "allow"
     NEEDS_CONFIRMATION = "needs_confirmation"
@@ -104,6 +133,7 @@ class _PendingConfirmation:
     summary: str
     future: "asyncio.Future[Verdict]"
     expiry_task: asyncio.Task
+    tainted: bool = False
 
 
 class Guardian:
@@ -112,10 +142,12 @@ class Guardian:
     def __init__(
         self,
         event_bus: Optional[EventBus] = None,
-        audit_log_path: Path = DEFAULT_AUDIT_LOG_PATH,
+        audit_log_path: Optional[Path] = None,
         confirmation_timeout_seconds: float = DEFAULT_CONFIRMATION_TIMEOUT_SECONDS,
     ):
         self._event_bus = event_bus or get_event_bus()
+        if audit_log_path is None:
+            audit_log_path = os.environ.get(AUDIT_LOG_ENV_VAR) or DEFAULT_AUDIT_LOG_PATH
         self._audit_log_path = Path(audit_log_path)
         self._confirmation_timeout_seconds = confirmation_timeout_seconds
         self._pending: Dict[str, _PendingConfirmation] = {}
@@ -134,19 +166,22 @@ class Guardian:
         NEEDS_CONFIRMATION verdict carrying a `request_id`; call
         `await_resolution(request_id)` to wait for the final allow/deny.
         """
-        if tool_spec.tier == "safe":
+        tainted = bool((context or {}).get("tainted_input"))
+        tier = bump_tier(tool_spec.tier) if tainted else tool_spec.tier
+
+        if tier == "safe":
             return Verdict(VerdictType.ALLOW, reason="safe tier - no confirmation required")
 
         # Session ceiling: a restricted surface (the remote interface) disables
         # dangerous-tier tools ENTIRELY — refused outright, never even offered
         # for confirmation. Confirm-tier still goes through the normal flow.
         policy = current_session_policy()
-        if tool_spec.tier == "dangerous" and policy is not None and not policy.allow_dangerous:
+        if tier == "dangerous" and policy is not None and not policy.allow_dangerous:
             verdict = Verdict(
                 VerdictType.DENY,
                 reason=f"dangerous-tier tools are disabled for {policy.name} sessions",
             )
-            self._audit(tool_spec.name, arguments, verdict, who_approved=None)
+            self._audit(tool_spec.name, arguments, verdict, who_approved=None, tainted=tainted)
             logger.warning(
                 f"[Guardian] denied dangerous tool '{tool_spec.name}' — "
                 f"disabled for {policy.name} session"
@@ -154,6 +189,12 @@ class Guardian:
             return verdict
 
         summary = await self._render_summary(tool_spec, arguments)
+        if tainted:
+            reason = (context or {}).get("taint_reason") or "external content"
+            summary = (
+                f"⚠ Raised from {tool_spec.tier} to {tier}: an argument did not come from "
+                f"you and this turn read {reason}.\n{summary}"
+            )
         request_id = str(uuid4())
 
         loop = asyncio.get_running_loop()
@@ -167,6 +208,7 @@ class Guardian:
             summary=summary,
             future=future,
             expiry_task=expiry_task,
+            tainted=tainted,
         )
 
         await self._event_bus.emit(
@@ -245,7 +287,7 @@ class Guardian:
         verdict: Verdict,
         who_approved: Optional[str],
     ) -> None:
-        self._audit(pending.tool_name, pending.arguments, verdict, who_approved)
+        self._audit(pending.tool_name, pending.arguments, verdict, who_approved, tainted=pending.tainted)
 
     def _audit(
         self,
@@ -253,6 +295,7 @@ class Guardian:
         arguments: Dict[str, Any],
         verdict: Verdict,
         who_approved: Optional[str],
+        tainted: bool = False,
     ) -> None:
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -261,6 +304,8 @@ class Guardian:
             "verdict": verdict.outcome.value,
             "who_approved": who_approved,
         }
+        if tainted:
+            entry["tainted_input"] = True
         try:
             self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self._audit_log_path.open("a", encoding="utf-8") as f:

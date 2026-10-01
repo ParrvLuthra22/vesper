@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from agents.base_agent import AgentCapability, BaseAgent
+from utils import safe_exec
+from utils.safe_exec import UnsafeInputError
 from bus.event_bus import EventBus
 from schemas.events import (
     ActionRequestEvent,
@@ -177,24 +179,43 @@ class AppleScriptExecutor:
             self._log("error", f"AppleScript error: {e}")
             return False, "", str(e)
     
-    def run_shell(
+    def run_command(
         self,
-        command: str,
+        argv: List[str],
         timeout: float = DEFAULT_TIMEOUT
     ) -> Tuple[bool, str, str]:
         """
-        Execute a shell command via AppleScript's 'do shell script'.
-        This is useful for commands that need proper shell environment.
+        Execute an external command from an argument list (shell=False).
+
+        There is deliberately no string-command variant: a value that is part
+        of a shell string can carry `$(...)`, backticks or `;` — as an argv
+        element it can only ever be data.
         """
-        # Escape quotes in the command
-        escaped = command.replace("\\", "\\\\").replace('"', '\\"')
-        script = f'do shell script "{escaped}"'
-        return self.run(script, timeout)
+        return safe_exec.run_argv(argv, timeout=timeout)
+
+    def run_script_with_args(
+        self,
+        script: str,
+        *args: str,
+        timeout: float = DEFAULT_TIMEOUT
+    ) -> Tuple[bool, str, str]:
+        """
+        Run a CONSTANT AppleScript whose variable values arrive via
+        `on run argv`. `script` must never contain interpolated external text.
+        """
+        return safe_exec.run_osascript(script, *args, timeout=timeout)
     
     # -------------------------------------------------------------------------
     # APPLICATION CONTROL
     # -------------------------------------------------------------------------
     
+    # Constant AppleScripts: the app name is argv item 1, never part of the source.
+    _OPEN_APP_SCRIPT = 'on run argv\ntell application (item 1 of argv) to activate\nend run'
+    _OPEN_APP_FINDER_SCRIPT = (
+        'on run argv\ntell application "Finder" to open application file id (item 1 of argv)\nend run'
+    )
+    _QUIT_APP_SCRIPT = 'on run argv\ntell application (item 1 of argv) to quit\nend run'
+
     def open_application(self, app_name: str) -> Tuple[bool, str]:
         """
         Open an application by name.
@@ -205,21 +226,24 @@ class AppleScriptExecutor:
         Returns:
             Tuple of (success, message)
         """
-        # Clean the app name
-        app_name = app_name.strip().rstrip(".")
+        try:
+            app_name = safe_exec.validate_app_name(app_name)
+        except UnsafeInputError as exc:
+            return False, f"Refused: {exc}"
         
         # Try different methods in order of reliability
-        methods = [
+        attempts = [
             # Method 1: tell application to activate
-            f'tell application "{app_name}" to activate',
+            lambda: self.run_script_with_args(self._OPEN_APP_SCRIPT, app_name, timeout=15.0),
             # Method 2: open via Finder
-            f'tell application "Finder" to open application file id "{app_name}"',
-            # Method 3: open command
-            f'do shell script "open -a \\"{app_name}\\""',
+            lambda: self.run_script_with_args(self._OPEN_APP_FINDER_SCRIPT, app_name, timeout=15.0),
+            # Method 3: open command (argv, no shell)
+            lambda: self.run_command(["open", "-a", app_name], timeout=15.0),
         ]
         
-        for i, script in enumerate(methods):
-            success, stdout, stderr = self.run(script, timeout=15.0)
+        stderr = ""
+        for i, attempt in enumerate(attempts):
+            success, stdout, stderr = attempt()
             if success:
                 return True, f"Opened {app_name}"
             elif i == 0:
@@ -239,14 +263,18 @@ class AppleScriptExecutor:
         Returns:
             Tuple of (success, message)
         """
-        app_name = app_name.strip().rstrip(".")
+        try:
+            app_name = safe_exec.validate_app_name(app_name)
+        except UnsafeInputError as exc:
+            return False, f"Refused: {exc}"
         
         if force:
-            script = f'do shell script "killall \\"{app_name}\\" 2>/dev/null || true"'
-        else:
-            script = f'tell application "{app_name}" to quit'
+            # killall exits non-zero when nothing matched; that was previously
+            # swallowed by `|| true`, so keep treating it as success.
+            self.run_command(["killall", app_name])
+            return True, f"Closed {app_name}"
         
-        success, stdout, stderr = self.run(script)
+        success, stdout, stderr = self.run_script_with_args(self._QUIT_APP_SCRIPT, app_name)
         
         if success:
             return True, f"Closed {app_name}"
@@ -255,9 +283,11 @@ class AppleScriptExecutor:
     
     def focus_application(self, app_name: str) -> Tuple[bool, str]:
         """Bring an application to the foreground."""
-        app_name = app_name.strip().rstrip(".")
-        script = f'tell application "{app_name}" to activate'
-        success, stdout, stderr = self.run(script)
+        try:
+            app_name = safe_exec.validate_app_name(app_name)
+        except UnsafeInputError as exc:
+            return False, f"Refused: {exc}"
+        success, stdout, stderr = self.run_script_with_args(self._OPEN_APP_SCRIPT, app_name)
         
         if success:
             return True, f"Focused {app_name}"
@@ -291,13 +321,16 @@ class AppleScriptExecutor:
     
     def is_application_running(self, app_name: str) -> bool:
         """Check if an application is currently running."""
-        app_name = app_name.strip().rstrip(".")
-        script = f'''
-        tell application "System Events"
-            return exists (process "{app_name}")
-        end tell
-        '''
-        success, stdout, stderr = self.run(script)
+        try:
+            app_name = safe_exec.validate_app_name(app_name)
+        except UnsafeInputError:
+            return False
+        script = (
+            'on run argv\n'
+            'tell application "System Events" to return exists (process (item 1 of argv))\n'
+            'end run'
+        )
+        success, stdout, stderr = self.run_script_with_args(script, app_name)
         return success and stdout.lower() == "true"
     
     # -------------------------------------------------------------------------
@@ -323,9 +356,11 @@ class AppleScriptExecutor:
         Returns:
             Tuple of (success, message)
         """
-        level = max(0, min(100, level))
-        script = f"set volume output volume {level}"
-        success, stdout, stderr = self.run(script)
+        level = max(0, min(100, int(level)))
+        success, stdout, stderr = self.run_script_with_args(
+            "on run argv\nset volume output volume ((item 1 of argv) as integer)\nend run",
+            str(level),
+        )
         
         if success:
             return True, f"Volume set to {level}%"
@@ -387,13 +422,13 @@ class AppleScriptExecutor:
         Note: On Apple Silicon Macs, brightness API access is limited.
         """
         # Try using brightness command if available
-        if shutil.which("brightness"):
-            script = r'do shell script "brightness -l 2>/dev/null | grep -o \"brightness [0-9.]*\" | head -1 | cut -d\" \" -f2"'
-            success, stdout, stderr = self.run(script)
-            
-            if success and stdout:
+        brightness_bin = shutil.which("brightness")
+        if brightness_bin:
+            success, stdout, stderr = self.run_command([brightness_bin, "-l"])
+            match = re.search(r"brightness\s+([0-9.]+)", stdout) if success else None
+            if match:
                 try:
-                    return float(stdout)
+                    return float(match.group(1))
                 except ValueError:
                     pass
         
@@ -416,9 +451,9 @@ class AppleScriptExecutor:
         level = max(0.0, min(1.0, level))
         
         # Check if brightness command is available
-        if shutil.which("brightness"):
-            script = f'do shell script "brightness {level}"'
-            success, stdout, stderr = self.run(script)
+        brightness_bin = shutil.which("brightness")
+        if brightness_bin:
+            success, stdout, stderr = self.run_command([brightness_bin, f"{float(level):.4f}"])
             
             if success:
                 return True, f"Brightness set to {int(level * 100)}%"
@@ -436,7 +471,7 @@ class AppleScriptExecutor:
         # Simulate pressing brightness up key (F2)
         script = '''
         tell application "System Events"
-            repeat ''' + str(step) + ''' times
+            repeat ''' + str(int(step)) + ''' times
                 key code 144 -- brightness up key
                 delay 0.1
             end repeat
@@ -460,7 +495,7 @@ class AppleScriptExecutor:
         # Simulate pressing brightness down key (F1)
         script = '''
         tell application "System Events"
-            repeat ''' + str(step) + ''' times
+            repeat ''' + str(int(step)) + ''' times
                 key code 145 -- brightness down key
                 delay 0.1
             end repeat
@@ -573,8 +608,11 @@ class AppleScriptExecutor:
     
     def get_disk_info(self, path: str = "/") -> Dict[str, Any]:
         """Get disk usage information for a path."""
-        script = f'do shell script "df -H \\"{path}\\" | tail -1"'
-        success, stdout, stderr = self.run(script)
+        path = str(path)
+        if not path or "\x00" in path or path.startswith("-"):
+            return {"total_gb": 0.0, "used_gb": 0.0, "free_gb": 0.0, "percent": 0.0}
+        success, stdout, stderr = self.run_command(["df", "-H", path])
+        stdout = safe_exec.first_line(stdout) if success else ""
         
         result = {"total_gb": 0.0, "used_gb": 0.0, "free_gb": 0.0, "percent": 0.0}
         
@@ -673,7 +711,7 @@ class AppleScriptExecutor:
         
         if not success:
             # Method 2: pmset
-            success, stdout, stderr = self.run_shell("pmset displaysleepnow")
+            success, stdout, stderr = self.run_command(["pmset", "displaysleepnow"])
         
         if success:
             return True, "Screen locked"
@@ -704,10 +742,9 @@ class AppleScriptExecutor:
     
     def set_clipboard(self, text: str) -> Tuple[bool, str]:
         """Set text to clipboard."""
-        # Escape special characters
-        escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-        script = f'set the clipboard to "{escaped}"'
-        success, stdout, stderr = self.run(script)
+        success, stdout, stderr = self.run_script_with_args(
+            "on run argv\nset the clipboard to (item 1 of argv)\nend run", str(text)
+        )
         
         if success:
             return True, "Text copied to clipboard"
@@ -734,21 +771,30 @@ class AppleScriptExecutor:
             subtitle: Optional subtitle
             sound: Sound name or "default"/"none"
         """
-        # Escape quotes
-        title = title.replace('"', '\\"')
-        message = message.replace('"', '\\"')
-        subtitle = subtitle.replace('"', '\\"')
+        # Values travel as argv; the script source is constant. `sound name`
+        # takes a plain name, and "none"/empty means no sound.
+        script = (
+            "on run argv\n"
+            "set theMessage to item 1 of argv\n"
+            "set theTitle to item 2 of argv\n"
+            "set theSubtitle to item 3 of argv\n"
+            "set theSound to item 4 of argv\n"
+            "if theSubtitle is \"\" and theSound is \"\" then\n"
+            "display notification theMessage with title theTitle\n"
+            "else if theSound is \"\" then\n"
+            "display notification theMessage with title theTitle subtitle theSubtitle\n"
+            "else if theSubtitle is \"\" then\n"
+            "display notification theMessage with title theTitle sound name theSound\n"
+            "else\n"
+            "display notification theMessage with title theTitle subtitle theSubtitle sound name theSound\n"
+            "end if\n"
+            "end run"
+        )
+        sound_arg = "" if (not sound or sound == "none") else str(sound)
         
-        script = f'''
-        display notification "{message}" with title "{title}"'''
-        
-        if subtitle:
-            script += f' subtitle "{subtitle}"'
-        
-        if sound and sound != "none":
-            script += f' sound name "{sound}"'
-        
-        success, stdout, stderr = self.run(script)
+        success, stdout, stderr = self.run_script_with_args(
+            script, str(message), str(title), str(subtitle or ""), sound_arg
+        )
         
         if success:
             return True, "Notification shown"
@@ -770,18 +816,25 @@ class AppleScriptExecutor:
         Show an alert dialog and return the button clicked.
         Note: This blocks until user responds!
         """
-        buttons = buttons or ["OK"]
-        button_str = ", ".join(f'"{b}"' for b in buttons)
+        buttons = [str(b) for b in (buttons or ["OK"])]
+        try:
+            default_idx = max(1, min(len(buttons), int(default_button)))
+        except (TypeError, ValueError):
+            default_idx = 1
+        script = (
+            "on run argv\n"
+            "set theTitle to item 1 of argv\n"
+            "set theMessage to item 2 of argv\n"
+            "set theDefault to (item 3 of argv) as integer\n"
+            "set theButtons to items 4 thru -1 of argv\n"
+            "display alert theTitle message theMessage buttons theButtons default button theDefault\n"
+            "return button returned of result\n"
+            "end run"
+        )
         
-        title = title.replace('"', '\\"')
-        message = message.replace('"', '\\"')
-        
-        script = f'''
-        display alert "{title}" message "{message}" buttons {{{button_str}}} default button {default_button}
-        return button returned of result
-        '''
-        
-        success, stdout, stderr = self.run(script, timeout=60.0)
+        success, stdout, stderr = self.run_script_with_args(
+            script, str(title), str(message), str(default_idx), *buttons, timeout=60.0
+        )
         
         if success:
             return True, stdout
@@ -1464,8 +1517,13 @@ class SystemAgent(BaseAgent):
         else:  # default to google
             url = f"https://www.google.com/search?q={encoded_query}"
         
-        # Open in default browser
-        success, stdout, stderr = self.executor.run_shell(f'open "{url}"')
+        # Open in default browser (argv, no shell). The query is quote_plus'd
+        # and the host is fixed, but validate anyway so this can only be http(s).
+        try:
+            url = safe_exec.validate_http_url(url)
+        except UnsafeInputError as exc:
+            return f"I couldn't open that: {exc}"
+        success, stdout, stderr = self.executor.run_command(["open", url])
         
         if success:
             return f"Searching for {query}"
@@ -1479,11 +1537,14 @@ class SystemAgent(BaseAgent):
         if not url:
             return "What URL would you like me to open?"
         
-        # Add https if no protocol specified
-        if not url.startswith("http://") and not url.startswith("https://"):
-            url = f"https://{url}"
+        # http(s) only: bare hosts get https://; every other scheme (file:,
+        # mailto:, shortcuts:, ...) is refused. Passed to `open` as argv.
+        try:
+            url = safe_exec.validate_http_url(url)
+        except UnsafeInputError as exc:
+            return f"I couldn't open that URL: {exc}"
         
-        success, stdout, stderr = self.executor.run_shell(f'open "{url}"')
+        success, stdout, stderr = self.executor.run_command(["open", url])
 
         if success:
             return f"Opening {url}"
@@ -1503,8 +1564,8 @@ class SystemAgent(BaseAgent):
 
     def _handle_screenshot(self, entities: Dict, raw_text: str) -> str:
         """Capture a screenshot of the current screen via macOS's screencapture CLI."""
-        success, stdout, stderr = self.executor.run_shell(
-            f'screencapture -x "{SCREENSHOT_PATH}"'
+        success, stdout, stderr = self.executor.run_command(
+            ["screencapture", "-x", str(SCREENSHOT_PATH)]
         )
 
         if success and SCREENSHOT_PATH.exists():
