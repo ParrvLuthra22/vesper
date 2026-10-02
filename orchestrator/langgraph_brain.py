@@ -40,13 +40,6 @@ try:
 except ImportError:
     WebSearchAgent = None  # type: ignore
     WEB_SEARCH_AVAILABLE = False
-try:
-    from agents.macos_control_agent import MacOSControlAgent
-
-    MACOS_CONTROL_AVAILABLE = True
-except ImportError:
-    MacOSControlAgent = None  # type: ignore
-    MACOS_CONTROL_AVAILABLE = False
 from agents.rag_agent import RAGAgent
 from agents.system_agent import SystemAgent
 from agents.tool_agent import ToolAgent
@@ -181,16 +174,12 @@ class Brain:
         voice_agent = VoiceAgent(event_bus=self.event_bus, config=self.config)
         vision_agent = None
         web_search_agent = None
-        macos_control_agent = None
         vision_cfg = (self.config or {}).get("vision", {})
         web_cfg = (self.config or {}).get("web_search", {})
-        macos_cfg = (self.config or {}).get("macos_control", {})
         if vision_cfg.get("enabled", False) and VISION_AVAILABLE:
             vision_agent = VisionAgent(event_bus=self.event_bus, config=self.config)
         if web_cfg.get("enabled", True) and WEB_SEARCH_AVAILABLE:
             web_search_agent = WebSearchAgent(event_bus=self.event_bus, config=self.config)
-        if macos_cfg.get("enabled", True) and MACOS_CONTROL_AVAILABLE:
-            macos_control_agent = MacOSControlAgent(event_bus=self.event_bus, config=self.config)
 
         self._agents = {
             "MemoryAgent": memory_agent,
@@ -201,8 +190,6 @@ class Brain:
             self._agents["VisionAgent"] = vision_agent
         if web_search_agent is not None:
             self._agents["WebSearchAgent"] = web_search_agent
-        if macos_control_agent is not None:
-            self._agents["MacOSControlAgent"] = macos_control_agent
 
         for agent in self._agents.values():
             await agent.start()

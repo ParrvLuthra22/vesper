@@ -399,9 +399,6 @@ def test_real_osascript_notification_script_compiles_with_hostile_values(marker)
 
 #: Intentional arbitrary-execution tools, DANGEROUS tier + verbatim confirmation.
 _SCAN_ALLOWLIST = {"tools/creator.py"}
-#: Dead code (nothing emits MacOSCommandEvent; see VESPER_STATUS.md B4). Listed,
-#: not fixed in this change; remove from this set when the module is deleted/fixed.
-_KNOWN_LEGACY = {"agents/macos_control_agent.py"}
 
 
 def _python_sources():
@@ -430,11 +427,12 @@ def test_system_agent_has_no_interpolated_shell_or_applescript():
     assert bad == [], bad
 
 
-def test_no_new_fstring_osascript_outside_known_files():
-    """An f-string passed to osascript/`do shell script` anywhere else is suspect."""
+def test_no_fstring_osascript_anywhere_but_the_allowlist():
+    """An f-string passed to osascript/`do shell script` anywhere else is suspect.
+    (agents/macos_control_agent.py, which had one, was deleted; nothing is exempt now.)"""
     pattern = re.compile(r"""f(?:'''|\"\"\"|'|")[^\n]*?(?:do shell script|tell application)[^\n]*\{""")
     offenders = [
         rel for rel, text in _python_sources()
-        if rel not in _KNOWN_LEGACY and rel not in _SCAN_ALLOWLIST and pattern.search(text)
+        if rel not in _SCAN_ALLOWLIST and pattern.search(text)
     ]
     assert offenders == []

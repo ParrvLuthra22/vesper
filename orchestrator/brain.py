@@ -46,7 +46,6 @@ from bus.event_bus import EventBus, get_event_bus
 from agents.base_agent import AgentState, BaseAgent
 from agents.voice_agent import VoiceAgent
 from agents.system_agent import SystemAgent
-from agents.macos_control_agent import MacOSControlAgent
 from agents.web_search_agent import WebSearchAgent
 from agents.memory_agent import MemoryAgent
 from agents.plugin_agent import PluginAgent
@@ -1041,7 +1040,6 @@ class Brain:
         agents = [
             MemoryAgent(config={"memory": memory_config}),
             SystemAgent(config={"system": system_config}),
-            MacOSControlAgent(config={"system": system_config}),
             WebSearchAgent(config={"web_search": web_search_config, "system": system_config}),
             PluginAgent(config={"plugins": plugins_config}),
         ]

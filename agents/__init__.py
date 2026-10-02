@@ -15,7 +15,6 @@ from agents.base_agent import BaseAgent, AgentCapability, AgentState, AgentMetri
 from agents.voice_agent import VoiceAgent
 from agents.intent_agent import IntentAgent
 from agents.system_agent import SystemAgent
-from agents.macos_control_agent import MacOSControlAgent
 from agents.memory_agent import MemoryAgent
 from agents.web_search_agent import WebSearchAgent
 from agents.rag_agent import RAGAgent
@@ -30,7 +29,6 @@ __all__ = [
     "VoiceAgent",
     "IntentAgent",
     "SystemAgent",
-    "MacOSControlAgent",
     "MemoryAgent",
     "WebSearchAgent",
     "RAGAgent",

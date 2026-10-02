@@ -48,7 +48,6 @@ TARGET_AGENTS = [
     "MemoryAgent",
     "VisionAgent",
     "WebSearchAgent",
-    "MacOSControlAgent",
 ]
 
 
