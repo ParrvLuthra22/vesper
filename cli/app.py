@@ -442,8 +442,8 @@ def run() -> None:
     gateway's WebSocket instead — proving the client contract — while
     in-process mode stays the default and is unchanged.
     """
-    # `vesper up|down|status|logs` — the supervised full stack (launcher/).
-    if len(sys.argv) > 1 and sys.argv[1] in ("up", "down", "status", "logs"):
+    # `vesper up|down|status|logs|doctor` — the supervised full stack (launcher/).
+    if len(sys.argv) > 1 and sys.argv[1] in ("up", "down", "status", "logs", "doctor"):
         from launcher.cli import main as launcher_main
 
         sys.exit(launcher_main(sys.argv[1:]))

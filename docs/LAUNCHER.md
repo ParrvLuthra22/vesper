@@ -42,6 +42,13 @@ generated per run (or taken from `VESPER_GATEWAY_TOKEN`) and handed to every chi
 * Refuses to start if a supervisor is already running, or if the gateway port is already in use.
 * Config: the `launcher:` block in `config/settings.yaml` (components on/off, backoff, timeouts, HUD binary path).
 
+## `vesper doctor`
+
+A read-only environment check: microphone devices (and, with `--probe-mic`, permission), Telegram token *presence* in
+the Keychain/environment (the value is never read or printed), model files, the gateway port, briefing-cache
+freshness, and the channel of the last audit entry. One PASS/WARN/FAIL line each, with the fix under every WARN/FAIL.
+It sends nothing and exits 1 only on FAIL. The full end-to-end checklist is [LIVE_VERIFICATION.md](LIVE_VERIFICATION.md).
+
 ## Manual test checklist (the voice round trip is not automated)
 
 1. `vesper up` → four READY lines; `vesper status` agrees; the HUD star appears on the wake word, not before.

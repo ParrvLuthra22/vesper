@@ -121,6 +121,12 @@ def cmd_logs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    from launcher.doctor import main as doctor_main
+
+    return doctor_main(["--probe-mic"] if args.probe_mic else [])
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="vesper", description="Start, supervise and stop Vesper.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -138,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--json", action="store_true")
     status.set_defaults(func=cmd_status)
 
+    doctor = sub.add_parser("doctor", help="read-only environment check (sends nothing, prints no secret)")
+    doctor.add_argument("--probe-mic", action="store_true",
+                        help="open the microphone ~2 s to test permission (may show the macOS prompt)")
+    doctor.set_defaults(func=cmd_doctor)
+
     logs = sub.add_parser("logs", help="tail a component's log")
     logs.add_argument("component", nargs="?")
     logs.add_argument("-n", "--lines", type=int, default=40)
@@ -145,7 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-COMMANDS = ("up", "down", "status", "logs")
+COMMANDS = ("up", "down", "status", "logs", "doctor")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
