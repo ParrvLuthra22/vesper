@@ -36,10 +36,11 @@ def cfg(**over) -> BriefingConfig:
     return from_dict(base)
 
 
-def test_unknown_fresh_mail_is_modest():
+def test_unknown_fresh_personal_mail_clears_the_priority_bar():
     s = score_item(mail(), ctx(), cfg())
-    assert s.score == 25                      # 15 base + 10 fresh
+    assert s.score == 40                      # 15 base + 15 personal (no bulk signals) + 10 fresh
     assert not s.excluded and not s.bulk
+    assert s.score >= cfg().min_priority_score
 
 
 @pytest.mark.parametrize("sender,kind", [
@@ -49,7 +50,7 @@ def test_unknown_fresh_mail_is_modest():
 ])
 def test_vip_sender_boosts(sender, kind):
     s = score_item(mail(sender=sender), ctx(), cfg())
-    assert s.score == 70                      # 15 + 45 + 10
+    assert s.score == 85                      # 15 + 15 personal + 45 + 10
     assert any(f"VIP sender ({kind})" in r.label for r in s.reasons)
 
 
@@ -58,11 +59,11 @@ def test_non_vip_gets_no_vip_boost():
     assert not any("VIP" in r.label for r in s.reasons)
 
 
-def test_replied_to_sender_before_and_reply_in_my_thread():
+def test_known_correspondent_and_reply_in_my_thread():
     base = score_item(mail(thread_id="t1"), ctx(), cfg()).score
     wrote = score_item(mail(thread_id="t1"), ctx(sent_recipients={"stranger@example.com"}), cfg()).score
     thread = score_item(mail(thread_id="t1"), ctx(sent_threads={"t1"}), cfg()).score
-    assert (wrote - base, thread - base) == (15, 20)
+    assert (wrote - base, thread - base) == (25, 20)
 
 
 def test_plain_reply_gets_small_bonus_but_not_if_thread_is_mine():
@@ -75,7 +76,7 @@ def test_plain_reply_gets_small_bonus_but_not_if_thread_is_mine():
 @pytest.mark.parametrize("subject,expected_words,expected_delta", [
     ("Report due tomorrow", ["due", "tomorrow"], 14),
     ("URGENT: please respond ASAP", ["asap", "urgent"], 24),
-    ("Interview scheduled", ["interview"], 15),
+    ("Interview scheduled", ["interview"], 25),
     ("Your exam results and the offer letter", ["exam", "offer"], 24),
     ("EOD deadline, interview tomorrow, urgent", ["deadline", "eod", "interview", "tomorrow", "urgent"], 30),  # capped
 ])
@@ -128,7 +129,7 @@ def test_age_fresh_and_stale():
     fresh = score_item(mail(age_h=2), ctx(), cfg())
     mid = score_item(mail(age_h=30), ctx(), cfg())
     stale = score_item(mail(age_h=24 * 8), ctx(), cfg())
-    assert (fresh.score, mid.score, stale.score) == (25, 15, 5)
+    assert (fresh.score, mid.score, stale.score) == (40, 30, 20)   # 15 + 15 personal, then +10 fresh / 0 / -10 stale
 
 
 def test_read_mail_is_excluded():
@@ -202,6 +203,7 @@ def test_yaml_defaults_match_code_defaults(monkeypatch):
 
 
 def test_weights_in_yaml_are_overridable():
-    c = from_dict({"weights": {"vip_sender": 80, "mail_base": 0}, "vips": {"addresses": ["boss@corp.com"]}})
+    c = from_dict({"weights": {"vip_sender": 80, "mail_base": 0, "personal_mail": 0},
+                   "vips": {"addresses": ["boss@corp.com"]}})
     s = score_item(mail(sender="Big Boss <boss@corp.com>"), ctx(), c)
-    assert s.score == 90                       # 0 + 80 + 10 fresh
+    assert s.score == 90                       # 0 + 0 + 80 + 10 fresh

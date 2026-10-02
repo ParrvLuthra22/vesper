@@ -151,6 +151,16 @@ def test_sent_summary_returns_threads_and_lowercased_recipients(fake):
     assert fake.list_queries == ["in:sent newer_than:30d"]
 
 
+def test_sent_summary_reports_per_recipient_message_counts_and_no_message_text(fake):
+    fake.msgs["m0"]["payload"]["headers"] = [{"name": "To", "value": "Bob <bob@x.org>, carol@x.org"}]
+    fake.msgs["m1"]["payload"]["headers"] = [{"name": "To", "value": "BOB@x.org"}, {"name": "Cc", "value": "bob@x.org"}]
+    fake.msgs["m2"]["payload"]["headers"] = [{"name": "To", "value": "dave@y.io"}]
+    out = gmail_client._sent_summary_sync(365, 3)
+    assert out["recipient_counts"] == {"bob@x.org": 2, "carol@x.org": 1, "dave@y.io": 1}   # per message, not per header
+    assert out["message_count"] == 3 and out["recipients"] == sorted(out["recipient_counts"])
+    assert set(out) == {"thread_ids", "recipients", "recipient_counts", "message_count"}     # addresses only: no subject/body/snippet
+
+
 def test_nothing_in_the_new_tools_can_write(fake):
     gmail_client._list_inbox_sync(5, "in:inbox")
     gmail_client._unread_ids_sync(5)

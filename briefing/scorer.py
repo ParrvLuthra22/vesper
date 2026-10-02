@@ -21,6 +21,8 @@ from typing import Iterable, List, Optional, Set
 
 from briefing.config import BriefingConfig
 from briefing.items import Item
+from briefing.known import domain_matches, domain_of
+from briefing.rules import RuleSet
 from briefing.sanitize import looks_like_instructions
 
 _CATEGORY_PROMO = {"CATEGORY_PROMOTIONS", "CATEGORY_SOCIAL"}
@@ -38,7 +40,9 @@ class Reason:
 class ScoringContext:
     now: float
     sent_threads: Set[str] = field(default_factory=set)       # threads containing mail I sent
-    sent_recipients: Set[str] = field(default_factory=set)    # addresses I have written to (lowercase)
+    sent_recipients: Set[str] = field(default_factory=set)    # KNOWN correspondent addresses (lowercase)
+    known_domains: Set[str] = field(default_factory=set)      # non-public domains I have written to
+    rules: Optional["RuleSet"] = None                         # your --mark feedback
 
 
 @dataclass
@@ -98,6 +102,28 @@ def score_item(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredIt
 
 # --------------------------------------------------------------------------- mail
 
+def _important_automated(addr: str, item: Item, cfg: BriefingConfig) -> bool:
+    """Sender on the user's allowlist of automated senders that matter (college portal,
+    hackathon platform, GitHub, payment provider...): configured domains (subdomains
+    included) or regex patterns against the address / subject."""
+    domain = domain_of(addr)
+    if domain and any(domain == d or domain.endswith("." + d) for d in cfg.important_domains if d):
+        return True
+    rx = _compile(cfg.important_patterns)
+    # tried separately: a pattern like '\.edu$' must be able to anchor at the end of the ADDRESS
+    return bool(_any(rx, addr) or _any(rx, item.title or ""))
+
+
+def _strong_hits(text: str, cfg: BriefingConfig, promo: bool) -> List[str]:
+    hits = []
+    for term in cfg.strong_urgency:
+        if promo and term in cfg.strong_urgency_ignored_for_promo:
+            continue        # "coupon expires tonight" is not an emergency
+        if re.search(rf"(?<!\w){re.escape(term)}(?!\w)", text, re.IGNORECASE):
+            hits.append(term)
+    return hits
+
+
 def _score_mail(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredItem:
     w = cfg.weights
     if not item.unread:
@@ -108,37 +134,69 @@ def _score_mail(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredI
     sig = item.signals or {}
     labels = set(sig.get("labels") or [])
     addr = sender_address(item.sender)
+    domain = domain_of(addr)
+    rule = ctx.rules.match(item.sender) if ctx.rules is not None else None
+    important = _important_automated(addr, item, cfg)
 
-    # ---- bulk / automated signals first: they gate the urgency words below ----
-    bulk = False
+    # ---- bulk / automated signals: collected first, then waived, capped or applied ----
+    penalties: List[Reason] = []
+    promo = False
     if _any(_compile(cfg.pattern_noreply), addr or item.sender):
-        reasons.append(Reason("noreply sender", w.noreply_sender)); bulk = True
+        penalties.append(Reason("noreply sender", w.noreply_sender))
     if sig.get("list_id") or sig.get("has_list_unsubscribe") or str(sig.get("precedence", "")) in _BULK_PRECEDENCE:
-        reasons.append(Reason("mailing-list header", w.mailing_list_header)); bulk = True
+        penalties.append(Reason("mailing-list header", w.mailing_list_header))
     if labels & _CATEGORY_PROMO or _any(_compile(cfg.pattern_promo), text):
-        reasons.append(Reason("promo signal", w.promo_signal)); bulk = True
+        penalties.append(Reason("promo signal", w.promo_signal)); promo = True
     if labels & _CATEGORY_NEWSLETTER or _any(_compile(cfg.pattern_newsletter), f"{item.title} {item.sender}"):
-        reasons.append(Reason("newsletter signal", w.newsletter_signal)); bulk = True
+        penalties.append(Reason("newsletter signal", w.newsletter_signal))
     if sig.get("auto_submitted") and str(sig["auto_submitted"]) != "no":
-        reasons.append(Reason("auto-submitted", w.auto_submitted)); bulk = True
+        penalties.append(Reason("auto-submitted", w.auto_submitted))
+
+    waived_by = ("important automated sender (allowlist)" if important
+                 else "your rule: priority sender" if rule is not None and rule.action == "priority" else None)
+    strong = _strong_hits(text, cfg, promo)
+    gmail_says_promo = bool(labels & _CATEGORY_PROMO)
+    if strong and gmail_says_promo and cfg.strong_urgency_respects_gmail_promotions and not waived_by:
+        strong = []          # Gmail itself filed it as marketing: a keyword does not lift it
+    bulk = False
+    if penalties:
+        if waived_by:
+            reasons.append(Reason(f"{waived_by}: bulk penalties waived", 0))
+        else:
+            reasons.extend(penalties)
+            total = sum(p.delta for p in penalties)
+            if strong and total < w.strong_urgency_bulk_cap:
+                reasons.append(Reason(f"strong urgency ({', '.join(strong)}): bulk penalties capped at "
+                                      f"{w.strong_urgency_bulk_cap:g}", w.strong_urgency_bulk_cap - total))
+            else:
+                bulk = True
+    elif not important and not (rule and rule.action == "priority"):
+        reasons.append(Reason("personal mail (no bulk signals)", w.personal_mail))
+
+    if important and w.important_automated:
+        reasons.append(Reason("important automated sender (allowlist boost)", w.important_automated))
 
     # ---- who it is from ----
     vip = _is_vip(item.sender, cfg)
     if vip:
         reasons.append(Reason(f"VIP sender ({vip})", w.vip_sender))
     if addr and addr in ctx.sent_recipients:
-        reasons.append(Reason("I've written to this sender before", w.replied_to_sender_before))
+        reasons.append(Reason("known correspondent (I've written to this address)", w.known_correspondent))
+    elif domain and domain_matches(domain, ctx.known_domains):
+        reasons.append(Reason("known domain (I've written to others there)", w.known_domain))
     if item.thread_id and item.thread_id in ctx.sent_threads:
         reasons.append(Reason("reply in a thread I sent in", w.reply_in_my_thread))
     elif item.is_reply:
         reasons.append(Reason("is a reply", w.is_reply))
 
-    # ---- urgency words (ignored for bulk: "URGENT: 50% off" earns nothing) ----
+    # ---- urgency words (ignored while the mail is still treated as bulk) ----
     if not bulk:
         total = 0.0
         hits = []
         for word, weight in cfg.urgency_keywords.items():
             if re.search(rf"(?<![\w]){re.escape(word)}(?![\w])", text, re.IGNORECASE):
+                if promo and word in cfg.strong_urgency_ignored_for_promo:
+                    continue
                 total += weight; hits.append(word)
         if hits:
             reasons.append(Reason(f"urgency words ({', '.join(sorted(hits))})", min(total, w.urgency_total_cap)))
@@ -150,6 +208,11 @@ def _score_mail(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredI
             reasons.append(Reason(f"fresh ({age_h:.0f}h old)", w.fresh_bonus))
         elif age_h >= w.stale_days * 24:
             reasons.append(Reason(f"unread for {age_h / 24:.0f} days", w.stale_penalty))
+
+    # ---- your own feedback ----
+    if rule is not None:
+        reasons.append(Reason(f"your rule {rule.describe()}", w.rule_priority if rule.action == "priority" else w.rule_ignore))
+        bulk = bulk or rule.action == "ignore"
 
     # ---- hostile content ----
     suspicious = looks_like_instructions(item.title, item.snippet, parseaddr(item.sender or "")[0])

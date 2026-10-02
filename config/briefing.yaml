@@ -17,9 +17,14 @@ collect:
   gmail_max_new: 50             # newest unread messages pulled per run
   snippet_chars: 200            # snippets are truncated to this at collection time (further at briefing time)
   calendar_window_days: 2       # today + tomorrow
-  sent_days: 60                 # how much sent mail counts as "I have replied to this sender before"
+  # Known correspondents are derived from your SENT mail (header addresses only, never bodies).
+  # 365 not 60: measured on the real account, 60 days of sent mail was EMPTY (it sends ~1 mail a
+  # fortnight; 12 in 180 days, 29 in 365), so a 60-day window boosted nobody. Lower it if you write a lot.
+  sent_days: 365
+  sent_max_messages: 500        # at most this many recent sent messages are read (headers only)
   sent_refresh_hours: 24        # re-read the sent-mail summary at most this often
-  cache_path: "data/briefing.db"
+  cache_path: "data/briefing.db"          # git-ignored
+  rules_path: "data/briefing_rules.json"  # your --mark feedback; git-ignored, plain JSON
 
 # People who matter. Matching is case-insensitive. EMPTY by default — fill it in.
 vips:
@@ -27,22 +32,56 @@ vips:
   domains: []                   # e.g. ["newtonschool.co"]  (whole domain)
   names: []                     # substring of the display name, e.g. ["Priya"]
 
+# Domains of mailbox providers (gmail.com, outlook.com ...). Having written to someone@gmail.com
+# must not make every Gmail sender "known", so these never count as a known DOMAIN.
+known:
+  public_domains: [gmail.com, googlemail.com, outlook.com, hotmail.com, live.com, msn.com, yahoo.com, yahoo.in,
+                   yahoo.co.in, icloud.com, me.com, mac.com, aol.com, proton.me, protonmail.com, gmx.com,
+                   mail.com, zoho.com, rediffmail.com]
+
+# Automated senders that MATTER. Mail from these has its noreply / newsletter / promo / mailing-list /
+# auto-submitted penalties WAIVED (the urgency words below then apply). Off by default — uncomment what
+# applies to you, or (better) put your own in config/briefing.local.yaml, which is git-ignored.
+important_automated:
+  domains: []
+  #  - github.com            # PR reviews, CI failures, security alerts
+  #  - vercel.com            # failed deploys
+  #  - stripe.com            # payment failed / disputes
+  #  - razorpay.com
+  #  - paypal.com
+  #  - devpost.com           # hackathon platforms: submission / judging deadlines
+  #  - mlh.io
+  #  - devfolio.co
+  #  - unstop.com
+  patterns: []                # regexes matched against the sender address and the subject
+  #  - '\.edu$'               # college portals (this is broad: every notice from the college)
+  #  - '\.ac\.in$'
+  #  - 'placement|internship portal'
+
 # Weights add up per item, then are clamped to 0..100 (mail to 0..mail_max_score).
 weights:
   # ---- mail: base and sender importance ----
   mail_base: 15                 # every unread inbox message starts here
+  personal_mail: 15             # NO bulk/automated signal at all: reads like a person wrote it to you
   vip_sender: 45                # sender is on the VIP list above
-  replied_to_sender_before: 15  # I have sent mail to this address within sent_days
+  known_correspondent: 25       # I have sent mail to this exact address within sent_days (derived, automatic)
+  known_domain: 10              # I have sent mail to someone at this (non-public) domain
+  important_automated: 0        # extra points for an ALLOWLISTED automated sender (important_automated below). 0 = the allowlist
+                                # only waives penalties, so a plain notice scores ~15-25 and surfaces only when fresh, urgent or
+                                # from a known domain. Set 15-20 to make allowlisted senders always reach the priority list.
+  rule_priority: 40             # your `--mark ... priority` rule (also waives the bulk penalties)
+  rule_ignore: -60              # your `--mark ... ignore` rule
   reply_in_my_thread: 20        # the thread contains a message I sent (someone answered me)
   is_reply: 5                   # it is a reply (Re: / In-Reply-To), whoever started the thread
   # ---- mail: age ----
   fresh_bonus: 10               # received within fresh_hours
-  fresh_hours: 6
+  fresh_hours: 24
   stale_penalty: -10            # still unread after stale_days
   stale_days: 7
   # ---- mail: urgency words (per-word weights are in urgency_keywords below) ----
   urgency_total_cap: 30         # all keyword hits together can add at most this
   # ---- negative signals ----
+  strong_urgency_bulk_cap: -10  # a strong-urgency match (list below) caps the COMBINED bulk penalties at this
   noreply_sender: -25           # noreply@ / do-not-reply@ and friends
   newsletter_signal: -25        # newsletter/digest wording, or Gmail Updates/Forums category
   promo_signal: -30             # promo wording, or Gmail Promotions/Social category
@@ -64,12 +103,29 @@ urgency_keywords:
   urgent: 12
   asap: 12
   eod: 10
-  deadline: 10
-  due: 8
-  interview: 15
+  deadline: 20                  # the STRONG terms (listed again below) weigh more: with the bulk-penalty
+  due: 8                        # cap they must be enough, on their own, to surface a notice from a
+  interview: 25                 # no-reply sender even when it is a day or two old
   offer: 12
   exam: 12
   tomorrow: 6
+  evaluation: 15
+  shortlisted: 25
+  submission: 15
+  expires: 10
+  payment failed: 25
+  action required: 20
+
+# Strong urgency: if the subject or snippet contains one of these, the combined bulk penalties
+# (noreply + newsletter + promo + list header + auto) are capped at weights.strong_urgency_bulk_cap,
+# and the urgency words apply even though the mail is automated. A deadline notice from a
+# no-reply portal should not score 0.
+strong_urgency: [deadline, evaluation, shortlisted, submission, interview, payment failed, action required, expires]
+# ...except these when the mail ALSO reads like a promotion ("coupon expires tonight").
+strong_urgency_ignored_for_promo: [expires]
+# Gmail's own Promotions/Social category beats a keyword: such mail never gets the cap. (Measured on the real
+# inbox: its only "action required" item was a Gmail-Promotions mail with an unsubscribe header.)
+strong_urgency_respects_gmail_promotions: true
 
 meeting_keywords: [interview, exam, offer, deadline, review, demo, presentation]
 
@@ -82,7 +138,7 @@ patterns:
 builder:
   max_meetings: 3               # meetings listed (imminent first, then later today, then tomorrow)
   max_priority_mail: 5          # priority mail items listed
-  min_priority_score: 35        # unread mail below this is "everything else" (a count)
+  min_priority_score: 30        # unread mail below this is "everything else" (a count)
   token_cap: 600                # HARD cap on the context handed to the planner (estimate_tokens)
   subject_chars: 70
   sender_chars: 32

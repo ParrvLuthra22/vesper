@@ -22,6 +22,7 @@ from briefing.builder import Briefing, build_briefing, render_tool_result, spoke
 from briefing.cache import BriefingCache
 from briefing.collectors import CalendarCollector, Collector, GmailCollector
 from briefing.config import BriefingConfig, load_briefing_config
+from briefing.known import META_KEY as KNOWN_META_KEY, derive_known
 from briefing.readonly import ReadOnlyTools
 from tools.registry import ToolRegistry, get_registry
 from utils.logger import get_logger
@@ -106,16 +107,20 @@ class BriefingService:
     async def _refresh_aux(self, c: Collector, timeout: float) -> None:
         if c.name != "gmail":
             return
-        _, updated = self.cache.get_meta(SENT_META_KEY)
-        if updated is not None and (self._clock() - updated) < self.cfg.sent_refresh_hours * 3600:
-            return
+        stored, updated = self.cache.get_meta(SENT_META_KEY)
+        same_window = bool(stored) and stored.get("window_days") == self.cfg.sent_days
+        if updated is not None and same_window and (self._clock() - updated) < self.cfg.sent_refresh_hours * 3600:
+            return   # fresh enough, and derived from the window the config asks for
         try:
             aux = await asyncio.wait_for(c.aux(), timeout)
         except Exception as exc:   # the sent summary only sharpens scoring; never fail the run over it
             logger.warning(f"[Briefing] sent-mail summary unavailable: {exc}")
             return
         if aux:
+            aux = {**aux, "window_days": self.cfg.sent_days}
             self.cache.set_meta(SENT_META_KEY, aux, now=self._clock())
+            # Derived, header-only: addresses/domains I have written to (never bodies).
+            self.cache.set_meta(KNOWN_META_KEY, derive_known(aux, self.cfg).to_dict(), now=self._clock())
 
     def is_stale(self, max_age_minutes: Optional[float] = None) -> bool:
         limit = (self.cfg.max_cache_age_minutes if max_age_minutes is None else max_age_minutes) * 60

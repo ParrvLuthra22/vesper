@@ -21,6 +21,8 @@ from typing import Dict, List, Optional, Tuple
 
 from briefing.cache import BriefingCache, SourceHealth
 from briefing.config import BriefingConfig
+from briefing.known import META_KEY as KNOWN_META_KEY, KnownSet, derive_known
+from briefing.rules import RuleSet
 from briefing.sanitize import clean_text, display_name, quote
 from briefing.scorer import ScoredItem, ScoringContext, score_item
 from llm.token_meter import estimate_tokens
@@ -63,13 +65,27 @@ class Briefing:
 
 # ------------------------------------------------------------------ build
 
-def scoring_context(cache: BriefingCache, now: float) -> ScoringContext:
+def load_known(cache: BriefingCache, cfg: BriefingConfig) -> KnownSet:
+    """The known-correspondent set: stored derived data, or derived on the fly from an
+    older cache entry that only has the raw sent summary."""
+    stored, _ = cache.get_meta(KNOWN_META_KEY)
+    if stored:
+        return KnownSet.from_dict(stored)
+    sent, _ = cache.get_meta("gmail_sent")
+    return derive_known(sent, cfg) if sent else KnownSet()
+
+
+def scoring_context(cache: BriefingCache, now: float, cfg: Optional[BriefingConfig] = None) -> ScoringContext:
+    cfg = cfg or BriefingConfig()
     sent, _ = cache.get_meta("gmail_sent")
     sent = sent or {}
+    known = load_known(cache, cfg)
     return ScoringContext(
         now=now,
         sent_threads=set(sent.get("thread_ids") or []),
-        sent_recipients={str(a).lower() for a in (sent.get("recipients") or [])},
+        sent_recipients=set(known.addresses),
+        known_domains=set(known.domains),
+        rules=RuleSet(cfg.rules_path),
     )
 
 
@@ -83,7 +99,7 @@ def source_status(cache: BriefingCache, name: str, available: bool, cfg: Briefin
 def build_briefing(
     cache: BriefingCache, cfg: BriefingConfig, now: float, sources: Optional[Dict[str, bool]] = None
 ) -> Briefing:
-    ctx = scoring_context(cache, now)
+    ctx = scoring_context(cache, now, cfg)
     scored = [score_item(it, ctx, cfg) for it in cache.active_items()]
     cache.save_scores([(s.item.id, s.score, [{"label": r.label, "delta": r.delta} for r in s.reasons], s.excluded)
                        for s in scored])

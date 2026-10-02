@@ -353,13 +353,17 @@ def _sent_summary_sync(days: int, max_n: int) -> Dict[str, Any]:
     ).execute()
     refs = response.get("messages", [])
     thread_ids = sorted({ref.get("threadId") for ref in refs if ref.get("threadId")})
-    recipients = set()
+    counts: Dict[str, int] = {}
     for message in _batch_get_metadata(service, [ref["id"] for ref in refs], ["To", "Cc"]):
         headers = message.get("payload", {}).get("headers", [])
-        for _name, addr in getaddresses([_header(headers, "To"), _header(headers, "Cc")]):
-            if addr:
-                recipients.add(addr.lower())
-    return {"thread_ids": thread_ids, "recipients": sorted(recipients)}
+        for addr in {a.lower() for _n, a in getaddresses([_header(headers, "To"), _header(headers, "Cc")]) if a}:
+            counts[addr] = counts.get(addr, 0) + 1   # messages (not bodies) that went to this address
+    return {
+        "thread_ids": thread_ids,
+        "recipients": sorted(counts),
+        "recipient_counts": counts,
+        "message_count": len(refs),
+    }
 
 
 async def list_inbox(max_n: int = 50, query: str = "in:inbox") -> List[Dict[str, Any]]:

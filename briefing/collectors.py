@@ -120,7 +120,8 @@ class GmailCollector(Collector):
     async def aux(self) -> Optional[Dict[str, Any]]:
         if not self._tools.available("sent_summary"):
             return None
-        data = await self._tools.call("sent_summary", {"days": self._cfg.sent_days, "max_n": 200})
+        data = await self._tools.call(
+            "sent_summary", {"days": self._cfg.sent_days, "max_n": self._cfg.sent_max_messages})
         return data if isinstance(data, dict) else None
 
 

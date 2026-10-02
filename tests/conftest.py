@@ -15,6 +15,7 @@ os.environ["VESPER_AUDIT_LOG"] = str(Path(_TEST_AUDIT_DIR) / "audit.jsonl")
 # Same for the briefing cache: nothing a test starts may create the real data/briefing.db.
 os.environ["VESPER_BRIEFING_DB"] = str(Path(_TEST_AUDIT_DIR) / "briefing.db")
 _REAL_BRIEFING_DB = Path(__file__).resolve().parents[1] / "data" / "briefing.db"
+_REAL_BRIEFING_RULES = Path(__file__).resolve().parents[1] / "data" / "briefing_rules.json"
 _REAL_AUDIT_LOG = Path(__file__).resolve().parents[1] / "data" / "audit.jsonl"
 
 
@@ -31,7 +32,11 @@ def _real_audit_log_untouched():
     """Fail the run if anything in it modified (or created) the real audit log."""
     before = _audit_fingerprint()
     briefing_existed = _REAL_BRIEFING_DB.exists()
+    rules_existed = _REAL_BRIEFING_RULES.exists()
     yield
+    assert _REAL_BRIEFING_RULES.exists() == rules_existed, (
+        "the test run created/removed the real data/briefing_rules.json — --mark tests must use a tmp rules_path"
+    )
     assert _REAL_BRIEFING_DB.exists() == briefing_existed, (
         "the test run created/removed the real data/briefing.db — a test is not using VESPER_BRIEFING_DB"
     )

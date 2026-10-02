@@ -45,6 +45,14 @@ voices.bin
 data/
 !data/.gitkeep
 
+# Briefing engine: the unread-mail cache, the derived known-correspondent set (it lives inside the
+# cache), your --mark rules, and your personal overrides (VIPs, allowlisted senders). Personal
+# data: never commit. (data/ above already covers the first three; these are explicit on purpose.)
+data/briefing.db
+data/briefing.db-*
+data/briefing_rules.json
+config/briefing.local.yaml
+
 # Logs
 logs/
 !logs/.gitkeep
