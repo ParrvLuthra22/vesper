@@ -112,5 +112,33 @@ async def unread_count() -> str:
     return str(count)
 
 
+# --- read-only tools for the briefing engine's collectors (hidden from the planner) ---
+
+@mcp.tool()
+async def list_inbox(max_n: int = 50, query: str = "in:inbox") -> str:
+    """READ-ONLY. Rich metadata (no body) for messages matching a Gmail query:
+    labels, unread flag, mailing-list headers, reply flag, internal date.
+
+    Used by the briefing collector (e.g. query "in:inbox after:<epoch>"). Returns
+    a JSON array.
+    """
+    return json.dumps(await gmail_client.list_inbox(max_n=max_n, query=query))
+
+
+@mcp.tool()
+async def unread_ids(max_n: int = 200) -> str:
+    """READ-ONLY. Ids of the unread inbox messages (one list call, no per-message fetches).
+    Used to reconcile read-state in the briefing cache. Returns a JSON array of ids."""
+    return json.dumps(await gmail_client.unread_ids(max_n=max_n))
+
+
+@mcp.tool()
+async def sent_summary(days: int = 60, max_n: int = 200) -> str:
+    """READ-ONLY. Thread ids and recipient addresses from recent SENT mail.
+    Used to tell "I have replied to this sender before" / "reply in my thread".
+    Returns JSON {thread_ids: [...], recipients: [...]}."""
+    return json.dumps(await gmail_client.sent_summary(days=days, max_n=max_n))
+
+
 if __name__ == "__main__":
     mcp.run(transport="stdio")

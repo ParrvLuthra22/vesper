@@ -82,6 +82,69 @@ async def test_unmapped_tool_defaults_to_confirm_tier() -> None:
 
 
 @pytest.mark.asyncio
+async def test_hidden_tools_are_registered_but_disabled_for_the_planner() -> None:
+    """Briefing collectors call these directly; the LLM must never see or call them."""
+    registry = ToolRegistry()
+    bridge = MCPBridge(config=_config(hidden_tools=["echo"]), registry=registry)
+    await bridge.start()
+    try:
+        echo = registry.get("echo")
+        assert echo is not None and echo.enabled is False and echo.tier == "safe"
+        # not in the schema the planner is shown, not in list_all(), but still callable
+        assert "echo" not in {t["function"]["name"] for t in registry.to_llm_schema()}
+        assert "echo" not in {s.name for s in registry.list_all()}
+        assert await echo.handler({"text": "hi"}, {}) == "hi"
+        assert registry.get("fail").enabled is True          # other tools are unaffected
+    finally:
+        await bridge.stop()
+
+
+def test_gmail_briefing_tools_are_hidden_and_safe_by_default_config() -> None:
+    from config.settings import load_config_dict
+
+    gmail = load_config_dict()["mcp"]["servers"]["gmail"]
+    assert set(gmail["hidden_tools"]) == {"list_inbox", "unread_ids", "sent_summary"}
+    for name in gmail["hidden_tools"]:
+        assert gmail["tiers"][name] == "safe"
+
+
+@pytest.mark.asyncio
+async def test_planner_refuses_a_hidden_tool_even_if_the_model_names_it() -> None:
+    from unittest.mock import AsyncMock
+
+    from bus.event_bus import EventBus
+    from guardian.gate import Guardian
+    from llm.types import LLMResponse, ToolCall
+    from orchestrator.planner import Planner
+    from tools.registry import ToolSpec
+    from tracing.tracer import Tracer
+
+    EventBus.reset_instance()
+    registry = ToolRegistry()
+    called = []
+
+    async def handler(arguments, context):
+        called.append(arguments)
+        return "[]"
+
+    registry.register(ToolSpec(name="list_inbox", description="d", tier="safe", handler=handler, enabled=False))
+    router = AsyncMock()
+    # The first call is swallowed by the planner's "filter missed a tool -> widen and re-ask"
+    # safety net; the model then names the hidden tool again and it is refused.
+    router.complete = AsyncMock(side_effect=[
+        LLMResponse(tool_calls=[ToolCall(name="list_inbox", arguments={}, id="1")]),
+        LLMResponse(tool_calls=[ToolCall(name="list_inbox", arguments={}, id="2")]),
+        LLMResponse(text="I can't do that, Sir."),
+    ])
+    bus = EventBus()
+    planner = Planner(router=router, registry=registry, guardian=Guardian(event_bus=bus), event_bus=bus,
+                      tracer=Tracer(config={"tracing": {"enabled": False}}))
+    result = await planner.run(user_text="read my inbox")
+    assert called == [] and "list_inbox:unknown_tool" in result.tool_trace
+    EventBus.reset_instance()
+
+
+@pytest.mark.asyncio
 async def test_slow_tools_marked_on_the_tool_spec() -> None:
     registry = ToolRegistry()
     bridge = MCPBridge(config=_config(), registry=registry)
@@ -101,6 +164,22 @@ async def test_registered_tool_handler_calls_through_to_server() -> None:
     try:
         result = await registry.get("echo").handler({"text": "hello, Sir"}, {})
         assert result == "hello, Sir"
+    finally:
+        await bridge.stop()
+
+
+@pytest.mark.asyncio
+async def test_a_tool_result_larger_than_64kib_is_read_not_hung() -> None:
+    """Regression: asyncio's default 64 KiB readline limit killed the reader task on a big
+    result (a 45-message inbox listing) and every pending call then timed out."""
+    registry = ToolRegistry()
+    bridge = MCPBridge(config=_config(), registry=registry)
+    await bridge.start()
+    try:
+        result = await asyncio.wait_for(registry.get("echo").handler({"text": "x", "repeat": 300_000}, {}), timeout=10)
+        assert result == "x" * 300_000
+        # and the connection is still healthy afterwards
+        assert await asyncio.wait_for(registry.get("echo").handler({"text": "ok"}, {}), timeout=5) == "ok"
     finally:
         await bridge.stop()
 

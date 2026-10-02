@@ -540,9 +540,15 @@ class MCPGmailServerSettings(BaseModel):
             "draft_reply": "confirm",
             "archive": "confirm",
             "mark_read": "confirm",
+            "list_inbox": "safe",
+            "unread_ids": "safe",
+            "sent_summary": "safe",
         }
     )
     slow_tools: List[str] = Field(default_factory=lambda: ["summarize_thread"])
+    #: Registered (so the briefing collectors can call them) but DISABLED for the
+    #: planner: not in its schema, and a call to one is refused. See tools/mcp_bridge.py.
+    hidden_tools: List[str] = Field(default_factory=lambda: ["list_inbox", "unread_ids", "sent_summary"])
 
 
 class MCPAppleServerSettings(BaseModel):

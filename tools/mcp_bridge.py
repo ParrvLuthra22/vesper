@@ -46,6 +46,9 @@ DEFAULT_REQUEST_TIMEOUT_SECONDS = 30.0
 #: Fails safe: an unmapped tool still requires confirmation, never silently allowed.
 DEFAULT_UNMAPPED_TIER = "confirm"
 
+#: Longest single JSON-RPC message (one stdout line) the bridge will read: 16 MiB.
+MAX_MESSAGE_BYTES = 16 * 1024 * 1024
+
 #: Reconnect backoff: 2s, 4s, 8s, 16s, 32s, then give up for the session.
 RECONNECT_BASE_DELAY_SECONDS = 2.0
 RECONNECT_MAX_DELAY_SECONDS = 32.0
@@ -95,6 +98,11 @@ class MCPServerConnection:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=self._cwd,
+            # One JSON-RPC message is one line. asyncio's default 64 KiB line limit made
+            # any larger tool result (a 45-message inbox listing, a long thread) raise
+            # inside _read_loop, which silently killed the reader and hung every pending
+            # call until its timeout.
+            limit=MAX_MESSAGE_BYTES,
         )
         self._reader_task = asyncio.create_task(self._read_loop())
         self._stderr_task = asyncio.create_task(self._drain_stderr())
@@ -281,6 +289,11 @@ class MCPServerConnection:
                         future.set_result(message)
         except asyncio.CancelledError:
             pass
+        except Exception as exc:
+            # A reader that dies silently leaves every pending request hanging. Fail
+            # them now, loudly.
+            logger.error(f"[MCPBridge:{self._name}] stdout reader failed: {exc!r}")
+            self._fail_pending(RuntimeError(f"MCP server '{self._name}' response could not be read: {exc}"))
 
     async def _drain_stderr(self) -> None:
         assert self._process is not None and self._process.stderr is not None
@@ -356,6 +369,9 @@ class MCPBridge:
     def _register_tools(self, server_name: str, connection: MCPServerConnection, server_cfg: Dict[str, Any]) -> None:
         tiers = server_cfg.get("tiers", {}) or {}
         slow_tools = set(server_cfg.get("slow_tools", []) or [])
+        # Tools registered for programmatic callers (the briefing collectors) but
+        # kept out of the planner's schema and refused if the model names one.
+        hidden_tools = set(server_cfg.get("hidden_tools", []) or [])
         # Optional allowlist: when set, ONLY these tools are exposed to the
         # planner — the rest of the server's tools (e.g. merge/close/force-push)
         # are never registered. Empty/absent means "expose everything".
@@ -397,6 +413,7 @@ class MCPBridge:
                     handler=self._make_handler(server_name, tool_name),
                     category=f"mcp:{server_name}",
                     slow=tool_name in slow_tools,
+                    enabled=tool_name not in hidden_tools,
                     # Mail / calendar / Slack / Notion / GitHub text is written
                     # by third parties: its output must not steer later calls.
                     untrusted_output=True,

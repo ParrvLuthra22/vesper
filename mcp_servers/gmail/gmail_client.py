@@ -22,6 +22,7 @@ import base64
 import json
 import os
 from email.message import EmailMessage
+from email.utils import getaddresses
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -260,6 +261,120 @@ def _unread_count_sync() -> int:
 # costs nothing observable (individual Gmail calls are already sequential
 # from the caller's point of view) and removes the race entirely.
 _api_lock = asyncio.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Read-only extras for the briefing engine (briefing/). They exist because
+# list_unread's metadata has no labels, mailing-list headers, recipients or reply
+# signals — everything the deterministic scorer needs. Strictly READ-ONLY: only
+# messages.list / messages.get with format=metadata (no body), never modify/send.
+# ---------------------------------------------------------------------------
+
+_INBOX_HEADERS = [
+    "From", "To", "Subject", "Date", "List-Id", "List-Unsubscribe",
+    "Precedence", "Auto-Submitted", "In-Reply-To",
+]
+
+
+def _enriched_metadata(message: Dict[str, Any]) -> Dict[str, Any]:
+    headers = message.get("payload", {}).get("headers", [])
+    labels = message.get("labelIds") or []
+    try:
+        internal_ms = int(message.get("internalDate") or 0)
+    except (TypeError, ValueError):
+        internal_ms = 0
+    return {
+        "id": message.get("id"),
+        "thread_id": message.get("threadId"),
+        "sender": _header(headers, "From"),
+        "to": _header(headers, "To"),
+        "subject": _header(headers, "Subject"),
+        "date": _header(headers, "Date"),
+        "internal_date_ms": internal_ms,
+        "snippet": message.get("snippet", ""),
+        "labels": labels,
+        "unread": "UNREAD" in labels,
+        "list_id": _header(headers, "List-Id"),
+        "has_list_unsubscribe": bool(_header(headers, "List-Unsubscribe")),
+        "precedence": _header(headers, "Precedence").lower(),
+        "auto_submitted": _header(headers, "Auto-Submitted").lower(),
+        "in_reply_to": bool(_header(headers, "In-Reply-To")),
+    }
+
+
+BATCH_CHUNK = 50  # Gmail allows up to 100 calls per batch request
+
+
+def _batch_get_metadata(service: Any, ids: List[str], headers: List[str]) -> List[Dict[str, Any]]:
+    """messages.get(format=metadata) for many ids in ONE HTTP round trip per chunk.
+
+    The briefing's first run reads up to 50-200 messages; one-by-one that was ~1 s each
+    and blew the collector timeout. Order of `ids` is preserved; messages that fail
+    individually (deleted meanwhile) are skipped."""
+    found: Dict[str, Dict[str, Any]] = {}
+
+    def on_response(request_id, response, exception):  # googleapiclient batch callback
+        if exception is None and response:
+            found[request_id] = response
+
+    for start in range(0, len(ids), BATCH_CHUNK):
+        batch = service.new_batch_http_request(callback=on_response)
+        for message_id in ids[start:start + BATCH_CHUNK]:
+            batch.add(
+                service.users().messages().get(userId="me", id=message_id, format="metadata", metadataHeaders=headers),
+                request_id=message_id,
+            )
+        batch.execute()
+    return [found[i] for i in ids if i in found]
+
+
+def _list_inbox_sync(max_n: int, query: str) -> List[Dict[str, Any]]:
+    service = _get_service_sync()
+    response = service.users().messages().list(userId="me", q=query, maxResults=max(1, min(max_n, 100))).execute()
+    ids = [ref["id"] for ref in response.get("messages", [])]
+    return [_enriched_metadata(m) for m in _batch_get_metadata(service, ids, _INBOX_HEADERS)]
+
+
+def _unread_ids_sync(max_n: int) -> List[str]:
+    service = _get_service_sync()
+    response = service.users().messages().list(
+        userId="me", q="is:unread in:inbox", maxResults=max(1, min(max_n, 500))
+    ).execute()
+    return [ref["id"] for ref in response.get("messages", [])]
+
+
+def _sent_summary_sync(days: int, max_n: int) -> Dict[str, Any]:
+    """Thread ids and recipient addresses from my recent SENT mail — the signals
+    for "I have replied to this sender before" and "this is a reply to a thread I
+    wrote in"."""
+    service = _get_service_sync()
+    response = service.users().messages().list(
+        userId="me", q=f"in:sent newer_than:{max(1, int(days))}d", maxResults=max(1, min(max_n, 500))
+    ).execute()
+    refs = response.get("messages", [])
+    thread_ids = sorted({ref.get("threadId") for ref in refs if ref.get("threadId")})
+    recipients = set()
+    for message in _batch_get_metadata(service, [ref["id"] for ref in refs], ["To", "Cc"]):
+        headers = message.get("payload", {}).get("headers", [])
+        for _name, addr in getaddresses([_header(headers, "To"), _header(headers, "Cc")]):
+            if addr:
+                recipients.add(addr.lower())
+    return {"thread_ids": thread_ids, "recipients": sorted(recipients)}
+
+
+async def list_inbox(max_n: int = 50, query: str = "in:inbox") -> List[Dict[str, Any]]:
+    async with _api_lock:
+        return await asyncio.to_thread(_list_inbox_sync, max_n, query)
+
+
+async def unread_ids(max_n: int = 200) -> List[str]:
+    async with _api_lock:
+        return await asyncio.to_thread(_unread_ids_sync, max_n)
+
+
+async def sent_summary(days: int = 60, max_n: int = 200) -> Dict[str, Any]:
+    async with _api_lock:
+        return await asyncio.to_thread(_sent_summary_sync, days, max_n)
 
 
 async def list_unread(max_n: int = 10) -> List[Dict[str, Any]]:

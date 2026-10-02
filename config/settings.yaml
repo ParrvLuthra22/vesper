@@ -919,6 +919,13 @@ mcp:
         draft_reply: confirm
         archive: confirm
         mark_read: confirm
+        # Read-only, for the briefing engine's collectors (briefing/):
+        list_inbox: safe
+        unread_ids: safe
+        sent_summary: safe
+      # Registered for programmatic callers but DISABLED for the planner: not in
+      # its schema and refused if the model names one.
+      hidden_tools: [list_inbox, unread_ids, sent_summary]
       # Runs in the background task queue instead of blocking the turn —
       # fetching a whole thread can take a few seconds.
       slow_tools:

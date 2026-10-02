@@ -85,7 +85,8 @@ async def _handle(message: dict) -> None:
                     "jsonrpc": "2.0",
                     "id": msg_id,
                     "result": {
-                        "content": [{"type": "text", "text": arguments.get("text", "")}],
+                        # `repeat` lets a test get a huge RESPONSE from a tiny request
+                        "content": [{"type": "text", "text": arguments.get("text", "") * int(arguments.get("repeat", 1))}],
                         "isError": False,
                     },
                 }
