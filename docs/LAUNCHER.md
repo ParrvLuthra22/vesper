@@ -17,6 +17,7 @@ now thin redirects to it. The terminal text REPL (`vesper`, no subcommand) is un
 | 2 | voice output (Kokoro TTS) | `python -m voice.output` | logs "voice output connected to gateway" | reported loudly; stack continues |
 | 3 | HUD | `hud/src-tauri/target/release/hud` | gateway's connected-client count rises | reported loudly; stack continues |
 | 4 | voice input (wake word + VAD + STT) | `python -m voice.input` | logs "voice input ready" (wake model loaded, mic streaming) | reported loudly; stack continues |
+| 5 | Telegram channel *(optional — only when `channels.telegram.enabled: true`)* | `python -m channels.telegram` | logs "telegram channel ready" (config + token valid; polling started) | reported loudly; stack continues. Exit 69 (disabled, empty allowlist, no/bad token, token rejected) is permanent, not restarted. See [CHANNELS.md](CHANNELS.md) |
 
 "Wake word" and "speech-to-text" are one process (they share the microphone stream). Voice input starts last so a
 reply has somewhere to be spoken and shown the moment the wake word can fire. A shared random bearer token is

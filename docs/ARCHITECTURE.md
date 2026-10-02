@@ -132,7 +132,7 @@ Three layers, deliberately distinct:
 
 **2. The session ceiling.** A restricted surface lowers the ceiling for a whole turn. The Discord remote runs with `allow_dangerous=False`, so dangerous-tier tools are **denied outright — never even offered for confirmation.** The reasoning: approving a destructive action from a phone, in a chat client, is exactly where a mis-tap is most likely and context is thinnest.
 
-The policy is task-scoped via `contextvars`, not a global, so a restricted remote turn cannot leak its ceiling into a concurrent local turn — and, more importantly, a local turn cannot leak *its* permissiveness into a remote one.
+The policy is task-scoped via `contextvars`, not a global, so a restricted remote turn cannot leak its ceiling into a concurrent local turn — and, more importantly, a local turn cannot leak *its* permissiveness into a remote one. The Telegram channel (§8d) uses the same ceiling, and every audit entry now records the channel it came from.
 
 **3. The denylist that overrides approval.** Confirmation is not the last line. `tools/creator.py` refuses a set of patterns outright, **regardless of what anyone approves**:
 
@@ -290,6 +290,12 @@ That is a real turn: `plan my day` → 4.71s total → `plan_iteration` 0.86s �
 ## 8c. The briefing engine
 
 "Good morning" is answered from a cache, not assembled live: read-only collectors (Gmail, Calendar) run every ~10 minutes into SQLite, a deterministic scorer ranks the items (every point explained: `vesper briefing --explain`), and a builder emits a ≤600-token, sanitized, quoted block plus a 25-second spoken script. The planner sees that instead of ~20 raw messages (206 tokens vs 3,159 on the same real inbox); the fast path skips the LLM entirely. Collectors can only call an allow-list of safe read tools. Details, weights and the hostile-content layers: [docs/BRIEFING.md](BRIEFING.md).
+
+---
+
+## 8d. Channels: one door for chat apps
+
+Telegram (and later iMessage/Slack) reaches the Brain through a **channel abstraction**: an adapter, in its own supervised process, turns provider updates into a normalized `{text, channel, user_id, trust, is_forward, attachments}` and posts it to the gateway's restricted `/channel/turn` endpoint. Everything that decides what such a message may *do* lives behind that endpoint, once: the sender allowlist, a session that is always restricted (`allow_dangerous` is hard-wired off), taint seeding for forwarded/quoted/caption/file content (only the typed part counts as "said by the user"), the channel recorded in every audit entry, and confirmation ownership (a card can only be answered by the channel and user it was raised for; buttons carry a single-use, user-bound, two-minute nonce). A buggy adapter therefore cannot loosen any of it. Setup, the threat model and what passes through Telegram's servers: [docs/CHANNELS.md](CHANNELS.md), [docs/PRIVACY.md](PRIVACY.md).
 
 ---
 

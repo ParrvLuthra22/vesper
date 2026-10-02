@@ -24,7 +24,7 @@ Statements here are from reading the code and from config; I did **not** packet-
 
 Only if the matching keys are set (none are by default): Tavily (web search/research queries), OpenRouter
 (`WebSearchAgent` answer synthesis), Slack/Discord/GitHub/Notion/Spotify MCP servers (they talk to those
-services), the Discord remote (messages via Discord).
+services), the Discord remote (messages via Discord), the Telegram channel (messages via Telegram — see below).
 
 ## Opt-in: LangSmith tracing (`tracing.langsmith_enabled: true` **and** `LANGSMITH_API_KEY`)
 
@@ -38,6 +38,28 @@ tracing.langsmith_enabled=false — traces stay on this machine". When on, each 
 * latency and the Guardian's verdict.
 
 The local JSONL trace is written in every mode.
+
+## Opt-in: Telegram channel (`channels.telegram.enabled: true`)
+
+Off by default, and nothing is contacted unless it is enabled **and** a bot token is configured. When on,
+**everything you say to Vesper through Telegram, and everything it says back, passes through Telegram's servers.**
+Telegram bot chats are ordinary cloud chats, **not end-to-end encrypted**: assume Telegram (and anyone who
+compromises it or your account) can read them. Do not send secrets through it.
+
+| Data | Goes to | Notes |
+|---|---|---|
+| The text of your messages to the bot | **Telegram** (you send it from your phone) | Then to Vesper by outbound HTTPS long polling to `api.telegram.org`; there is no webhook and no open port. |
+| Every reply Vesper sends, including **confirmation cards** (the tool name and its arguments, e.g. a draft's recipient and text) | **Telegram** | Replies can contain mail/calendar content Vesper read for you. |
+| A **voice note you send** | **Telegram** (your phone uploads the audio) | Vesper downloads it over HTTPS, transcribes it with the **local** faster-whisper model, processes the text, and deletes the file (also on errors; a stale-file sweep runs at start). **No cloud speech-to-text is used.** A forwarded voice note is never downloaded. |
+| Photos / files / stickers you send | **Telegram** | Vesper never downloads them (it is only told that an attachment of that kind arrived). |
+| Metadata: your numeric user ID, the bot, timestamps, IP of your phone/Vesper | **Telegram** | Inherent to using Telegram. |
+| The text of a request you make this way | **Groq**, as for any turn | Telegram being involved does not change what the LLM provider sees. |
+| The bot token | stays on this machine (Keychain or `.env`), sent only to Telegram as part of API URLs | Never logged, never committed; revoke it in BotFather if exposed. |
+| Audit log entries about the channel | nowhere — `data/audit.jsonl`, local | Ids and reasons only, never message text. |
+
+What the channel **does not** change: audio from the microphone still never leaves the machine; the briefing cache
+is still local. Safety properties (allowlist, restricted session, taint, nonce-bound confirmations) and the threat
+model are in [CHANNELS.md](CHANNELS.md).
 
 ## Opt-in: cloud speech recognition (`voice.recognition.allow_cloud_stt: true`)
 
