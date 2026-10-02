@@ -29,8 +29,11 @@ generated per run (or taken from `VESPER_GATEWAY_TOKEN`) and handed to every chi
   or 3 failures in a row before ever becoming ready, → **FAILED** (no restart loop). Staying healthy for 60 s
   forgives earlier crashes.
 * **Exit 0** → the component turned itself off (e.g. `voice.output.enabled: false`); not restarted.
-* **Exit 69** from voice input = "unavailable this session" (mic blocked/in use, wake model or package missing)
-  → **FAILED immediately, not restarted**, with the child's last log lines and a hint (grant Microphone permission).
+* **Exit 69** from voice input *or voice output* = "unavailable this session" (mic blocked/in use, wake model or
+  package missing; Kokoro files missing or failing to load) → **FAILED immediately, not restarted**, with the child's
+  last log lines and a hint. Voice input also exits 69 if the **microphone delivers no audio within 15 s**
+  (`voice.input.first_frame_timeout_seconds`) — a blocked permission prompt or a device held by another app makes the
+  read hang forever rather than raise.
 * A FAILED *required* component (gateway) shuts everything down and exits non-zero. A FAILED optional one is printed
   as a WARNING and listed in `vesper status` — never silent. `--strict` turns any optional failure/skip into an abort.
 * **Shutdown** (Ctrl+C, SIGTERM or `vesper down`): reverse order — voice input, HUD, voice output, gateway — SIGTERM,

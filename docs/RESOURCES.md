@@ -43,6 +43,16 @@ STT (real speech, 4.8 s utterance, `base.en` int8): **3.1 s the first time** (in
 | Kokoro: first sentence after boot | seconds (model load; see the crash below) |
 | STT after the user stops talking | 0.4 s warm |
 
+## Update: Kokoro is now preloaded at boot (voice output)
+
+`voice.output.preload: true` loads Kokoro **and runs one silent synthesis before connecting to the gateway**, so a
+first-use failure surfaces at boot (the launcher reports it) instead of eating the first reply. Cost: voice output
+is now **≈390–415 MB resident from startup** (measured `phys_footprint`, 6 consecutive preloads, 1.8–2.9 s each) instead
+of 35 MB until the first reply — add ≈ +380 MB to the *idle* rows above (idle total ≈ 1.1 GB). Set
+`preload: false` to get the old behaviour back. Result under 8.3–8.6 GB of swap: **0 crashes in 6 standalone
+preloads and 2 full-stack boots (with spoken turns afterwards, 0 restarts)**. The original SIGABRT was seen once and
+never reproduced on demand, so this is **not proof it is fixed** — only that the failure is now moved to boot.
+
 ## A real failure the supervisor caught
 
 On the **first** voice-output turn, `voice_output` was killed by **SIGABRT (signal 6)** while Kokoro was loading

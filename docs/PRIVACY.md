@@ -13,6 +13,8 @@ Statements here are from reading the code and from config; I did **not** packet-
 | Your request text, the persona + context block (time, retrieved memories, observations), tool schemas, **and every tool result** (email subjects/bodies, calendar entries, web text) | **Groq** (`api.groq.com`) | every planner call (several per turn) | `llm.primary` — the one unavoidable cloud dependency |
 | Gmail: message reads, drafts, archive/mark-read | **Google APIs** | when you use mail tools | `mcp.servers.gmail.enabled`, OAuth token in `data/google_token.json` |
 | Weather location string | **Open-Meteo** | `current_weather` tool | no key; tool-level |
+| What the briefing engine collects: sender, subject and a ≤200-char snippet of **unread mail**, and calendar titles/times (never notes) | nowhere — a local SQLite file, `data/briefing.db` (git-ignored) | every ~10 min | `config/briefing.yaml` (`refresh.enabled: false` stops the timer) |
+| Of that, what the LLM sees: ≤600 tokens — at most 5 priority mail items (sender name, subject, 90-char preview), 3 meetings, counts | **Groq**, only when you ask for a briefing (the "good morning" fast path sends nothing — it is spoken from the cache) | on demand | – |
 | Memory text | nowhere — Chroma + SQLite on disk, embeddings computed locally (MiniLM) | – | – |
 | **Microphone audio** | **nowhere** — openWakeWord, webrtcvad, faster-whisper and Kokoro are local models | – | – |
 | Traces (`data/traces/traces.jsonl`) | **nowhere** — local file only | – | `tracing.enabled` |

@@ -287,6 +287,12 @@ That is a real turn: `plan my day` → 4.71s total → `plan_iteration` 0.86s �
 
 ---
 
+## 8c. The briefing engine
+
+"Good morning" is answered from a cache, not assembled live: read-only collectors (Gmail, Calendar) run every ~10 minutes into SQLite, a deterministic scorer ranks the items (every point explained: `vesper briefing --explain`), and a builder emits a ≤600-token, sanitized, quoted block plus a 25-second spoken script. The planner sees that instead of ~20 raw messages (206 tokens vs 3,159 on the same real inbox); the fast path skips the LLM entirely. Collectors can only call an allow-list of safe read tools. Details, weights and the hostile-content layers: [docs/BRIEFING.md](BRIEFING.md).
+
+---
+
 ## 9. The event bus: why everything else is swappable
 
 Agents do not call each other. They publish and subscribe to typed events on a single in-process bus.
