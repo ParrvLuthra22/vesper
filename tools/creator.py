@@ -332,6 +332,7 @@ def _register() -> None:
         parameters={"type": "object", "properties": {
             "command": {"type": "string", "description": "The exact shell command to run."}}, "required": ["command"]},
         tier="dangerous", handler=run_shell, confirm_summary=_shell_summary, category="creator",
+        untrusted_output=True,  # output can be arbitrary file/network content
     ))
     registry.register(ToolSpec(
         name="run_applescript",
@@ -342,6 +343,7 @@ def _register() -> None:
         parameters={"type": "object", "properties": {
             "script": {"type": "string", "description": "The exact AppleScript to run."}}, "required": ["script"]},
         tier="dangerous", handler=run_applescript, confirm_summary=_applescript_summary, category="creator",
+        untrusted_output=True,
     ))
 
 

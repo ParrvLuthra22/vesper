@@ -24,9 +24,19 @@ user did not say, the Planner marks the call tainted
     safe -> confirm        confirm -> dangerous        dangerous -> dangerous
 
 so a `safe` tool steered by an email still needs an explicit approval, with a
-summary that says why. It is deliberately a one-rung bump, not a taint-tracking
-system: it works at turn granularity and does not cover background-task results
-surfaced later as observations, or memory content.
+summary that says why.
+
+A turn starts tainted if it was handed untrusted text up front: a calendar-title
+observation (`ObservationEvent.untrusted`) or a retrieved memory flagged
+`tainted` (written by reflection from a tainted turn; a missing flag means
+untainted).
+
+Known limitation — cross-turn history: the rule works at turn granularity. The
+Planner replays the last few turns of the conversation, and an assistant reply
+that summarized an email or web page in an EARLIER turn is trusted text in a
+later turn; taint does not follow it across turns. (Memories derived from such
+turns are flagged, but the replayed history itself is not.) This is a one-rung
+bump, deliberately not a data-flow tracking system.
 """
 
 from __future__ import annotations

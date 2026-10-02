@@ -105,6 +105,9 @@ class PlannerResult:
     text: str
     aborted: bool = False
     tool_trace: List[str] = field(default_factory=list)
+    #: True if the turn read untrusted content (tool output, a calendar-title
+    #: observation, a tainted memory). Memories derived from it get flagged.
+    tainted: bool = False
 
 
 class Planner:
@@ -146,9 +149,16 @@ class Planner:
         memories: Optional[List[str]] = None,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
+        observations_untrusted: bool = False,
+        memories_untrusted: bool = False,
     ) -> PlannerResult:
         """
         Run the tool-calling loop for one piece of user text.
+
+        `observations_untrusted` / `memories_untrusted` say the injected
+        observations (a calendar-title call-out) or retrieved memories (derived
+        from an earlier tainted turn) carry third-party text; the turn then
+        starts tainted for the Guardian's tainted-input rule.
 
         `memories`, if given, are semantic-memory matches for `user_text`
         (see MemoryAgent.semantic_retrieve) — rendered into the {context}
@@ -184,6 +194,10 @@ class Planner:
         #: Labels of untrusted content (email, web, calendar...) read so far
         #: this turn — drives the Guardian's tainted-input rule.
         taint_sources: List[str] = []
+        if observations_untrusted:
+            taint_sources.append("calendar entries")
+        if memories_untrusted:
+            taint_sources.append("remembered external content")
         #: Action-claim verifier: one corrective retry per turn, then an honest
         #: replacement (orchestrator/claim_verifier.py).
         claim_retried = False
@@ -202,7 +216,7 @@ class Planner:
             if isinstance(response, RouterError):
                 await self._emit_plan_trace(user_text, trace)
                 result = PlannerResult(text=response.user_message, aborted=True, tool_trace=trace)
-                return self._finish_turn(turn_trace, turn_start, result)
+                return self._finish_turn(turn_trace, turn_start, result, taint_sources)
 
             if not response.tool_calls:
                 claim = claim_verifier.find_unbacked_claim(
@@ -240,10 +254,10 @@ class Planner:
                             pass
                     await self._emit_plan_trace(user_text, trace)
                     result = PlannerResult(text=claim_verifier.HONEST_REPLY, tool_trace=trace)
-                    return self._finish_turn(turn_trace, turn_start, result)
+                    return self._finish_turn(turn_trace, turn_start, result, taint_sources)
                 await self._emit_plan_trace(user_text, trace)
                 result = PlannerResult(text=response.text, tool_trace=trace)
-                return self._finish_turn(turn_trace, turn_start, result)
+                return self._finish_turn(turn_trace, turn_start, result, taint_sources)
 
             # Safety net for tool filtering: if the model named a real tool
             # that this turn's subset left out, the filter guessed wrong.
@@ -269,10 +283,16 @@ class Planner:
 
         await self._emit_plan_trace(user_text, trace)
         result = PlannerResult(text=MAX_ITERATIONS_MESSAGE, aborted=True, tool_trace=trace)
-        return self._finish_turn(turn_trace, turn_start, result)
+        return self._finish_turn(turn_trace, turn_start, result, taint_sources)
 
     @staticmethod
-    def _finish_turn(turn_trace: TurnTrace, turn_start: float, result: PlannerResult) -> PlannerResult:
+    def _finish_turn(
+        turn_trace: TurnTrace,
+        turn_start: float,
+        result: PlannerResult,
+        taint_sources: Optional[List[str]] = None,
+    ) -> PlannerResult:
+        result.tainted = bool(taint_sources)
         turn_trace.end(
             final_reply=result.text,
             aborted=result.aborted,
@@ -438,8 +458,12 @@ class Planner:
             return "calendar entries"
         if category in ("mcp:slack", "mcp:discord"):
             return "chat messages"
+        if tool_spec.name in ("run_shell", "run_applescript"):
+            return "command output"
         if category in ("web", "creator"):
             return "web content"
+        if category == "dev":
+            return "file or repository content"
         return "external content"
 
     @staticmethod

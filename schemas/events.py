@@ -552,12 +552,16 @@ class ObservationEvent(BaseEvent):
         kind: Rule identifier, e.g. "context_switch", "meeting_soon".
         detail: Human-readable observation text for the Planner's context.
         observation_id: Unique id; used to track consumption once voiced.
+        untrusted: True if `detail` embeds third-party text (e.g. a calendar
+            event title). The Planner then treats the turn as tainted for the
+            Guardian's tainted-input rule (guardian/gate.py).
     """
 
     kind: str = ""
     detail: str = ""
     observation_id: str = field(default_factory=lambda: str(uuid4()))
     source: str = field(default="ProactiveEngine")
+    untrusted: bool = False
 
 
 @dataclass(frozen=True)

@@ -177,11 +177,13 @@ def _register() -> None:
         parameters={"type": "object", "properties": {
             "path": {"type": "string", "description": "Optional test path or file; omit to run the whole suite."}}},
         tier="safe", handler=run_tests, category="dev", slow=True,
+        untrusted_output=True,  # test output quotes repository files
     ))
     registry.register(ToolSpec(
         name="git_status",
         description="Show `git status` (short) for the current working directory's repository.",
         tier="safe", handler=git_status, category="dev",
+        untrusted_output=True,  # branch and file names come from the repository
     ))
     registry.register(ToolSpec(
         name="git_diff",
@@ -189,6 +191,7 @@ def _register() -> None:
         parameters={"type": "object", "properties": {
             "staged": {"type": "boolean", "description": "Show staged changes instead of the working tree."}}},
         tier="safe", handler=git_diff, category="dev",
+        untrusted_output=True,  # the diff is arbitrary file content
     ))
     registry.register(ToolSpec(
         name="git_commit",

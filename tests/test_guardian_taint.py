@@ -240,6 +240,21 @@ def test_mcp_and_web_tools_are_marked_untrusted():
     assert reg.get("get_time").untrusted_output is False
 
 
+def test_repo_and_command_output_tools_are_marked_untrusted():
+    import tools.creator  # noqa: F401
+    import tools.devtools  # noqa: F401
+    from tools.registry import get_registry
+
+    reg = get_registry()
+    for name in ("git_diff", "git_status", "run_tests", "run_shell", "run_applescript"):
+        assert reg.get(name).untrusted_output is True, name
+    # results of these are the user's own words or machine facts, not third-party text
+    for name in ("git_commit", "open_in_editor", "take_screenshot"):
+        spec = reg.get(name)
+        if spec is not None:
+            assert spec.untrusted_output is False, name
+
+
 # ------------------------------------------------------- audit isolation
 
 def test_default_guardian_uses_isolated_audit_path_in_tests():

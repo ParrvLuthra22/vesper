@@ -39,7 +39,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, auto
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 from uuid import UUID, uuid4
 
 from bus.event_bus import EventBus, get_event_bus
@@ -149,6 +149,9 @@ class ConversationTurn:
     entities: Dict[str, Any] = field(default_factory=dict)
     response: str = ""
     action_taken: str = ""
+    #: True if this turn read untrusted content (email, web, calendar...). Used to
+    #: mark memories later derived from it (proactive/reflection.py).
+    tainted: bool = False
 
 
 @dataclass
@@ -183,7 +186,7 @@ class ConversationContext:
     # Observations from the Proactive Engine (P05), pending until the
     # Planner has been given one chance to voice them (see add_observation
     # / get_pending_observations / consume_observations below).
-    pending_observations: List[Dict[str, str]] = field(default_factory=list)
+    pending_observations: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def turn_count(self) -> int:
@@ -222,12 +225,13 @@ class ConversationContext:
 
         return turn
 
-    def update_last_response(self, response: str, action: str = "") -> None:
+    def update_last_response(self, response: str, action: str = "", tainted: bool = False) -> None:
         """Update the response for the last turn."""
         if self.last_turn:
             # Since ConversationTurn is not frozen, we can modify it
             object.__setattr__(self.last_turn, 'response', response)
             object.__setattr__(self.last_turn, 'action_taken', action)
+            object.__setattr__(self.last_turn, 'tainted', bool(tainted))
 
     def get_recent_context(self, num_turns: int = 3) -> List[Dict[str, Any]]:
         """Get recent conversation context for the Planner's message history."""
@@ -238,6 +242,7 @@ class ConversationContext:
                 "user": t.user_input,
                 "intent": t.intent,
                 "response": t.response,
+                "tainted": t.tainted,
             }
             for t in recent
         ]
@@ -276,11 +281,15 @@ class ConversationContext:
         self.clarification_context.clear()
         self.pending_observations.clear()
 
-    def add_observation(self, kind: str, detail: str, observation_id: str) -> None:
+    def add_observation(self, kind: str, detail: str, observation_id: str, untrusted: bool = False) -> None:
         """Queue an observation from the Proactive Engine (ObservationEvent)."""
         self.pending_observations.append(
-            {"kind": kind, "detail": detail, "observation_id": observation_id}
+            {"kind": kind, "detail": detail, "observation_id": observation_id, "untrusted": untrusted}
         )
+
+    def pending_observations_untrusted(self) -> bool:
+        """True if any not-yet-offered observation embeds third-party text."""
+        return any(obs.get("untrusted") for obs in self.pending_observations)
 
     def get_pending_observations(self) -> List[str]:
         """Detail strings for observations not yet offered to the Planner."""
@@ -1154,7 +1163,10 @@ class Brain:
     async def _handle_observation(self, event: ObservationEvent) -> None:
         """Queue a Proactive Engine call-out as a pending observation."""
         logger.info(f"Observation: kind={event.kind} detail={event.detail!r}")
-        self._context.add_observation(kind=event.kind, detail=event.detail, observation_id=event.observation_id)
+        self._context.add_observation(
+            kind=event.kind, detail=event.detail, observation_id=event.observation_id,
+            untrusted=event.untrusted,
+        )
 
     async def handle_user_text(
         self,
@@ -1191,7 +1203,8 @@ class Brain:
         """
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
-        relevant_memories = await self._retrieve_relevant_memories(text)
+        observations_untrusted = self._context.pending_observations_untrusted()
+        relevant_memories, memories_untrusted = await self._retrieve_memories_with_taint(text)
 
         self._context.add_turn(user_input=text)
         await self._event_bus.emit(ContextUpdatedEvent(
@@ -1209,6 +1222,8 @@ class Brain:
                 recent_context=recent_context,
                 observations=pending_observations,
                 memories=relevant_memories,
+                observations_untrusted=observations_untrusted,
+                memories_untrusted=memories_untrusted,
                 on_token=on_token,
                 on_status=on_status,
             )
@@ -1216,7 +1231,7 @@ class Brain:
             self._active_turns -= 1
         self._context.consume_observations()
 
-        self._context.update_last_response(result.text, action="planner")
+        self._context.update_last_response(result.text, action="planner", tainted=result.tainted)
 
         await self._event_bus.emit(VoiceOutputEvent(
             text=result.text,
@@ -1231,15 +1246,24 @@ class Brain:
         {context} block — e.g. a previously stated "always protect the gym
         slot" preference surfacing on a day-planning request. Empty (not an
         error) when MemoryAgent/semantic memory isn't available."""
+        memories, _ = await self._retrieve_memories_with_taint(text)
+        return memories
+
+    async def _retrieve_memories_with_taint(self, text: str) -> Tuple[List[str], bool]:
+        """Like `_retrieve_relevant_memories`, plus whether any retrieved memory
+        is flagged `tainted` (derived from a turn that read untrusted content —
+        see proactive/reflection.py). A missing flag means untainted, which is
+        how every memory written before the flag existed is treated."""
         memory_agent = self.get_agent("MemoryAgent")
         if not isinstance(memory_agent, MemoryAgent):
-            return []
+            return [], False
         try:
             matches = await memory_agent.semantic_retrieve(query=text, top_k=MEMORY_RETRIEVAL_TOP_K)
         except Exception as exc:
             logger.debug(f"Semantic memory retrieval failed (non-fatal): {exc}")
-            return []
-        return [m["text"] for m in matches]
+            return [], False
+        tainted = any((m.get("metadata") or {}).get("tainted") is True for m in matches)
+        return [m["text"] for m in matches], tainted
 
     async def _handle_agent_error(self, event: AgentErrorEvent) -> None:
         """Handle agent error events."""

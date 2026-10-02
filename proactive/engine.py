@@ -298,7 +298,8 @@ class ProactiveEngine:
             return
 
         detail = f"Your meeting '{event.title}' starts in {event.minutes_until} minutes."
-        await self._emit_observation("meeting_soon", detail, now)
+        # The title is third-party text (anyone can send a calendar invite).
+        await self._emit_observation("meeting_soon", detail, now, untrusted=True)
 
     # =========================================================================
     # Rule: focus_block — OFFER to start a focus playlist as a deep-work block
@@ -344,6 +345,8 @@ class ProactiveEngine:
             return True
         return (now - last_fired) >= timedelta(minutes=cooldown_min)
 
-    async def _emit_observation(self, kind: str, detail: str, now: datetime) -> None:
+    async def _emit_observation(self, kind: str, detail: str, now: datetime, untrusted: bool = False) -> None:
         self._last_fired[kind] = now
-        await self._event_bus.emit(ObservationEvent(kind=kind, detail=detail, source="ProactiveEngine"))
+        await self._event_bus.emit(
+            ObservationEvent(kind=kind, detail=detail, source="ProactiveEngine", untrusted=untrusted)
+        )

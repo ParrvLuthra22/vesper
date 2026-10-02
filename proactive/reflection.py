@@ -125,13 +125,21 @@ async def run_reflection(
         return []
 
     today = date.today().isoformat()
+    # Provenance: if any turn in the transcript read untrusted content (email,
+    # web, calendar...), what the model extracted may be laundered third-party
+    # text. Flag it so retrieving it later taints that turn (see Planner.run).
+    # Absent flag == untainted, so older memories are unaffected.
+    tainted = any(bool(turn.get("tainted")) for turn in turns)
     for item in items:
         try:
+            metadata: Dict[str, Any] = {"kind": item.kind, "source": "reflection", "date": today}
+            if tainted:
+                metadata["tainted"] = True
             await memory_agent.index_memory_text(
                 text=item.text,
                 memory_type="long_term",
                 intent=f"reflection_{item.kind}",
-                metadata={"kind": item.kind, "source": "reflection", "date": today},
+                metadata=metadata,
                 salience=0.8,
             )
         except Exception as exc:
