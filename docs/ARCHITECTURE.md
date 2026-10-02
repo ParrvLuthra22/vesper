@@ -281,6 +281,12 @@ That is a real turn: `plan my day` → 4.71s total → `plan_iteration` 0.86s �
 
 ---
 
+## 8b. Running it: one supervised launcher
+
+`vesper up` (package `launcher/`) starts the gateway, voice output, the HUD and voice input in that order, each only after a real readiness check (HTTP `/status`, a log marker, the gateway's client count), restarts crashes with exponential backoff and a crash-storm limit, treats "voice input unavailable" (exit 69) as a loud permanent failure rather than a retry loop, and stops everything in reverse order. The supervisor takes its process and time sources as arguments, so ordering, backoff and shutdown are unit-tested with fake processes. The legacy `python main.py` voice path (no wake word, Google speech recognition, pyttsx3) is retired: `main.py` is a redirect. Usage and a manual test checklist: [docs/LAUNCHER.md](LAUNCHER.md); measured footprint on the 8 GB machine: [docs/RESOURCES.md](RESOURCES.md).
+
+---
+
 ## 9. The event bus: why everything else is swappable
 
 Agents do not call each other. They publish and subscribe to typed events on a single in-process bus.
