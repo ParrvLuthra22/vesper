@@ -85,6 +85,9 @@ class VoiceConfig:
     
     # Vosk settings
     vosk_model_path: str = "models/vosk-model-small-en-us-0.15"
+
+    # Allow the Google web-speech fallback (microphone audio leaves the machine).
+    allow_cloud_stt: bool = False
     
     # Whisper settings
     whisper_binary_path: str = "/usr/local/bin/whisper-cpp"
@@ -266,6 +269,10 @@ class VoiceAgent(BaseAgent):
         # the environment and restarting, or at runtime via enable_voice_input().
         self._voice_input_disabled = False
         self._mic_unavailable_reason = ""
+        #: Set when the legacy wake-word path cannot work (no Vosk model). The
+        #: agent then refuses to listen at all — it never degrades to listening
+        #: without a wake word.
+        self._legacy_block_reason = ""
     
     def _load_config(self, config: Optional[Dict[str, Any]]) -> VoiceConfig:
         """Load configuration from dict (from settings.yaml)."""
@@ -294,6 +301,8 @@ class VoiceAgent(BaseAgent):
             # Vosk
             vosk_model_path=vosk_config.get("model_path", "models/vosk-model-small-en-us-0.15"),
             
+            allow_cloud_stt=bool(recognition_config.get("allow_cloud_stt", False)),
+
             # Whisper
             whisper_binary_path=whisper_config.get("binary_path", "/usr/local/bin/whisper-cpp"),
             whisper_model_path=whisper_config.get("model_path", "models/ggml-base.en.bin"),
@@ -366,12 +375,15 @@ class VoiceAgent(BaseAgent):
         if self._transcriber is None:
             # The mic was never opened (see _initialize_components), so there is
             # nothing to release here — just record the disabled state.
+            reason = self._legacy_block_reason or (
+                "no local speech recognizer installed (legacy Vosk/whisper.cpp absent; "
+                "cloud recognition is disabled)"
+            )
             self._voice_input_disabled = True
-            self._mic_unavailable_reason = "no speech recognizer installed (legacy Vosk/whisper.cpp absent)"
-            self._logger.warning(
-                "Voice input unavailable: no speech recognizer installed. Typing/CLI is "
-                "unaffected; for wake-word voice run the rebuilt pipeline "
-                "(./scripts/run_voice.sh  or  python -m voice.input)."
+            self._mic_unavailable_reason = reason
+            self._logger.error(
+                f"Legacy voice input is OFF: {reason}. Typing/CLI is unaffected; for "
+                "wake-word voice use `vesper up` (openWakeWord + faster-whisper, all local)."
             )
             self._set_voice_state(VoiceAgentState.IDLE)
             return
@@ -429,6 +441,14 @@ class VoiceAgent(BaseAgent):
         
         # Initialize wake word detector (Vosk)
         await self._initialize_wake_word_detector()
+
+        # No wake-word detector means no legacy voice input — LOUDLY (see
+        # _initialize_wake_word_detector). Never fall back to listening to
+        # everything: skip the transcriber and the microphone entirely.
+        if self._legacy_block_reason:
+            self._transcriber = None
+            await self._initialize_tts()
+            return
         
         # Initialize transcriber (whisper.cpp)
         await self._initialize_transcriber()
@@ -459,11 +479,19 @@ class VoiceAgent(BaseAgent):
             )
             
             if not self._wake_word_detector.initialize():
-                self._logger.warning("Vosk wake word detector not available - using fallback mode")
                 self._wake_word_detector = None
+                self._legacy_block_reason = (
+                    f"Vosk wake-word model not found at {self._voice_config.vosk_model_path!r} "
+                    "(download vosk-model-small-en-us-0.15 from https://alphacephei.com/vosk/models)"
+                )
         except ImportError as e:
-            self._logger.warning(f"Vosk not available: {e}")
             self._wake_word_detector = None
+            self._legacy_block_reason = f"Vosk is not installed ({e})"
+        if self._legacy_block_reason:
+            self._logger.error(
+                f"Legacy voice input cannot start: {self._legacy_block_reason}. It will NOT fall "
+                "back to listening without a wake word. Use `vesper up` instead."
+            )
     
     async def _initialize_transcriber(self) -> None:
         """Initialize whisper.cpp transcriber."""
@@ -479,18 +507,26 @@ class VoiceAgent(BaseAgent):
             )
             
             if not self._transcriber.initialize():
-                self._logger.warning("whisper.cpp not available - trying SpeechRecognition fallback")
-                
-                # Try SpeechRecognition as fallback
-                fallback = SpeechRecognitionTranscriber()
-                if fallback.initialize():
-                    self._transcriber = fallback
+                self._transcriber = None
+                if not self._voice_config.allow_cloud_stt:
+                    self._logger.error(
+                        "whisper.cpp is not available and cloud speech recognition is disabled "
+                        "(voice.recognition.allow_cloud_stt=false) — voice input is OFF. "
+                        "Microphone audio is never sent off this machine by default."
+                    )
                 else:
                     self._logger.warning(
-                        "No speech recognition available (optional voice deps not "
-                        "installed); voice input disabled. The CLI is unaffected."
+                        "whisper.cpp not available — using Google web speech (allow_cloud_stt=true): "
+                        "microphone audio IS sent to Google."
                     )
-                    self._transcriber = None
+                    fallback = SpeechRecognitionTranscriber(allow_cloud=True)
+                    if fallback.initialize():
+                        self._transcriber = fallback
+                    else:
+                        self._logger.error(
+                            "No speech recognition available (optional voice deps not "
+                            "installed); voice input disabled. The CLI is unaffected."
+                        )
         except ImportError as e:
             self._logger.error(f"Speech recognition imports failed: {e}")
             self._transcriber = None
@@ -693,9 +729,11 @@ class VoiceAgent(BaseAgent):
                         await asyncio.sleep(0.5)
                     continue
 
-                # If no wake word detector, use speech-activated mode
+                # No wake-word detector: never listen without one (it would treat
+                # every sound as a command). _setup already refuses to open the mic
+                # in this case; this is defence in depth.
                 if not self._wake_word_detector:
-                    await self._listen_without_wake_word()
+                    await asyncio.sleep(0.5)
                     continue
                 
                 # Wait for wake word detection
@@ -768,47 +806,6 @@ class VoiceAgent(BaseAgent):
         )
         return False
 
-    async def _listen_without_wake_word(self) -> None:
-        """Listen continuously using VAD when wake word detector is unavailable."""
-        if not self._recorder:
-            await self._keyboard_input_fallback()
-            return
-
-        # Emit listening state only once per cycle
-        await self._event_bus.emit(ListeningStateChangedEvent(
-            is_listening=True,
-            listening_mode="continuous",
-            source="VoiceAgent",
-        ))
-
-        self._set_voice_state(VoiceAgentState.LISTENING_COMMAND)
-        self._recording_complete.clear()
-
-        # Start recording (uses VAD internally)
-        self._recorder.start_recording()
-        if self._audio_buffer:
-            pre_audio = self._audio_buffer.get_last_seconds(self._voice_config.buffer_seconds)
-            if pre_audio:
-                self._recorder.add_chunk(pre_audio)
-
-        self._logger.info("Listening for speech (no wake word detector)")
-
-        try:
-            await asyncio.wait_for(
-                self._recording_complete.wait(),
-                timeout=self._voice_config.max_recording_seconds + 1.0,
-            )
-        except asyncio.TimeoutError:
-            if self._recorder:
-                self._command_audio = self._recorder.stop_recording()
-
-        if self._command_audio and len(self._command_audio) > 0 and self._recorder.has_speech:
-            await self._process_command_audio(self._command_audio)
-        else:
-            self._logger.warning("No speech detected in continuous mode")
-
-        self._command_audio = None
-    
     async def _handle_wake_word_detected(self) -> None:
         """Handle wake word detection - start recording user speech."""
         # Emit wake word event

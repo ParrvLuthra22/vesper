@@ -592,13 +592,22 @@ class SpeechRecognitionTranscriber:
     Note: Google's free API has usage limits.
     """
     
-    def __init__(self, language: str = "en-US"):
+    def __init__(self, language: str = "en-US", allow_cloud: bool = False):
         self._language = language
         self._recognizer = None
         self._initialized = False
+        #: recognize_google() uploads the audio to Google. Refuse unless the
+        #: caller explicitly opted in (voice.recognition.allow_cloud_stt).
+        self._allow_cloud = allow_cloud
     
     def initialize(self) -> bool:
         """Initialize the recognizer."""
+        if not self._allow_cloud:
+            logger.error(
+                "SpeechRecognitionTranscriber uses Google's cloud API and uploads microphone "
+                "audio; it is disabled unless voice.recognition.allow_cloud_stt is true."
+            )
+            return False
         try:
             import speech_recognition as sr
             self._recognizer = sr.Recognizer()

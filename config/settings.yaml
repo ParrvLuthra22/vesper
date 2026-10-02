@@ -179,6 +179,11 @@ voice:
   recognition:
     # Provider: 'vosk_whisper' (Vosk for wake word, whisper.cpp for transcription)
     provider: "vosk_whisper"
+
+    # LEGACY VoiceAgent only (no longer started by default — use `vesper up`).
+    # true lets it fall back to Google's web speech API, i.e. microphone audio
+    # leaves this machine. Keep false.
+    allow_cloud_stt: false
     
     # Audio settings
     sample_rate: 16000

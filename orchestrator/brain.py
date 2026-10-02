@@ -360,7 +360,7 @@ class Brain:
         self,
         config: Optional[Dict[str, Any]] = None,
         event_bus: Optional[EventBus] = None,
-        enable_voice_agent: bool = True,
+        enable_voice_agent: bool = False,
     ):
         """
         Initialize the Brain.
@@ -368,10 +368,12 @@ class Brain:
         Args:
             config: Configuration dictionary (from settings.yaml)
             event_bus: Event bus instance (defaults to global)
-            enable_voice_agent: Whether to register VoiceAgent (microphone
-                capture + TTS). The CLI (cli/app.py) runs with this False —
-                same Brain, no voice I/O; text goes in/out via the terminal
-                instead of VoiceInputEvent/VoiceOutputEvent's audio path.
+            enable_voice_agent: Whether to register the LEGACY VoiceAgent
+                (microphone capture + pyttsx3). Off by default — real voice is
+                the launcher's wake-word/STT/TTS processes talking to the
+                gateway (`vesper up`). The legacy agent refuses to listen
+                without a Vosk wake-word model and never uses cloud speech
+                recognition unless voice.recognition.allow_cloud_stt is set.
         """
         self._config = config or {}
         self._event_bus = event_bus or get_event_bus()

@@ -125,6 +125,7 @@ class Gateway:
         self._greeting: Optional[str] = None
         self._subscriptions: List[Any] = []
         self._attached = False
+        self._remote_task: Optional["asyncio.Task[None]"] = None
 
         self.app = self._build_app()
 
@@ -149,6 +150,14 @@ class Gateway:
         if self._manage_brain:
             logger.info("Gateway starting Brain (in-process)...")
             await self._brain.start()
+            # The Discord remote (mobile access) used to be started by main.py,
+            # which is now just a redirect to the launcher. The gateway owns the
+            # Brain, so it owns this too. No-ops unless remote.enabled.
+            if (self._config.get("remote", {}) or {}).get("enabled"):
+                from remote.discord_remote import run_remote
+
+                self._remote_task = asyncio.create_task(run_remote(self._brain, self._config))
+                logger.info("Discord remote interface enabled (remote.enabled=true)")
 
         if not self._token:
             logger.warning(
@@ -158,6 +167,9 @@ class Gateway:
         logger.info(f"Gateway ready on http://{self._host}:{self._port} (localhost only)")
 
     async def shutdown(self) -> None:
+        if self._remote_task is not None:
+            self._remote_task.cancel()
+            self._remote_task = None
         for token in self._subscriptions:
             token.unsubscribe()
         self._subscriptions.clear()

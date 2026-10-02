@@ -57,6 +57,9 @@ class VoiceRecognitionSettings(BaseModel):
     max_recording_seconds: int = 30
     min_recording_seconds: float = 0.5
     vad_aggressiveness: int = 2
+    #: The legacy VoiceAgent may fall back to Google's web speech API (audio
+    #: leaves the machine). Off unless explicitly enabled; see docs/PRIVACY.md.
+    allow_cloud_stt: bool = False
 
 
 class VoiceSynthesisSettings(BaseModel):
