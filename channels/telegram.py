@@ -10,8 +10,9 @@ taint, audit. Defense in depth here:
   * typed text is trusted; forwards, quoted replies, captions, files and inline-bot messages are third-party;
   * confirmations are inline Approve/Deny buttons bound to a single-use, user-bound, 2-minute nonce;
     a stale / reused / foreign-user press is refused and audited;
-  * a voice note is downloaded, transcribed by the LOCAL speech model (no cloud STT), treated as typed
-    text from you, and the audio file is deleted afterwards — also when anything fails in between;
+  * a voice note YOU send is downloaded, transcribed by the LOCAL speech model (no cloud STT), treated as
+    typed text from you, and the audio file is deleted afterwards — also when anything fails in between;
+    a forwarded voice note is never downloaded or decoded (it is just an attachment);
   * per-user rate limit, reply splitting, backoff with jitter on network errors, no crash loop.
 
 Exit status 69 means "unavailable and will not become available by retrying" (disabled, no allowlist, no
@@ -263,14 +264,16 @@ def parse_message(m: Dict[str, Any], transcript: Optional[str] = None, limit: in
         quoted = rm.get("text") if isinstance(rm.get("text"), str) else (
             rm.get("caption") if isinstance(rm.get("caption"), str) else "(a message without text)")
 
+    if voice is not None and (is_forward or via_bot):
+        # Someone else's audio is never downloaded or decoded: it is an attachment, nothing more.
+        attachments = attachments + (Attachment(kind="audio", mime=str(voice.get("mime_type", ""))[:64]),)
+        voice = None
     parsed = ParsedMessage(is_forward=is_forward, attachments=attachments, voice=voice)
     if is_forward or via_bot:
         label = "forwarded message" if is_forward else "message sent via an inline bot"
         content = body or caption
         if content:
             parsed.blocks.append(_frame(label, content, limit))
-        if transcript:
-            parsed.blocks.append(_frame("transcript of a forwarded voice note", transcript, limit))
     elif caption:
         parsed.blocks.append(_frame("caption of an attached file", caption, limit))
         if transcript:

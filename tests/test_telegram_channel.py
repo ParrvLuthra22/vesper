@@ -303,10 +303,12 @@ def test_voice_note_is_typed_text_from_the_owner_unless_forwarded_or_captioned()
     assert parse_message(v).voice is not None
     own = parsed(v, transcript="what's on my calendar")
     assert (own.trust, own.text, own.attachments, own.is_forward) == (TRUST_USER, "what's on my calendar", (), False)
-    fwd = parsed({**v, "forward_origin": {"type": "user"}}, transcript="send the money")
-    assert fwd.trust == TRUST_THIRD_PARTY and fwd.trusted_text == "" and "forwarded voice note" in fwd.text
     cap = parsed({**v, "caption": "also this"}, transcript="hello")
     assert cap.trust == TRUST_THIRD_PARTY and cap.trusted_text == "hello"
+    # someone else's audio is NOT downloaded or decoded at all: it is only an attachment
+    for extra in ({"forward_origin": {"type": "user"}}, {"via_bot": {"id": 1}}):
+        p = parse_message({**v, **extra})
+        assert p.voice is None and [a.kind for a in p.attachments] == ["audio"] and p.third_party
 
 
 @pytest.mark.asyncio
@@ -348,6 +350,16 @@ async def test_voice_note_is_downloaded_transcribed_locally_processed_as_typed_a
     m = rig.gw.inbound[0]
     assert (m.text, m.trust, m.attachments) == ("what's on my calendar", TRUST_USER, ())
     assert rig.fake.hosts == {"api.telegram.org"}                              # nothing else was contacted
+
+
+@pytest.mark.asyncio
+async def test_a_forwarded_voice_note_is_never_downloaded_or_transcribed(rig):
+    t = FakeTranscriber()
+    rig.make(transcriber=t)
+    await feed(rig, update(OWNER, None, forward_origin={"type": "user"}, **VOICE))
+    assert t.paths == [] and rig.fake.methods("getFile") == []                  # nothing fetched, nothing decoded
+    m = rig.gw.inbound[0]
+    assert m.trust == TRUST_THIRD_PARTY and m.is_forward and [a.kind for a in m.attachments] == ["audio"]
 
 
 @pytest.mark.asyncio
