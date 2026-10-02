@@ -99,6 +99,14 @@ class BriefingCache:
         with self._lock:
             return [Item.from_dict(json.loads(r["item"])) for r in self._db.execute(q, args).fetchall()]
 
+    def all_items(self, source: Optional[str] = None) -> List[Item]:
+        """Every cached item, active or not (so an item can be marked after it was read)."""
+        q, args = "SELECT item FROM items", ()
+        if source:
+            q, args = q + " WHERE source=?", (source,)
+        with self._lock:
+            return [Item.from_dict(json.loads(r["item"])) for r in self._db.execute(q, args).fetchall()]
+
     def save_scores(self, rows: Iterable[Tuple[str, int, List[Dict[str, Any]], bool]]) -> None:
         with self._lock:
             for item_id, score, reasons, excluded in rows:
