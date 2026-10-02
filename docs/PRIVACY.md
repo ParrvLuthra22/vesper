@@ -15,6 +15,8 @@ Statements here are from reading the code and from config; I did **not** packet-
 | Weather location string | **Open-Meteo** | `current_weather` tool | no key; tool-level |
 | What the briefing engine collects: sender, subject and a ≤200-char snippet of **unread mail**, and calendar titles/times (never notes) | nowhere — a local SQLite file, `data/briefing.db` (git-ignored) | every ~10 min | `config/briefing.yaml` (`refresh.enabled: false` stops the timer) |
 | Of that, what the LLM sees: ≤600 tokens — at most 5 priority mail items (sender name, subject, 90-char preview), 3 meetings, counts | **Groq**, only when you ask for a briefing (the "good morning" fast path sends nothing — it is spoken from the cache) | on demand | – |
+| Derived from your SENT mail: the **known-correspondent set**, i.e. recipient addresses and domains with message counts, from header addresses only (no body, subject or snippet) | nowhere; inside `data/briefing.db` (list it with `vesper briefing --known`) | refreshed daily | `collect.sent_days`, `collect.sent_max_messages` |
+| Your `--mark` feedback rules: a sender address or domain and an action, nothing else | nowhere; `data/briefing_rules.json` (plain JSON, git-ignored) | when you run `--mark` | `vesper briefing --rules` |
 | Memory text | nowhere — Chroma + SQLite on disk, embeddings computed locally (MiniLM) | – | – |
 | **Microphone audio** | **nowhere** — openWakeWord, webrtcvad, faster-whisper and Kokoro are local models | – | – |
 | Traces (`data/traces/traces.jsonl`) | **nowhere** — local file only | – | `tracing.enabled` |

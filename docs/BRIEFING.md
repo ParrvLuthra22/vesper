@@ -73,18 +73,23 @@ one**. They use batch requests (one round trip per 50 messages). Calendar uses t
 | Signal | Default | Note |
 |---|---|---|
 | unread mail (base) | +15 | |
+| personal mail — **no** bulk/automated signal at all | +15 | what separates a person from a mailing list |
 | VIP sender (address / domain / name) | +45 | list is **empty by default — fill it in** |
-| I've written to this sender before | +15 | from the sent summary |
+| known correspondent — I've written to this exact address | +25 | **derived automatically from sent mail** (see below) |
+| known domain — I've written to someone at this non-public domain | +10 | gmail.com etc. never count |
+| your `--mark … priority` / `ignore` rule | +40 (and penalties waived) / −60 | see "Feedback rules" |
 | reply in a thread I sent in | +20 | |
 | is a reply (Re:/In-Reply-To) | +5 | not applied if the thread is mine |
-| urgency words | per word, capped at +30 | urgent 12, asap 12, eod 10, deadline 10, due 8, interview 15, offer 12, exam 12, tomorrow 6; **ignored for bulk mail** |
-| fresh (< 6 h) | +10 | |
+| urgency words | per word, capped at +30 | urgent 12, asap 12, eod 10, due 8, offer 12, exam 12, tomorrow 6, expires 10, and the **strong** terms: deadline 20, interview 25, shortlisted 25, payment failed 25, action required 20, evaluation 15, submission 15; **ignored for bulk mail** unless a strong term lifts it |
+| fresh (< 24 h) | +10 | |
 | unread > 7 days | −10 | |
 | noreply sender | −25 | |
 | newsletter wording / Gmail Updates·Forums | −25 | |
 | promo wording / Gmail Promotions·Social | −30 | |
 | List-Id / List-Unsubscribe / Precedence: bulk | −20 | |
 | Auto-Submitted | −15 | |
+| **strong urgency** (deadline, evaluation, shortlisted, submission, interview, payment failed, action required, expires) | caps the *combined* bulk penalties at −10 | not for Gmail-Promotions mail; `expires` is ignored when the text also reads like a promo |
+| **important-automated allowlist** (domains / patterns you configure) | all bulk penalties waived | off by default; optional `important_automated` boost (default 0) |
 | text reads like instructions to an AI | −40 | and the snippet is withheld |
 | **mail cap** | 94 | mail can never outrank an imminent meeting |
 | meeting starts within 3 h, or in progress | **100** | always top |
@@ -92,6 +97,50 @@ one**. They use batch requests (one round trip per 50 messages). Calendar uses t
 | meeting tomorrow | 45 | |
 | interview/exam/offer/deadline/review/demo/presentation in title | +10 | |
 | all-day event | −30 | never "imminent" (a birthday is not in progress all day) |
+
+### Known correspondents (automatic)
+
+From the Gmail `sent_summary` read tool the engine keeps **two small maps**: addresses and non-public domains I have
+sent mail to, each with a message count, over `collect.sent_days` (**365**) and at most `sent_max_messages` (500)
+recent sent messages. **Header addresses only: no body, subject or snippet is read or stored.** Automated addresses
+(noreply patterns) are dropped (replying to a notification does not make a service a correspondent), and public
+mailbox domains (gmail.com, outlook.com…) are never recorded as a *domain*. Refreshed at most daily, or immediately if
+the window changes. `vesper briefing --known` lists exactly who is in it.
+
+**Why 365 days, not 60:** measured on the real account, 60 days of sent mail was *empty* (0 messages; 12 in 180 days,
+29 in 365, 67 ever), so a 60-day window boosted nobody and the one human mail scored 20 against a bar of 35.
+
+### Important automated mail
+
+Two mechanisms, deliberately separate:
+
+* **Allowlist** (`important_automated.domains` / `.patterns` in `config/briefing.yaml`; shipped as commented examples:
+  GitHub, Vercel, Stripe, Razorpay, PayPal, Devpost, MLH, Devfolio, Unstop, `.edu`/`.ac.in` portals). Mail from these
+  has *all* bulk penalties waived. It does **not** boost them, so a plain notice scores ~15–25 and surfaces only when
+  fresh, urgent or from a known domain; set `weights.important_automated` to 15–20 to make allowlisted senders always
+  reach the list. Patterns are tried against the sender address and the subject separately. **Keep patterns narrow**:
+  `\.edu$` waives every notice from every `.edu` sender.
+* **Strong-urgency override.** A deadline-type term in the subject or snippet caps the combined bulk penalties at −10
+  and lets the urgency words count, so a deadline notice from a no-reply portal is not buried. Gmail's own
+  Promotions/Social category beats a keyword (measured: the real inbox's only "action required" mail was a
+  Gmail-Promotions mail).
+
+Put your own domains, VIPs and weight tweaks in `config/briefing.local.yaml`: it is merged over `briefing.yaml` (dicts
+merge, lists replace) and is **git-ignored**.
+
+### Feedback rules (no learning)
+
+```
+vesper briefing --explain                            # the ID column is what --mark takes (any unique prefix, 6+ chars)
+vesper briefing --mark 1a0fb7395f priority           # +40, and that sender's bulk penalties are waived
+vesper briefing --mark 1a0fc46022 ignore --domain    # -60 for everyone at that sender's domain
+vesper briefing --rules                              # list
+vesper briefing --rules --remove 2                   # undo
+```
+A rule is one line of data (sender|domain, value, priority|ignore) in `data/briefing_rules.json`: plain JSON,
+git-ignored, survives a cache wipe. Only the address or domain is stored, never the subject or text. The scorer applies
+it and nothing else does; if an address rule and a domain rule both match, the address rule wins. `--mark` prints
+exactly what it recorded and the item's new score.
 
 Scores are recomputed when a briefing is built (a meeting's urgency changes by the minute) and written back to
 the cache. `vesper briefing --explain` prints every item's score and each `+/- points reason`. Items that are read,
@@ -160,7 +209,11 @@ Start by filling in `vips:` — with it empty, only reply/thread/urgency signals
 
 ## Known limits
 
-* Priority is only as good as the VIP list and the word list; a one-line "can you call me" from a stranger scores low.
+* Priority is only as good as the VIP list, the known set and the word list; a one-line "can you call me" from a stranger
+  is "personal mail" (40 when fresh) but nothing more.
+* The known set needs sent mail: an account that rarely sends has a small one (27 addresses on the real account).
+* A broad allowlist pattern floods the list (4 college notices reached the bar in the real-inbox test); the list is
+  capped at 5, so the ranking among them is then flat.
 * Read-state/replies made on another device appear at the next refresh (≤10 min).
 * Calendar notes and attendee lists are not read. Reminders are not part of the briefing yet.
 * Slack/iMessage are not collected (no read-only tools for them exist yet): a collector is ~60 lines
