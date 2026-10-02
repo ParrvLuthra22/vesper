@@ -879,9 +879,13 @@ proactive:
 # tracing degrades to local JSONL only at tracing.local_dir — the app never
 # breaks because of tracing either way.
 tracing:
-  enabled: true
+  enabled: true            # local JSONL traces at local_dir (never leave the machine)
   project_name: "vesper"
   local_dir: "data/traces"
+  # LangSmith is OPT-IN. When true AND LANGSMITH_API_KEY is set, every turn's user
+  # text, prompts, tool arguments and tool RESULTS (email, calendar, web text) are
+  # sent to LangSmith's cloud. A key in .env alone does nothing. See docs/PRIVACY.md.
+  langsmith_enabled: false
 
 
 # -----------------------------------------------------------------------------

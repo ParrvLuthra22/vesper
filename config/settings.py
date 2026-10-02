@@ -511,11 +511,15 @@ class ProactiveSettings(BaseModel):
 class TracingSettings(BaseModel):
     """LangSmith instrumentation, with an always-on local JSONL fallback
     (see tracing/tracer.py). LANGSMITH_API_KEY comes from the environment,
-    not this config — if unset, tracing degrades to local-only."""
+    not this config; LangSmith additionally requires langsmith_enabled=true."""
 
     enabled: bool = True
     project_name: str = "vesper"
     local_dir: str = "data/traces"
+    #: Ship traces (prompts, tool args, tool RESULTS incl. email/calendar text)
+    #: to LangSmith. Off by default; a LANGSMITH_API_KEY alone no longer turns
+    #: it on. Local JSONL tracing is unaffected. See docs/PRIVACY.md.
+    langsmith_enabled: bool = False
 
 
 class MCPGmailServerSettings(BaseModel):

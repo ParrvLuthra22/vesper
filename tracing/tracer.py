@@ -8,8 +8,10 @@ Run hierarchy per user turn:
             └── tool_execution (child)   — one per tool call: tool, args,
                                             guardian verdict, result, latency
 
-LangSmith is the sink when tracing.enabled and LANGSMITH_API_KEY are both
-set. A local JSONL file at <tracing.local_dir>/traces.jsonl is *always*
+LangSmith is the sink ONLY when tracing.enabled, tracing.langsmith_enabled
+(opt-in, default false) and LANGSMITH_API_KEY are all set — a key sitting in
+.env no longer ships anything. What leaves the machine in each mode is listed in
+docs/PRIVACY.md. A local JSONL file at <tracing.local_dir>/traces.jsonl is *always*
 written too, regardless of LangSmith availability — both as the
 degrade-gracefully fallback and as the source `trace last` reads (so it
 never depends on the network). Every public method here is defensive:
@@ -51,14 +53,29 @@ class Tracer:
         self._client: Optional[Client] = None
         if self._enabled:
             api_key = get_langsmith_api_key(self._get_config)
-            if api_key:
+            if not bool(self._get_config("tracing.langsmith_enabled", False)):
+                if api_key:
+                    logger.info(
+                        "[Tracer] LANGSMITH_API_KEY is set but tracing.langsmith_enabled=false — "
+                        "traces stay on this machine (local JSONL only)"
+                    )
+                else:
+                    logger.info("[Tracer] tracing to local JSONL only")
+            elif api_key:
                 try:
                     self._client = Client(api_key=api_key)
+                    logger.warning(
+                        "[Tracer] LangSmith tracing is ON (tracing.langsmith_enabled=true): prompts, "
+                        "tool arguments and tool results are sent to LangSmith"
+                    )
                 except Exception as exc:
                     logger.warning(f"[Tracer] LangSmith client init failed, using local-only tracing: {exc}")
                     self._client = None
             else:
-                logger.info("[Tracer] LANGSMITH_API_KEY not set; tracing to local JSONL only")
+                logger.warning(
+                    "[Tracer] tracing.langsmith_enabled=true but LANGSMITH_API_KEY is not set; "
+                    "tracing to local JSONL only"
+                )
 
     def _get_config(self, key: str, default: Any = None) -> Any:
         value: Any = self._config

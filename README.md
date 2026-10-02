@@ -101,7 +101,7 @@ Every surface is a client of the same gateway, so the CLI, the HUD, voice, and t
 | **Gateway** | FastAPI over the event bus, localhost-bound, bearer-token auth |
 | **MCP** | Gmail and Apple Calendar/Reminders enabled; Notion, GitHub, Spotify, Slack, Discord shipped behind config flags |
 | **Remote** | Discord interface: owner-only, `dangerous` disabled entirely, confirms need an explicit approval |
-| **Tracing** | LangSmith when configured, always-on local JSONL otherwise |
+| **Tracing** | always-on local JSONL; LangSmith is opt-in (`tracing.langsmith_enabled`) — see [what leaves the machine](docs/PRIVACY.md) |
 | **Tests** | 331 automated |
 
 ### Deliberately not built (and why)

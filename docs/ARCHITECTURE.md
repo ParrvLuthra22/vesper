@@ -277,7 +277,7 @@ That is a real turn: `plan my day` → 4.71s total → `plan_iteration` 0.86s �
 - **Slow turn** → the latency breakdown says immediately whether it was the model or a tool.
 - **Loop to the iteration cap** → the model isn't recognising a result as an answer; usually the result text is opaque.
 
-**LangSmith when configured; a local JSONL trace always.** The local sink is not a fallback — it always writes. Tracing that only works when a cloud key is set is tracing that is absent exactly when you're debugging offline. LangSmith adds a good tree UI on top; it is never load-bearing.
+**A local JSONL trace always; LangSmith only when you opt in.** The local sink is not a fallback — it always writes, so debugging works offline. LangSmith adds a good tree UI on top and is never load-bearing — and it is **off by default** (`tracing.langsmith_enabled`), because a trace carries every prompt and every tool result, email and calendar text included. A key in `.env` alone ships nothing. What leaves the machine in each mode: [docs/PRIVACY.md](PRIVACY.md).
 
 ---
 
