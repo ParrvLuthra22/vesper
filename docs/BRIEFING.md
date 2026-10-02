@@ -204,6 +204,22 @@ vesper briefing --spoken        # the script
 vesper briefing --refresh       # force a collector run first (starts the MCP servers; read-only)
 vesper briefing --cache-only    # never touch the network
 ```
+### `--redact` — sharing output without sharing your mail
+
+`--explain`, `--json`, `--known`, `--mark` and `--rules` accept `--redact`: every sender, subject, snippet and
+domain becomes a stable placeholder (`<sender:3>`, `<subject:7>`, `<domain:2>`), numbered by first appearance. Use it
+for anything you paste into a report, issue or chat. It **fails closed**, in two layers:
+
+1. The row builder never produces a real value in redacted mode (scorer reasons must match an allowlist of static
+   labels, otherwise they print as `<reason:N>`), so changing the table layout cannot leak.
+2. All stdout/stderr (and error text) is buffered and scanned against *everything* sensitive stored locally — every
+   cached sender, subject, snippet, title, the known-correspondent set and your rules — whether or not the command
+   meant to print it. A hit withholds the whole output (exit 3) and never echoes the leaked text.
+
+The spoken script and the planner block are refused under `--redact` (exit 2): they weave real text into sentences, so
+there is no safe way to placeholder them after the fact. The ID column is kept (it is what `--mark` takes). The rules
+file itself still stores the real address/domain — that is its job; only what is *printed* is redacted.
+
 `config/briefing.yaml` (override path with `VESPER_BRIEFING_CONFIG`; cache file with `VESPER_BRIEFING_DB`).
 Start by filling in `vips:` — with it empty, only reply/thread/urgency signals separate human mail from bulk.
 
