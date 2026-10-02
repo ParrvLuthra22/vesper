@@ -34,6 +34,7 @@ from uuid import UUID, uuid4
 
 from bus.event_bus import EventBus, get_event_bus
 from guardian.gate import Guardian, VerdictType
+from orchestrator import claim_verifier
 from llm.router import ModelRouter
 from llm.types import LLMResponse, RouterError, ToolCall
 from schemas.events import (
@@ -183,6 +184,9 @@ class Planner:
         #: Labels of untrusted content (email, web, calendar...) read so far
         #: this turn — drives the Guardian's tainted-input rule.
         taint_sources: List[str] = []
+        #: Action-claim verifier: one corrective retry per turn, then an honest
+        #: replacement (orchestrator/claim_verifier.py).
+        claim_retried = False
 
         for iteration in range(self._max_iterations):
             iteration_trace = turn_trace.start_iteration(iteration, list(messages), purpose)
@@ -201,6 +205,42 @@ class Planner:
                 return self._finish_turn(turn_trace, turn_start, result)
 
             if not response.tool_calls:
+                claim = claim_verifier.find_unbacked_claim(
+                    response.text, user_text,
+                    [t.rsplit(":", 1)[0] for t in trace if t.endswith(":ok")],
+                )
+                if claim is not None and not claim_retried:
+                    # Don't surface the claim. Re-ask once, with the FULL tool
+                    # catalog (the per-turn filter may be why the tool was
+                    # never offered) and a corrective nudge.
+                    claim_retried = True
+                    logger.warning(
+                        f"[Planner] unbacked action claim ({claim.category}, {claim.kind}): "
+                        f"{claim.sentence!r} — no matching tool succeeded; retrying once"
+                    )
+                    trace.append(f"claim_check:retry:{claim.category}")
+                    self._notify(on_status, claim_verifier.CORRECTION_NOTICE)
+                    tools_schema = self._registry.to_llm_schema()
+                    sent_tool_names = {t["function"]["name"] for t in tools_schema}
+                    widened = True
+                    messages.append({"role": "assistant", "content": response.text or ""})
+                    messages.append({"role": "system", "content": claim_verifier.NUDGE})
+                    continue
+                if claim is not None:
+                    logger.warning(
+                        f"[Planner] unbacked action claim persisted after retry "
+                        f"({claim.category}); replacing the reply"
+                    )
+                    trace.append(f"claim_check:blocked:{claim.category}")
+                    self._notify(on_status, claim_verifier.CORRECTION_NOTICE)
+                    if on_token is not None:
+                        try:
+                            on_token(claim_verifier.HONEST_REPLY)
+                        except Exception:  # a display callback must never break the turn
+                            pass
+                    await self._emit_plan_trace(user_text, trace)
+                    result = PlannerResult(text=claim_verifier.HONEST_REPLY, tool_trace=trace)
+                    return self._finish_turn(turn_trace, turn_start, result)
                 await self._emit_plan_trace(user_text, trace)
                 result = PlannerResult(text=response.text, tool_trace=trace)
                 return self._finish_turn(turn_trace, turn_start, result)
@@ -379,6 +419,15 @@ class Planner:
                 latency_ms=_elapsed_ms(start), success=False, error=str(exc),
             )
             return f"Error: {exc}"
+
+    @staticmethod
+    def _notify(on_status: Optional[Callable[[str], None]], message: str) -> None:
+        if on_status is None:
+            return
+        try:
+            on_status(message)
+        except Exception:  # a display callback must never break the turn
+            pass
 
     @staticmethod
     def _taint_label(tool_spec: ToolSpec) -> str:

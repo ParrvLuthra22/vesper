@@ -606,7 +606,7 @@ async def test_only_relevant_tools_are_sent_to_the_model() -> None:
     """The tool schema is the largest fixed cost in the prompt; trim it."""
     bus = EventBus()
     registry = _echo_registry()
-    router = _mock_router([LLMResponse(text="Done, Sir.")])
+    router = _mock_router([LLMResponse(text="Understood, Sir.")])
     planner = _make_planner(router, registry, bus)
 
     await planner.run("commit this")
@@ -620,7 +620,7 @@ async def test_only_relevant_tools_are_sent_to_the_model() -> None:
 async def test_tool_filtering_can_be_disabled_by_config() -> None:
     bus = EventBus()
     registry = _echo_registry()
-    router = _mock_router([LLMResponse(text="Done, Sir.")])
+    router = _mock_router([LLMResponse(text="Understood, Sir.")])
     planner = _make_planner(
         router, registry, bus, config={"llm": {"tool_selection": {"enabled": False}}}
     )
@@ -643,14 +643,14 @@ async def test_filter_miss_widens_to_the_full_catalog_and_retries() -> None:
         [
             # Model asks for a tool that "commit this" would not have selected.
             LLMResponse(tool_calls=[ToolCall(name="set_volume", arguments={"level": 20})]),
-            LLMResponse(text="Volume set, Sir."),
+            LLMResponse(text="Understood, Sir."),
         ]
     )
     planner = _make_planner(router, registry, bus)
 
     result = await planner.run("commit this")
 
-    assert result.text == "Volume set, Sir."
+    assert result.text == "Understood, Sir."
     assert router.complete.await_count == 2
     second_call = {t["function"]["name"] for t in router.complete.await_args_list[1].kwargs["tools"]}
     assert second_call == {spec.name for spec in registry.list_all()}
