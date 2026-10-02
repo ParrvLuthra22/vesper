@@ -756,6 +756,8 @@ class LauncherComponentsSettings(BaseModel):
     voice_output: bool = True
     voice_input: bool = True
     hud: bool = True
+    #: Only started when channels.telegram.enabled is also true.
+    telegram: bool = True
 
 
 class LauncherSettings(BaseModel):
@@ -774,6 +776,46 @@ class LauncherSettings(BaseModel):
     #: already on disk, so nothing should contact the Hugging Face Hub at load.
     #: Set false for the very first run if a model still has to be downloaded.
     offline_models: bool = True
+
+
+class TelegramRateLimit(BaseModel):
+    messages: int = 10
+    window_seconds: float = 60.0
+
+
+class TelegramSettings(BaseModel):
+    """Telegram as a restricted, owner-only channel (channels/telegram.py, docs/CHANNELS.md).
+
+    Safety rails, none optional: only the numeric user ids in `allowed_user_ids` are served (every
+    other update is dropped silently); private chats only; typed text is trusted, forwarded / quoted /
+    caption / file content is third-party and taints the turn; the session is restricted (dangerous-tier
+    tools are refused outright); confirmations are inline buttons bound to a single-use nonce.
+    The bot token is NEVER read from this tracked file by default: it comes from the environment
+    (`bot_token_env`) or the macOS Keychain (`keychain_service`)."""
+
+    enabled: bool = False
+    allowed_user_ids: List[int] = Field(default_factory=list)
+    bot_token_env: str = "VESPER_TELEGRAM_BOT_TOKEN"
+    keychain_service: str = "vesper-telegram-bot"
+    #: Last resort and discouraged: a literal token here would live in a git-tracked file.
+    bot_token: str = ""
+    api_base_url: str = "https://api.telegram.org"
+    poll_timeout_seconds: int = 30
+    rate_limit: TelegramRateLimit = Field(default_factory=TelegramRateLimit)
+    #: Updates older than this when they are first seen (e.g. sent while Vesper was off) are dropped.
+    max_message_age_seconds: float = 300.0
+    max_chars_per_message: int = 4000     # Telegram's hard limit is 4096
+    max_reply_chars: int = 12000          # longer replies are cut with a note
+    max_incoming_chars: int = 4000
+    max_voice_seconds: int = 120
+    confirm_ttl_seconds: float = 120.0
+    allow_dangerous: bool = False         # accepted for symmetry with remote.*; forced False in code
+
+
+class ChannelsSettings(BaseModel):
+    """Inbound chat channels (docs/CHANNELS.md). Each one is a restricted session."""
+
+    telegram: TelegramSettings = Field(default_factory=TelegramSettings)
 
 
 class AppSettings(BaseSettings):
@@ -808,6 +850,7 @@ class AppSettings(BaseSettings):
     creator: CreatorSettings = Field(default_factory=CreatorSettings)
     remote: RemoteSettings = Field(default_factory=RemoteSettings)
     launcher: LauncherSettings = Field(default_factory=LauncherSettings)
+    channels: ChannelsSettings = Field(default_factory=ChannelsSettings)
 
     @classmethod
     def settings_customise_sources(

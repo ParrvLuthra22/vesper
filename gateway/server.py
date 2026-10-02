@@ -30,9 +30,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
+from channels.message import InboundMessage, InvalidMessage
+from gateway.channels import ChannelForbidden, ChannelTurnService
 from gateway.wire import FORWARDED_EVENT_TYPES, to_wire
 from schemas.events import (
     ConfirmationResponseEvent,
@@ -126,8 +129,16 @@ class Gateway:
         self._subscriptions: List[Any] = []
         self._attached = False
         self._remote_task: Optional["asyncio.Task[None]"] = None
+        self._channel_service: Optional[ChannelTurnService] = None
 
         self.app = self._build_app()
+
+    def channel_service(self) -> ChannelTurnService:
+        """The restricted door for chat channels (gateway/channels.py); built on first use because the
+        Brain and bus may only exist once the gateway has started."""
+        if self._channel_service is None:
+            self._channel_service = ChannelTurnService(self._brain, self._bus, self._config)
+        return self._channel_service
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -280,6 +291,51 @@ class Gateway:
         async def post_confirm(body: ConfirmIn, _: None = Depends(require_token)) -> Dict[str, Any]:
             self.inject_confirm(body.request_id, body.approved)
             return {"status": "ok"}
+
+        @app.post("/channel/turn")
+        async def post_channel_turn(body: Dict[str, Any] = Body(...), _: None = Depends(require_token)):
+            """One normalized chat message -> NDJSON stream (confirm cards, then the reply). The session is
+            always restricted; see gateway/channels.py."""
+            try:
+                msg = InboundMessage.from_dict(body)
+            except InvalidMessage as exc:
+                raise HTTPException(status_code=422, detail=str(exc))
+            service = self.channel_service()
+            try:
+                service.authorize(msg.channel, msg.user_id)
+            except ChannelForbidden:
+                raise HTTPException(status_code=403, detail="sender not allowed on this channel")
+
+            async def lines():
+                async for event in service.stream_turn(msg):
+                    yield json.dumps(event, default=str) + "\n"
+
+            return StreamingResponse(lines(), media_type="application/x-ndjson")
+
+        @app.post("/channel/confirm")
+        async def post_channel_confirm(body: Dict[str, Any] = Body(...), _: None = Depends(require_token)):
+            try:
+                outcome = await self.channel_service().confirm(
+                    str(body.get("request_id", "")), bool(body.get("approved")),
+                    str(body.get("channel", "")), str(body.get("user_id", "")))
+            except ChannelForbidden:
+                raise HTTPException(status_code=403, detail="sender not allowed on this channel")
+            if outcome == "forbidden":
+                raise HTTPException(status_code=403, detail="that confirmation belongs to another user")
+            return {"status": outcome}
+
+        @app.post("/channel/audit")
+        async def post_channel_audit(body: Dict[str, Any] = Body(...), _: None = Depends(require_token)):
+            service = self.channel_service()
+            channel, user_id = str(body.get("channel", "")), str(body.get("user_id", ""))
+            try:
+                service.authorize(channel, user_id)
+            except ChannelForbidden:
+                raise HTTPException(status_code=403, detail="sender not allowed on this channel")
+            detail = body.get("detail") if isinstance(body.get("detail"), dict) else {}
+            if not service.audit_from_adapter(str(body.get("event", "")), detail, channel, user_id):
+                raise HTTPException(status_code=422, detail="unknown audit event")
+            return {"status": "recorded"}
 
         @app.post("/wake")
         async def post_wake(_: None = Depends(require_token)) -> Dict[str, Any]:

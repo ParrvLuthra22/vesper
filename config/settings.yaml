@@ -1104,6 +1104,32 @@ creator:
 
 
 # -----------------------------------------------------------------------------
+# Channels — talk to Vesper from a chat app. See docs/CHANNELS.md.
+# Each channel is a RESTRICTED session: dangerous-tier tools are refused outright,
+# confirm-tier tools need an explicit button press bound to a single-use nonce.
+# Typed text is trusted; forwarded / quoted / caption / file content is third-party
+# and taints the turn. The message text and Vesper's replies pass through the chat
+# provider's servers (docs/PRIVACY.md).
+# The bot token is NEVER set in this tracked file: use the environment variable
+# below or the macOS Keychain (`security add-generic-password -s vesper-telegram-bot
+# -a bot-token -w`).
+# -----------------------------------------------------------------------------
+channels:
+  telegram:
+    enabled: false
+    allowed_user_ids: []             # YOUR numeric Telegram user id(s) — the ONLY accepted senders
+    bot_token_env: "VESPER_TELEGRAM_BOT_TOKEN"
+    keychain_service: "vesper-telegram-bot"
+    poll_timeout_seconds: 30
+    rate_limit: {messages: 10, window_seconds: 60}
+    max_message_age_seconds: 300     # updates older than this when first seen are dropped
+    max_chars_per_message: 4000
+    max_reply_chars: 12000
+    max_voice_seconds: 120
+    confirm_ttl_seconds: 120
+
+
+# -----------------------------------------------------------------------------
 # Launcher — `vesper up` / `vesper down` / `vesper status`.
 # Starts the gateway (Brain), voice output, the HUD and voice input (wake word +
 # speech-to-text) in that order, waits for each to be ready, restarts crashes with
@@ -1114,6 +1140,7 @@ launcher:
     voice_output: true
     voice_input: true
     hud: true
+    telegram: true       # still needs channels.telegram.enabled: true
   restart:
     initial_backoff_seconds: 1.0
     max_backoff_seconds: 30.0

@@ -107,6 +107,46 @@ def session_policy(policy: SessionPolicy) -> Iterator[None]:
         _active_policy.reset(token)
 
 
+@dataclass(frozen=True)
+class ChannelInfo:
+    """Which inbound channel the current turn came from (docs/CHANNELS.md)."""
+
+    name: str
+    user_id: str = ""
+
+
+_active_channel: ContextVar[Optional[ChannelInfo]] = ContextVar("guardian_channel", default=None)
+
+#: What an audit entry records when the turn has neither a channel nor a session policy: CLI,
+#: voice, the HUD and the local gateway /message path.
+LOCAL_CHANNEL = "local"
+
+
+def current_channel() -> Optional[ChannelInfo]:
+    return _active_channel.get()
+
+
+@contextmanager
+def channel_context(channel: str, user_id: str = "") -> Iterator[None]:
+    """Mark everything awaited inside the block as arriving over `channel`, so every Guardian audit
+    entry (and the confirmation it raises) records it."""
+    token = _active_channel.set(ChannelInfo(name=str(channel), user_id=str(user_id)))
+    try:
+        yield
+    finally:
+        _active_channel.reset(token)
+
+
+def audit_channel_name() -> str:
+    """The channel to stamp on an audit entry: the explicit channel, else the session policy's
+    name (e.g. the Discord remote's "remote"), else "local"."""
+    info = _active_channel.get()
+    if info is not None:
+        return info.name
+    policy = _active_policy.get()
+    return policy.name if policy is not None else LOCAL_CHANNEL
+
+
 _TIER_ORDER = ("safe", "confirm", "dangerous")
 
 
@@ -144,6 +184,10 @@ class _PendingConfirmation:
     future: "asyncio.Future[Verdict]"
     expiry_task: asyncio.Task
     tainted: bool = False
+    #: Captured when the confirmation is raised, inside the turn's context — the response
+    #: arrives later on another task, where the contextvars are no longer set.
+    channel: str = LOCAL_CHANNEL
+    channel_user: str = ""
 
 
 class Guardian:
@@ -219,6 +263,8 @@ class Guardian:
             future=future,
             expiry_task=expiry_task,
             tainted=tainted,
+            channel=audit_channel_name(),
+            channel_user=(current_channel().user_id if current_channel() is not None else ""),
         )
 
         await self._event_bus.emit(
@@ -228,10 +274,20 @@ class Guardian:
                 arguments=arguments,
                 request_id=request_id,
                 source="Guardian",
+                channel=audit_channel_name(),
+                channel_user=(current_channel().user_id if current_channel() is not None else ""),
             )
         )
 
         return Verdict(VerdictType.NEEDS_CONFIRMATION, reason=summary, request_id=request_id)
+
+    def pending_channel(self, request_id: str) -> Optional[tuple]:
+        """(channel, channel_user) the pending confirmation was raised for, or None if there is no such
+        unresolved request. Lets a channel endpoint refuse to answer a confirmation that is not its own."""
+        pending = self._pending.get(request_id)
+        if pending is None or pending.future.done():
+            return None
+        return pending.channel, pending.channel_user
 
     async def await_resolution(self, request_id: str) -> Verdict:
         """Wait for a pending confirmation to resolve (approved, denied, or expired).
@@ -297,7 +353,24 @@ class Guardian:
         verdict: Verdict,
         who_approved: Optional[str],
     ) -> None:
-        self._audit(pending.tool_name, pending.arguments, verdict, who_approved, tainted=pending.tainted)
+        self._audit(pending.tool_name, pending.arguments, verdict, who_approved, tainted=pending.tainted,
+                    channel=pending.channel)
+
+    def record_channel_event(self, event: str, detail: Dict[str, Any], channel: str, user_id: str = "") -> None:
+        """Audit something a channel refused or noticed that never reached a tool call — a stale, reused or
+        foreign-user confirmation callback, a message from a non-allowlisted user. `detail` must not
+        contain message content (callers pass ids, counts and reasons only)."""
+        entry = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "tool": f"channel:{event}",
+            "args": dict(detail),
+            "verdict": "rejected",
+            "who_approved": None,
+            "channel": str(channel),
+        }
+        if user_id:
+            entry["channel_user"] = str(user_id)
+        self._write_entry(entry)
 
     def _audit(
         self,
@@ -306,6 +379,7 @@ class Guardian:
         verdict: Verdict,
         who_approved: Optional[str],
         tainted: bool = False,
+        channel: Optional[str] = None,
     ) -> None:
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -313,9 +387,13 @@ class Guardian:
             "args": arguments,
             "verdict": verdict.outcome.value,
             "who_approved": who_approved,
+            "channel": channel if channel is not None else audit_channel_name(),
         }
         if tainted:
             entry["tainted_input"] = True
+        self._write_entry(entry)
+
+    def _write_entry(self, entry: Dict[str, Any]) -> None:
         try:
             self._audit_log_path.parent.mkdir(parents=True, exist_ok=True)
             with self._audit_log_path.open("a", encoding="utf-8") as f:

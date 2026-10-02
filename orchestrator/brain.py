@@ -559,6 +559,11 @@ class Brain:
         """The Planner's ModelRouter — for provider-health displays (e.g. /status)."""
         return self._router
 
+    @property
+    def guardian(self) -> Guardian:
+        """The Guardian — for the gateway's channel endpoints (audit entries, confirmation ownership)."""
+        return self._guardian
+
     # =========================================================================
     # Lifecycle Management
     # =========================================================================
@@ -1194,10 +1199,17 @@ class Brain:
         correlation_id: Optional[UUID] = None,
         on_token: Optional[Callable[[str], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
+        input_taint: Optional[str] = None,
+        trusted_text: Optional[str] = None,
+        speak: bool = True,
     ) -> PlannerResult:
         """
         Run one piece of user text (voice or typed) through the Planner and
         speak the result.
+
+        `input_taint` / `trusted_text` are for channel turns whose text includes third-party
+        content (a forwarded message): see Planner.run. `speak=False` keeps the reply off the
+        desk speakers — a reply that goes back over Telegram must not also be read aloud.
 
         This is the single entry point shared by every input surface —
         VoiceInputEvent today, and any future typed-input path (CLI, HUD
@@ -1224,7 +1236,7 @@ class Brain:
         # "Good morning" / "brief me": answered straight from the briefing cache —
         # no LLM call, no tool call, nothing to wait for (briefing/tool.py).
         if self._briefing is not None and is_briefing_request(text, self._briefing.cfg):
-            return await self._answer_briefing_from_cache(text, correlation_id, on_token)
+            return await self._answer_briefing_from_cache(text, correlation_id, on_token, speak=speak)
 
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
@@ -1251,6 +1263,8 @@ class Brain:
                 memories_untrusted=memories_untrusted,
                 on_token=on_token,
                 on_status=on_status,
+                input_taint=input_taint,
+                trusted_text=trusted_text,
             )
         finally:
             self._active_turns -= 1
@@ -1258,11 +1272,12 @@ class Brain:
 
         self._context.update_last_response(result.text, action="planner", tainted=result.tainted)
 
-        await self._event_bus.emit(VoiceOutputEvent(
-            text=result.text,
-            source="Brain",
-            correlation_id=correlation_id,
-        ))
+        if speak:
+            await self._event_bus.emit(VoiceOutputEvent(
+                text=result.text,
+                source="Brain",
+                correlation_id=correlation_id,
+            ))
 
         return result
 
@@ -1271,6 +1286,7 @@ class Brain:
         text: str,
         correlation_id: Optional[UUID],
         on_token: Optional[Callable[[str], None]],
+        speak: bool = True,
     ) -> PlannerResult:
         """The briefing fast path. Same bookkeeping as a planner turn, minus the
         planner: refresh synchronously only if the cache is older than its limit,
@@ -1295,7 +1311,8 @@ class Brain:
         result = PlannerResult(text=spoken, tool_trace=["briefing:fast_path"], tainted=True)
         self._context.consume_observations()
         self._context.update_last_response(result.text, action="briefing_fast_path", tainted=True)
-        await self._event_bus.emit(VoiceOutputEvent(text=result.text, source="Brain", correlation_id=correlation_id))
+        if speak:
+            await self._event_bus.emit(VoiceOutputEvent(text=result.text, source="Brain", correlation_id=correlation_id))
         return result
 
     async def _retrieve_relevant_memories(self, text: str) -> List[str]:

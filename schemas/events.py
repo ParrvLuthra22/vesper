@@ -741,6 +741,10 @@ class ConfirmationRequestedEvent(BaseEvent):
     arguments: Dict[str, Any] = field(default_factory=dict)
     request_id: str = ""
     source: str = field(default="Guardian")
+    #: The inbound channel of the turn that raised this ("local", "telegram", "remote"...) and the
+    #: channel-side user id; a channel only offers confirmations that carry its own name.
+    channel: str = "local"
+    channel_user: str = ""
 
 
 @dataclass(frozen=True)

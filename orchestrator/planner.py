@@ -151,9 +151,18 @@ class Planner:
         on_status: Optional[Callable[[str], None]] = None,
         observations_untrusted: bool = False,
         memories_untrusted: bool = False,
+        input_taint: Optional[str] = None,
+        trusted_text: Optional[str] = None,
     ) -> PlannerResult:
         """
         Run the tool-calling loop for one piece of user text.
+
+        `input_taint`, if given, says part of `user_text` was written by someone else (a
+        forwarded message, a quoted reply, a caption — see channels/): the turn starts
+        tainted with that label. `trusted_text` is then the part the user actually typed;
+        only THAT counts as "something the user said" when the tainted-input rule asks
+        whether a tool argument came from the user, so an argument lifted out of the
+        forwarded text is not mistaken for the user's own words.
 
         `observations_untrusted` / `memories_untrusted` say the injected
         observations (a calendar-title call-out) or retrieved memories (derived
@@ -198,6 +207,9 @@ class Planner:
             taint_sources.append("calendar entries")
         if memories_untrusted:
             taint_sources.append("remembered external content")
+        if input_taint:
+            taint_sources.append(input_taint)
+        supplied_text = trusted_text if (input_taint and trusted_text is not None) else user_text
         #: Action-claim verifier: one corrective retry per turn, then an honest
         #: replacement (orchestrator/claim_verifier.py).
         claim_retried = False
@@ -277,7 +289,7 @@ class Planner:
             messages.append(self._assistant_tool_call_message(response))
             for tool_call in response.tool_calls:
                 result_text = await self._execute_tool_call(
-                    tool_call, trace, iteration_trace, user_text=user_text, taint_sources=taint_sources
+                    tool_call, trace, iteration_trace, user_text=supplied_text, taint_sources=taint_sources
                 )
                 messages.append(self._tool_result_message(tool_call, result_text))
 
