@@ -210,7 +210,9 @@ class Gateway:
         if self._brain is not None:
             agents = self._brain.get_agents_status()
             providers = await self._brain.get_router().provider_status()
-        return {"agents": agents, "providers": providers}
+        # `clients` = connected WebSocket clients (HUD, voice output, ...). The
+        # launcher uses it to tell that the HUD has actually attached.
+        return {"agents": agents, "providers": providers, "clients": self._manager.count}
 
     async def _snapshot(self) -> Dict[str, Any]:
         return {

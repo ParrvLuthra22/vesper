@@ -200,7 +200,11 @@ cd voice/models
 curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
 curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
 
-# Then, in separate terminals:
+# Then ONE command starts and supervises everything (gateway -> TTS -> HUD -> wake word + STT):
+vesper up            # also: vesper status | vesper down | vesper logs
+                     # (python -m launcher up  if the console script isn't installed)
+
+# ...or, by hand, in separate terminals:
 python -m gateway.server                    # the brain
 cd hud && npm install && npm run tauri dev  # the panel
 python -m voice.input                       # wake word + STT

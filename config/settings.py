@@ -728,6 +728,39 @@ class RemoteSettings(BaseModel):
     token_env: str = "VESPER_DISCORD_TOKEN"
 
 
+class LauncherRestartSettings(BaseModel):
+    initial_backoff_seconds: float = 1.0
+    max_backoff_seconds: float = 30.0
+    max_crashes: int = 5
+    window_seconds: float = 120.0
+    healthy_reset_seconds: float = 60.0
+    max_startup_failures: int = 3
+
+
+class LauncherComponentsSettings(BaseModel):
+    voice_output: bool = True
+    voice_input: bool = True
+    hud: bool = True
+
+
+class LauncherSettings(BaseModel):
+    """`vesper up` — see launcher/ and docs/ARCHITECTURE.md."""
+
+    restart: LauncherRestartSettings = Field(default_factory=LauncherRestartSettings)
+    components: LauncherComponentsSettings = Field(default_factory=LauncherComponentsSettings)
+    shutdown_grace_seconds: float = 8.0
+    gateway_ready_timeout_seconds: float = 90.0
+    voice_output_ready_timeout_seconds: float = 60.0
+    voice_input_ready_timeout_seconds: float = 90.0
+    hud_ready_timeout_seconds: float = 20.0
+    #: Path to the built HUD binary; empty = hud/src-tauri/target/release/hud.
+    hud_binary: str = ""
+    #: Set HF_HUB_OFFLINE=1 for the voice/gateway processes: the models are
+    #: already on disk, so nothing should contact the Hugging Face Hub at load.
+    #: Set false for the very first run if a model still has to be downloaded.
+    offline_models: bool = True
+
+
 class AppSettings(BaseSettings):
     """Application settings loaded from YAML + environment."""
 
@@ -759,6 +792,7 @@ class AppSettings(BaseSettings):
     mcp: MCPSettings = Field(default_factory=MCPSettings)
     creator: CreatorSettings = Field(default_factory=CreatorSettings)
     remote: RemoteSettings = Field(default_factory=RemoteSettings)
+    launcher: LauncherSettings = Field(default_factory=LauncherSettings)
 
     @classmethod
     def settings_customise_sources(

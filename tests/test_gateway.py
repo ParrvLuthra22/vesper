@@ -165,3 +165,20 @@ async def test_rest_status_auth():
             body = r.json()
             assert body["agents"][0]["name"] == "MemoryAgent"
             assert body["providers"][0]["provider"] == "groq"
+
+
+@pytest.mark.asyncio
+async def test_status_reports_connected_client_count():
+    """The launcher's HUD readiness probe watches this number rise."""
+    async with _running_gateway() as (gw, port, bus, brain):
+        base = f"http://127.0.0.1:{port}"
+        async with httpx.AsyncClient(base_url=base) as client:
+            assert (await client.get("/status", headers=_auth())).json()["clients"] == 0
+            async with websockets.connect(f"ws://127.0.0.1:{port}/ws?token={TOKEN}") as ws:
+                await ws.recv()  # snapshot => the connection is registered
+                assert (await client.get("/status", headers=_auth())).json()["clients"] == 1
+            for _ in range(50):
+                if (await client.get("/status", headers=_auth())).json()["clients"] == 0:
+                    break
+                await asyncio.sleep(0.02)
+            assert (await client.get("/status", headers=_auth())).json()["clients"] == 0

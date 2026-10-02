@@ -1081,3 +1081,30 @@ creator:
   automation:
     enforce_home_boundary: true   # refuse writes to absolute paths outside $HOME (temp dirs excepted)
     denylist: []                  # extra regex patterns, added on top of the built-in floor
+
+
+# -----------------------------------------------------------------------------
+# Launcher — `vesper up` / `vesper down` / `vesper status`.
+# Starts the gateway (Brain), voice output, the HUD and voice input (wake word +
+# speech-to-text) in that order, waits for each to be ready, restarts crashes with
+# exponential backoff, and stops everything cleanly. See docs/ARCHITECTURE.md.
+# -----------------------------------------------------------------------------
+launcher:
+  components:            # set false to leave one out
+    voice_output: true
+    voice_input: true
+    hud: true
+  restart:
+    initial_backoff_seconds: 1.0
+    max_backoff_seconds: 30.0
+    max_crashes: 5               # crashes within window_seconds before giving up
+    window_seconds: 120.0
+    healthy_reset_seconds: 60.0  # staying up this long forgives earlier crashes
+    max_startup_failures: 3      # consecutive failures before ever becoming ready
+  shutdown_grace_seconds: 8.0
+  gateway_ready_timeout_seconds: 90.0
+  voice_output_ready_timeout_seconds: 60.0
+  voice_input_ready_timeout_seconds: 90.0
+  hud_ready_timeout_seconds: 20.0
+  hud_binary: ""                 # default: hud/src-tauri/target/release/hud
+  offline_models: true           # HF_HUB_OFFLINE=1 for children (models are on disk)

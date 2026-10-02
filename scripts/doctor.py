@@ -239,13 +239,12 @@ def main() -> int:
 
     print("\n" + "-" * 64)
     if voice_ok:
-        print("Voice input deps look OK. Set voice.input.enabled=true (or restart)\n"
-              "to use the rebuilt pipeline; the legacy VoiceAgent will pick the mic\n"
-              "up on next launch.")
+        print("Voice input deps look OK. Set voice.input.enabled=true and start the\n"
+              "whole stack with:  vesper up")
     else:
         print("Voice input is DISABLED because deps above are missing. Install them:\n"
               "  pip install -r voice/requirements.txt\n"
-              "then restart `python main.py` (voice re-enables on a clean launch).")
+              "then run `vesper up`.")
     print("-" * 64)
     return 0
 

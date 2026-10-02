@@ -19,6 +19,15 @@ from voice.input.stages import Transcriber, VoiceInputUnavailable, WakeDetector
 
 logger = logging.getLogger("vesper.voice")
 
+#: Printed once the microphone is streaming and the wake model is loaded. The
+#: launcher's readiness probe matches on this exact text.
+READY_MARKER = "voice input ready"
+
+#: Exit status for "voice input cannot work this session" (missing model/package,
+#: mic unavailable). Distinct from 1 (an uncaught crash, which Python also exits
+#: with) so the launcher knows NOT to restart-loop against it. (sysexits EX_UNAVAILABLE.)
+EXIT_UNAVAILABLE = 69
+
 
 def _log_emitter(t: VoiceTransition) -> None:
     # PV4 will forward these to the HUD (star flare on wake, etc.).
@@ -36,6 +45,19 @@ def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None) -> VoiceIn
         emitter=emitter if emitter is not None else _log_emitter,
         on_wake=on_wake,
     )
+
+
+class _AnnouncingMicSource(MicSource):
+    """MicSource that logs READY_MARKER once the first frame arrives — i.e. the
+    mic is open and streaming. The launcher waits for this line."""
+
+    def frames(self):
+        announced = False
+        for frame in super().frames():
+            if not announced:
+                announced = True
+                logger.info(READY_MARKER)
+            yield frame
 
 
 def load_config() -> VoiceInputConfig:
@@ -73,8 +95,13 @@ def main() -> int:
         config.vad_backend, config.mic_device if config.mic_device is not None else "default",
     )
     pipeline = build_pipeline(config)
-    source = MicSource(config.sample_rate, config.frame_samples, config.mic_device)
+    source = _AnnouncingMicSource(config.sample_rate, config.frame_samples, config.mic_device)
     try:
+        # Load the wake model NOW (not lazily on the first frame) so a missing
+        # package/model fails immediately and loudly, and "ready" below means
+        # "will actually hear the wake word". Whisper stays lazy on purpose:
+        # it is ~100 MB that only needs to exist while transcribing.
+        pipeline.warm_up()
         pipeline.run(source)
     except KeyboardInterrupt:
         pipeline.stop()
@@ -85,19 +112,19 @@ def main() -> int:
         # the mic is held by another process). One line, then exit — never a
         # retry loop against a device that is not coming back this session.
         logger.warning("Voice input disabled for this session — %s", exc)
-        return 1
+        return EXIT_UNAVAILABLE
     except Exception as exc:
         logger.warning(
             "Voice input disabled for this session — microphone unavailable: %s. "
             "Run scripts/doctor.py to check the audio stack.",
             exc,
         )
-        return 1
+        return EXIT_UNAVAILABLE
 
     # A permanent stage failure stops run() without raising; report it here so
     # the exit status reflects that voice never actually started.
     if pipeline.disabled_reason is not None:
-        return 1
+        return EXIT_UNAVAILABLE
     return 0
 
 

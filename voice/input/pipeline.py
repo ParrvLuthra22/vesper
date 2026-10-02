@@ -91,6 +91,10 @@ class VoiceInputPipeline:
                 logger.exception("voice emitter failed")
 
     # ------------------------------------------------------------------ #
+    def warm_up(self) -> None:
+        """Load the wake model eagerly. Raises VoiceInputUnavailable if it can't load."""
+        self._wake.load()
+
     def run(self, source: AudioSource) -> None:
         """Drive the machine over a live source until stopped/exhausted."""
         try:
