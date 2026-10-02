@@ -1152,6 +1152,7 @@ launcher:
   gateway_ready_timeout_seconds: 90.0
   voice_output_ready_timeout_seconds: 60.0
   voice_input_ready_timeout_seconds: 90.0
+  telegram_ready_timeout_seconds: 20.0
   hud_ready_timeout_seconds: 20.0
   hud_binary: ""                 # default: hud/src-tauri/target/release/hud
   offline_models: true           # HF_HUB_OFFLINE=1 for children (models are on disk)

@@ -769,6 +769,7 @@ class LauncherSettings(BaseModel):
     gateway_ready_timeout_seconds: float = 90.0
     voice_output_ready_timeout_seconds: float = 60.0
     voice_input_ready_timeout_seconds: float = 90.0
+    telegram_ready_timeout_seconds: float = 20.0
     hud_ready_timeout_seconds: float = 20.0
     #: Path to the built HUD binary; empty = hud/src-tauri/target/release/hud.
     hud_binary: str = ""

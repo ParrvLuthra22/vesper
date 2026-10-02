@@ -7,6 +7,7 @@ Order (each starts only after the previous is READY):
     2. voice_output  python -m voice.output     Kokoro TTS; speaks the gateway's replies
     3. hud           hud/src-tauri/target/release/hud   the Tauri overlay
     4. voice_input   python -m voice.input      openWakeWord + VAD + faster-whisper
+    5. telegram      python -m channels.telegram   OPTIONAL: only when channels.telegram.enabled
 
 Voice input is last on purpose: once the wake word can fire, a reply has
 somewhere to be spoken and shown. "Wake word" and "speech-to-text" are one
@@ -17,6 +18,7 @@ Readiness:
     voice_output prints "voice output connected to gateway"
     hud           the gateway's connected-client count rises (the HUD attached)
     voice_input  prints "voice input ready" (wake model loaded, mic streaming)
+    telegram     prints "telegram channel ready" (config + token valid; polling started)
 """
 
 from __future__ import annotations
@@ -47,6 +49,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HUD_BINARY = Path("hud/src-tauri/target/release/hud")
 #: voice.input exit status meaning "unavailable this session" (voice/input/service.py).
 VOICE_INPUT_UNAVAILABLE = 69
+#: channels.telegram exit status meaning "cannot work and retrying will not help" (channels/telegram.py).
+TELEGRAM_UNAVAILABLE = 69
 
 
 def _get(cfg: Dict[str, Any], path: str, default: Any = None) -> Any:
@@ -193,6 +197,23 @@ def build_specs(cfg: Dict[str, Any], token: str, python: str = sys.executable, r
         hint=("Check microphone permission for your terminal (System Settings > Privacy & "
               "Security > Microphone) and run scripts/doctor.py."),
     ))
+
+    # Telegram channel — optional. Part of the stack only when it is enabled, so a default install is
+    # unchanged; when enabled it is a separate supervised process (a crash loop here can never take the
+    # gateway down) and every config problem is exit 69 = "unavailable", not a restart loop.
+    if bool(_get(cfg, "channels.telegram.enabled", False)):
+        tg_off = None if comp_on("telegram") else "disabled in config (launcher.components.telegram)"
+        specs.append(ComponentSpec(
+            name="telegram",
+            description="Telegram channel — restricted, owner-only (python -m channels.telegram)",
+            argv=[python, "-m", "channels.telegram"],
+            env=env,
+            probe=line_probe(r"telegram channel ready"),
+            ready_timeout=float(_get(cfg, "launcher.telegram_ready_timeout_seconds", 20.0)),
+            permanent_exit_codes=frozenset({TELEGRAM_UNAVAILABLE}),
+            skip_reason=tg_off,
+            hint="See logs/launcher/telegram.log and docs/CHANNELS.md (bot token, allowed_user_ids).",
+        ))
     return specs
 
 
@@ -263,7 +284,8 @@ async def run_up(
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, supervisor.request_stop)
 
-    log("[launcher] starting Vesper: gateway -> voice output -> HUD -> voice input")
+    log("[launcher] starting Vesper: " + " -> ".join(
+        ["gateway", "voice output", "HUD", "voice input"] + [s.name for s in specs if s.name == "telegram"]))
     try:
         ok = await supervisor.start()
         if ok and strict:
