@@ -228,20 +228,31 @@ async def assemble_briefing_text(
     memory_agent: Optional[MemoryAgent] = None,
     include_day_plan: bool = False,
     notion_db: str = DEFAULT_NOTION_TASKS_DB,
+    briefing_service: Optional[Any] = None,
 ) -> str:
     """Gather inbox triage + today's calendar + carried-over note, as raw
     text, plus an optional day-plan section (calendar + reminders + Notion
-    tasks + email pressure + protected-time memories, from day_planner.py)."""
+    tasks + email pressure + protected-time memories, from day_planner.py).
+
+    With a `briefing_service` (the briefing engine) the mail/calendar part is the
+    engine's compact, ranked, sanitized block instead of ~20 raw messages."""
     registry = registry or get_registry()
 
-    inbox = await gather_inbox_triage(registry)
-    calendar_events = await gather_calendar(calendar_sensor)
+    if briefing_service is not None:
+        try:
+            await briefing_service.ensure_fresh()
+        except Exception as exc:
+            logger.warning(f"[Briefing] engine refresh failed, using cached data: {exc}")
+        text = briefing_service.tool_result()
+    else:
+        inbox = await gather_inbox_triage(registry)
+        calendar_events = await gather_calendar(calendar_sensor)
 
-    today_ids = [m.get("id", "") for m in inbox["messages"][:3] if m.get("id")]
-    carried_over = _carried_over_ids(memory_agent, today_ids)
-    _save_today_ids(memory_agent, today_ids)
+        today_ids = [m.get("id", "") for m in inbox["messages"][:3] if m.get("id")]
+        carried_over = _carried_over_ids(memory_agent, today_ids)
+        _save_today_ids(memory_agent, today_ids)
 
-    text = render_briefing_data(inbox, calendar_events, len(carried_over))
+        text = render_briefing_data(inbox, calendar_events, len(carried_over))
 
     if include_day_plan:
         day_plan_text = await assemble_day_plan_text(registry, memory_agent, notion_db)
@@ -279,10 +290,12 @@ async def deliver_scheduled_briefing(
     memory_agent: Optional[MemoryAgent] = None,
     include_day_plan: bool = False,
     notion_db: str = DEFAULT_NOTION_TASKS_DB,
+    briefing_service: Optional[Any] = None,
 ) -> PlannerResult:
     """Scheduled path: no ongoing turn to attach to, so start a fresh one."""
     data_text = await assemble_briefing_text(
-        registry, calendar_sensor, memory_agent, include_day_plan=include_day_plan, notion_db=notion_db
+        registry, calendar_sensor, memory_agent, include_day_plan=include_day_plan, notion_db=notion_db,
+        briefing_service=briefing_service,
     )
     prompt = f"{BRIEFING_STYLE_NOTE}\n\n{data_text}"
     return await planner.run(user_text=prompt, purpose="planning")

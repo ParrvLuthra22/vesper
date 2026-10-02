@@ -448,6 +448,12 @@ def run() -> None:
 
         sys.exit(launcher_main(sys.argv[1:]))
 
+    # `vesper briefing [--explain]` — inspect the briefing engine (read-only).
+    if len(sys.argv) > 1 and sys.argv[1] == "briefing":
+        from briefing.cli import main as briefing_main
+
+        sys.exit(briefing_main(sys.argv[2:]))
+
     remote = _parse_remote_args(sys.argv[1:])
     try:
         if remote is not None:

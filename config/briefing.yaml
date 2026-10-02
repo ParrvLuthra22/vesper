@@ -1,0 +1,98 @@
+# =============================================================================
+# Briefing engine — collectors, scorer, cache, builder. See docs/BRIEFING.md.
+# Everything here is deterministic: no LLM is involved in scoring or selection.
+# Override the file path with VESPER_BRIEFING_CONFIG. Missing keys fall back to the
+# defaults in briefing/config.py (which mirror this file).
+# =============================================================================
+
+refresh:
+  interval_minutes: 10          # how often the background collectors run
+  jitter_fraction: 0.2          # +/- randomness on that interval (0.2 => 8-12 min), so runs don't sync up
+  max_cache_age_minutes: 30     # get_daily_briefing refreshes SYNCHRONOUSLY only if a source is older than this
+  collector_timeout_seconds: 45 # one collector hanging never blocks the others
+  enabled: true                 # false: no background timer (the tool still reads/refreshes on demand)
+
+collect:
+  gmail_lookback_days: 3        # first run only: how far back to look for unread mail
+  gmail_max_new: 50             # newest unread messages pulled per run
+  snippet_chars: 200            # snippets are truncated to this at collection time (further at briefing time)
+  calendar_window_days: 2       # today + tomorrow
+  sent_days: 60                 # how much sent mail counts as "I have replied to this sender before"
+  sent_refresh_hours: 24        # re-read the sent-mail summary at most this often
+  cache_path: "data/briefing.db"
+
+# People who matter. Matching is case-insensitive. EMPTY by default — fill it in.
+vips:
+  addresses: []                 # e.g. ["priya@example.com"]
+  domains: []                   # e.g. ["newtonschool.co"]  (whole domain)
+  names: []                     # substring of the display name, e.g. ["Priya"]
+
+# Weights add up per item, then are clamped to 0..100 (mail to 0..mail_max_score).
+weights:
+  # ---- mail: base and sender importance ----
+  mail_base: 15                 # every unread inbox message starts here
+  vip_sender: 45                # sender is on the VIP list above
+  replied_to_sender_before: 15  # I have sent mail to this address within sent_days
+  reply_in_my_thread: 20        # the thread contains a message I sent (someone answered me)
+  is_reply: 5                   # it is a reply (Re: / In-Reply-To), whoever started the thread
+  # ---- mail: age ----
+  fresh_bonus: 10               # received within fresh_hours
+  fresh_hours: 6
+  stale_penalty: -10            # still unread after stale_days
+  stale_days: 7
+  # ---- mail: urgency words (per-word weights are in urgency_keywords below) ----
+  urgency_total_cap: 30         # all keyword hits together can add at most this
+  # ---- negative signals ----
+  noreply_sender: -25           # noreply@ / do-not-reply@ and friends
+  newsletter_signal: -25        # newsletter/digest wording, or Gmail Updates/Forums category
+  promo_signal: -30             # promo wording, or Gmail Promotions/Social category
+  mailing_list_header: -20      # List-Id, List-Unsubscribe or Precedence: bulk/list/junk
+  auto_submitted: -15           # Auto-Submitted: auto-generated / auto-replied
+  injection_suspected: -40      # text reads like instructions to an AI (snippet is also withheld)
+  mail_max_score: 94            # mail can never outrank an imminent meeting (which is 100)
+  # ---- calendar ----
+  meeting_imminent: 100         # starts within imminent_hours, or is in progress — always top
+  imminent_hours: 3
+  meeting_today_later: 60       # later today, beyond the imminent window
+  meeting_tomorrow: 45          # tomorrow
+  meeting_keyword_bonus: 10     # title contains one of meeting_keywords
+  all_day_event: -30            # all-day items (birthdays, holidays) are never "imminent"; they sit lower
+
+# Words that raise a mail item's score (matched as whole words in subject + snippet,
+# each counted once). Ignored for bulk mail ("URGENT: 50% off!" earns nothing).
+urgency_keywords:
+  urgent: 12
+  asap: 12
+  eod: 10
+  deadline: 10
+  due: 8
+  interview: 15
+  offer: 12
+  exam: 12
+  tomorrow: 6
+
+meeting_keywords: [interview, exam, offer, deadline, review, demo, presentation]
+
+# Pattern lists for the negative signals (case-insensitive regexes).
+patterns:
+  noreply_sender: ['no[-_.]?reply', 'do[-_.]?not[-_.]?reply', 'donotreply', 'mailer-daemon', 'postmaster']
+  newsletter: ['newsletter', 'weekly digest', 'daily digest', 'monthly digest', 'round-?up', 'view (?:this )?in (?:your )?browser', 'unsubscribe', 'digest']
+  promo: ['\d+\s?% off', '\bsale\b', 'discount', 'coupon', 'promo code', 'limited[- ]time', 'free shipping', 'special offer', 'exclusive offer', 'offer ends', 'deal of the day', 'flash sale']
+
+builder:
+  max_meetings: 3               # meetings listed (imminent first, then later today, then tomorrow)
+  max_priority_mail: 5          # priority mail items listed
+  min_priority_score: 35        # unread mail below this is "everything else" (a count)
+  token_cap: 600                # HARD cap on the context handed to the planner (estimate_tokens)
+  subject_chars: 70
+  sender_chars: 32
+  preview_chars: 90             # snippet shown to the planner (the spoken script never reads it)
+
+speech:
+  address_as: "Sir"
+  max_words: 85                 # ~25-30 seconds spoken
+  morning_until_hour: 12        # "good morning" only triggers the fast path before this local hour
+
+fast_path:
+  enabled: true                 # "good morning" / "brief me" answered straight from the cache, no LLM call
+  phrases: ["good morning", "morning", "morning briefing", "daily briefing", "brief me", "give me my briefing", "give me my morning briefing", "whats my day look like", "what is my day look like", "what does my day look like"]

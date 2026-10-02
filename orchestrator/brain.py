@@ -53,6 +53,8 @@ from api.health import HealthServer
 from guardian.gate import Guardian
 from llm.router import ModelRouter
 from orchestrator.planner import Planner, PlannerResult
+from briefing.service import BriefingService
+from briefing.tool import is_briefing_request, make_cached_briefing_handler
 from proactive.briefing import deliver_scheduled_briefing, make_get_daily_briefing_handler
 from proactive.day_planner import make_plan_my_day_handler
 from proactive.engine import ProactiveEngine
@@ -460,6 +462,10 @@ class Brain:
         # user is mid-conversation.
         self._active_turns = 0
 
+        # Briefing engine (briefing/): background read-only collectors -> scorer ->
+        # SQLite cache. Created in start(), once the MCP tools it reads exist.
+        self._briefing: Optional[BriefingService] = None
+
         logger.info(f"Brain initialized (session={self._session_id})")
 
     # =========================================================================
@@ -611,6 +617,11 @@ class Brain:
             # on those tools existing (the briefing/day-plan tools, the
             # inbox sensor).
             await self._mcp_bridge.start()
+            try:
+                self._briefing = BriefingService.from_registry(get_registry())
+            except Exception as exc:  # the briefing engine must never block startup
+                logger.warning(f"Briefing engine unavailable, falling back to raw briefing: {exc}")
+                self._briefing = None
             self._register_briefing_tool()
             self._register_day_planner_tool()
             self._register_memory_tools()
@@ -623,6 +634,8 @@ class Brain:
             await self._calendar_sensor.start()
             await self._inbox_sensor.start()
             await self._proactive_engine.start()
+            if self._briefing is not None:
+                self._briefing.start()  # first refresh immediately, then every ~10 min (jittered)
 
             self._state = BrainState.RUNNING
             self._started_at = datetime.now(timezone.utc)
@@ -759,6 +772,8 @@ class Brain:
         await self._inbox_sensor.stop()
         await self._calendar_sensor.stop()
         await self._focus_sensor.stop()
+        if self._briefing is not None:
+            await self._briefing.stop()
         await self._mcp_bridge.stop()
 
         # Extract and store durable memories from this session (see
@@ -852,18 +867,22 @@ class Brain:
             ToolSpec(
                 name="get_daily_briefing",
                 description=(
-                    "Gather today's briefing data: unread email triage, today's "
-                    "remaining calendar events, and any carried-over items from "
-                    "yesterday's briefing. Use when the user asks to be briefed "
-                    "— \"brief me\", \"what's my day look like\", a status update."
+                    "Get the user's ranked daily briefing: the next meetings and the "
+                    "highest-priority unread mail, already scored, plus a ready spoken "
+                    "script. Use when the user asks to be briefed — \"brief me\", "
+                    "\"what's my day look like\", a status update. Read-only."
                 ),
                 parameters={"type": "object", "properties": {}},
                 tier="safe",
                 untrusted_output=True,  # embeds email subjects/senders and calendar titles
-                handler=make_get_daily_briefing_handler(
-                    registry=registry,
-                    calendar_sensor=self._calendar_sensor,
-                    memory_agent=memory_agent,
+                handler=(
+                    make_cached_briefing_handler(self._briefing)
+                    if self._briefing is not None
+                    else make_get_daily_briefing_handler(
+                        registry=registry,
+                        calendar_sensor=self._calendar_sensor,
+                        memory_agent=memory_agent,
+                    )
                 ),
                 category="briefing",
             )
@@ -878,6 +897,7 @@ class Brain:
             planner=self._planner,
             calendar_sensor=self._calendar_sensor,
             memory_agent=memory_agent,
+            briefing_service=self._briefing,
             include_day_plan=bool(
                 self._config.get("proactive", {})
                 .get("schedule", {})
@@ -1201,6 +1221,11 @@ class Brain:
         model). They are display-only and never enter the reply text or
         the conversation history.
         """
+        # "Good morning" / "brief me": answered straight from the briefing cache —
+        # no LLM call, no tool call, nothing to wait for (briefing/tool.py).
+        if self._briefing is not None and is_briefing_request(text, self._briefing.cfg):
+            return await self._answer_briefing_from_cache(text, correlation_id, on_token)
+
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
         observations_untrusted = self._context.pending_observations_untrusted()
@@ -1239,6 +1264,38 @@ class Brain:
             correlation_id=correlation_id,
         ))
 
+        return result
+
+    async def _answer_briefing_from_cache(
+        self,
+        text: str,
+        correlation_id: Optional[UUID],
+        on_token: Optional[Callable[[str], None]],
+    ) -> PlannerResult:
+        """The briefing fast path. Same bookkeeping as a planner turn, minus the
+        planner: refresh synchronously only if the cache is older than its limit,
+        then speak the deterministic script. Marked tainted (it quotes third-party
+        subjects), so memories derived from it are flagged."""
+        self._context.add_turn(user_input=text)
+        await self._event_bus.emit(ContextUpdatedEvent(
+            context_type="turn", context_key="user_input", context_value=text,
+            turn_number=self._context.turn_count, source="Brain",
+        ))
+        assert self._briefing is not None
+        try:
+            await self._briefing.ensure_fresh()
+        except Exception as exc:
+            logger.warning(f"Briefing refresh failed; speaking the cached (stale) briefing: {exc}")
+        spoken = self._briefing.spoken()
+        if on_token is not None:
+            try:
+                on_token(spoken)
+            except Exception:
+                pass
+        result = PlannerResult(text=spoken, tool_trace=["briefing:fast_path"], tainted=True)
+        self._context.consume_observations()
+        self._context.update_last_response(result.text, action="briefing_fast_path", tainted=True)
+        await self._event_bus.emit(VoiceOutputEvent(text=result.text, source="Brain", correlation_id=correlation_id))
         return result
 
     async def _retrieve_relevant_memories(self, text: str) -> List[str]:

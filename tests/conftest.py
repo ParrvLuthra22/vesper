@@ -12,6 +12,9 @@ import pytest
 # Guardian. Tests must never write to the real data/audit.jsonl.
 _TEST_AUDIT_DIR = tempfile.mkdtemp(prefix="vesper-test-audit-")
 os.environ["VESPER_AUDIT_LOG"] = str(Path(_TEST_AUDIT_DIR) / "audit.jsonl")
+# Same for the briefing cache: nothing a test starts may create the real data/briefing.db.
+os.environ["VESPER_BRIEFING_DB"] = str(Path(_TEST_AUDIT_DIR) / "briefing.db")
+_REAL_BRIEFING_DB = Path(__file__).resolve().parents[1] / "data" / "briefing.db"
 _REAL_AUDIT_LOG = Path(__file__).resolve().parents[1] / "data" / "audit.jsonl"
 
 
@@ -27,7 +30,11 @@ def _audit_fingerprint():
 def _real_audit_log_untouched():
     """Fail the run if anything in it modified (or created) the real audit log."""
     before = _audit_fingerprint()
+    briefing_existed = _REAL_BRIEFING_DB.exists()
     yield
+    assert _REAL_BRIEFING_DB.exists() == briefing_existed, (
+        "the test run created/removed the real data/briefing.db — a test is not using VESPER_BRIEFING_DB"
+    )
     assert _audit_fingerprint() == before, (
         "the test run modified the real data/audit.jsonl — a test is not using "
         "an isolated audit path (see VESPER_AUDIT_LOG in tests/conftest.py)"
