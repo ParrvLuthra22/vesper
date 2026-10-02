@@ -328,10 +328,8 @@ class Gateway:
         async def post_channel_audit(body: Dict[str, Any] = Body(...), _: None = Depends(require_token)):
             service = self.channel_service()
             channel, user_id = str(body.get("channel", "")), str(body.get("user_id", ""))
-            try:
-                service.authorize(channel, user_id)
-            except ChannelForbidden:
-                raise HTTPException(status_code=403, detail="sender not allowed on this channel")
+            if not service.channel_enabled(channel):
+                raise HTTPException(status_code=403, detail="channel not enabled")
             detail = body.get("detail") if isinstance(body.get("detail"), dict) else {}
             if not service.audit_from_adapter(str(body.get("event", "")), detail, channel, user_id):
                 raise HTTPException(status_code=422, detail="unknown audit event")

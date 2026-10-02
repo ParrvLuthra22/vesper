@@ -61,6 +61,7 @@ class ChannelTurnService:
         self._locks: Dict[Tuple[str, str], asyncio.Lock] = {}
         self._running: "set[asyncio.Task]" = set()
         self._audit_throttle = LogThrottle(interval=60.0)
+        self._audit_throttle_cb = LogThrottle(interval=3.0)
 
     # ------------------------------------------------------------- authorization
     def _channel_cfg(self, channel: str) -> Optional[Dict[str, Any]]:
@@ -86,10 +87,19 @@ class ChannelTurnService:
         except Exception:
             logger.exception("[channels] could not write an audit entry")
 
+    def channel_enabled(self, channel: str) -> bool:
+        cfg = self._channel_cfg(channel)
+        return bool(cfg and cfg.get("enabled"))
+
     def audit_from_adapter(self, event: str, detail: Dict[str, Any], channel: str, user_id: str) -> bool:
-        """An adapter reports something it rejected. Only known events and only ids/reasons — never text."""
-        if event not in AUDIT_EVENTS:
+        """An adapter reports something it rejected — typically a button press by a user who is NOT the
+        owner, so `user_id` is the offender and is deliberately not required to be allowlisted. Only known
+        events, only ids/reasons (never text), and at most a few per minute per user."""
+        if event not in AUDIT_EVENTS or not self.channel_enabled(channel):
             return False
+        go, _ = self._audit_throttle_cb.ready(f"{channel}:{user_id}")
+        if not go:
+            return True     # accepted, deliberately not written: a flood must not flood the audit log
         clean = {k: str(v)[:80] for k, v in (detail or {}).items() if k in _DETAIL_KEYS}
         self._audit(event, clean, channel, user_id)
         return True
