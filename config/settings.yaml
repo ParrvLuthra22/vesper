@@ -111,6 +111,8 @@ voice:
     vad_aggressiveness: 2       # webrtcvad 0..3
     vad_silence_ms: 800
     listen_timeout_ms: 6000     # no speech after wake -> back to idle
+    first_frame_timeout_seconds: 15   # mic must deliver audio within this or voice input exits "unavailable"
+                                      # (a silent/blocked mic otherwise hangs forever); 0 disables
     mic_device: null            # sounddevice index/name; null = default input
 
   # ---------------------------------------------------------------------------
@@ -133,6 +135,8 @@ voice:
     speed: 0.92                 # a touch slower — composed
     lang: "en-gb"
     streaming: true             # speak sentence-by-sentence (no long first-word wait)
+    preload: true               # load Kokoro + one silent synthesis at startup (~490MB resident
+                                # from boot); a failure then surfaces at boot, not as a lost first reply
     speak_observations: true    # also speak proactive call-outs (serif, not traces)
     model_path: "voice/models/kokoro-v1.0.onnx"
     voices_path: "voice/models/voices-v1.0.bin"

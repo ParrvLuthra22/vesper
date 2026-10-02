@@ -51,6 +51,10 @@ class Speaker:
         self._player = player if player is not None else AudioPlayer()
         self._barge = threading.Event()
 
+    def preload(self) -> None:
+        """Pay Kokoro's first-use cost up front (see KokoroTTS.warm_up)."""
+        self._tts.warm_up()
+
     def stop(self) -> None:
         """Barge-in: abort the current utterance immediately."""
         self._barge.set()
@@ -92,6 +96,9 @@ class VoiceOutputService:
         self._deferred: List[str] = []
         self._deferred_lock = threading.Lock()
         self._defer_watchdog: Optional[threading.Thread] = None
+
+    def preload(self) -> None:
+        self._speaker.preload()
 
     def handle(self, msg: dict) -> None:
         mtype = msg.get("type")

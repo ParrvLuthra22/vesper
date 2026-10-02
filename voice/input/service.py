@@ -8,7 +8,9 @@ mic. Off unless voice.input.enabled is true.
 from __future__ import annotations
 
 import logging
+import os
 import sys
+import threading
 from pathlib import Path
 
 from voice.input.audio import FileSource, MicSource
@@ -49,15 +51,47 @@ def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None) -> VoiceIn
 
 class _AnnouncingMicSource(MicSource):
     """MicSource that logs READY_MARKER once the first frame arrives — i.e. the
-    mic is open and streaming. The launcher waits for this line."""
+    mic is open and streaming. The launcher waits for this line.
+
+    A watchdog also covers the case where the first frame NEVER arrives: a blocked
+    permission prompt or a device held by another app makes the stream's blocking
+    read hang forever (it does not raise). After `first_frame_timeout` seconds the
+    process exits EXIT_UNAVAILABLE with a clear message, so the launcher reports one
+    precise failure instead of timing out and retrying."""
+
+    def __init__(self, *args, first_frame_timeout: float = 0.0, on_timeout=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._first_frame_timeout = first_frame_timeout
+        self._on_timeout = on_timeout or _exit_no_audio
 
     def frames(self):
         announced = False
-        for frame in super().frames():
-            if not announced:
-                announced = True
-                logger.info(READY_MARKER)
-            yield frame
+        timer = None
+        if self._first_frame_timeout > 0:
+            timer = threading.Timer(self._first_frame_timeout, self._on_timeout, args=(self._first_frame_timeout,))
+            timer.daemon = True
+            timer.start()
+        try:
+            for frame in super().frames():
+                if not announced:
+                    announced = True
+                    if timer is not None:
+                        timer.cancel()
+                    logger.info(READY_MARKER)
+                yield frame
+        finally:
+            if timer is not None:
+                timer.cancel()
+
+
+def _exit_no_audio(timeout: float) -> None:
+    logger.error(
+        "Voice input unavailable: the microphone delivered no audio within %.0fs. Grant Microphone "
+        "permission to your terminal (System Settings > Privacy & Security > Microphone), close any app "
+        "holding the mic, and run scripts/doctor.py.", timeout,
+    )
+    logging.shutdown()
+    os._exit(EXIT_UNAVAILABLE)
 
 
 def load_config() -> VoiceInputConfig:
@@ -95,7 +129,10 @@ def main() -> int:
         config.vad_backend, config.mic_device if config.mic_device is not None else "default",
     )
     pipeline = build_pipeline(config)
-    source = _AnnouncingMicSource(config.sample_rate, config.frame_samples, config.mic_device)
+    source = _AnnouncingMicSource(
+        config.sample_rate, config.frame_samples, config.mic_device,
+        first_frame_timeout=config.first_frame_timeout_seconds,
+    )
     try:
         # Load the wake model NOW (not lazily on the first frame) so a missing
         # package/model fails immediately and loudly, and "ready" below means

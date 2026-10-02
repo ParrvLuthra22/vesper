@@ -679,3 +679,29 @@ def test_vesper_console_script_dispatches_launcher_commands(monkeypatch):
     with pytest.raises(SystemExit):
         app.run()
     assert seen["argv"] == ["status", "--json"]
+
+
+@pytest.mark.asyncio
+async def test_summary_does_not_promise_a_wake_word_when_voice_input_failed():
+    world = World()
+    world.script("voice_input", {"exit_rc": 69, "lines": ["Voice input unavailable: no audio"]})
+    specs = [
+        ComponentSpec(name="gateway", argv=["g"], required=True, probe=line_probe("ready")),
+        ComponentSpec(name="voice_input", argv=["v"], probe=line_probe("ready"),
+                      permanent_exit_codes=frozenset({69})),
+    ]
+    sup = world.supervisor([], specs=specs)
+    assert await sup.start() is True
+    logs: List[str] = []
+    stack._print_summary(sup, logs.append)
+    text = "\n".join(logs)
+    assert "voice input is NOT running" in text and "say the wake word" not in text
+    await sup.stop()
+
+    world2 = World()
+    sup2 = world2.supervisor(["gateway", "voice_input"])
+    await sup2.start()
+    logs2: List[str] = []
+    stack._print_summary(sup2, logs2.append)
+    assert "say the wake word" in "\n".join(logs2)
+    await sup2.stop()

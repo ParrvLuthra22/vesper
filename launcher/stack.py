@@ -152,6 +152,7 @@ def build_specs(cfg: Dict[str, Any], token: str, python: str = sys.executable, r
         env=env,
         probe=line_probe(r"voice output connected to gateway"),
         ready_timeout=float(_get(cfg, "launcher.voice_output_ready_timeout_seconds", 60.0)),
+        permanent_exit_codes=frozenset({VOICE_INPUT_UNAVAILABLE}),  # 69: Kokoro cannot load
         skip_reason=out_off,
         hint="Run scripts/doctor.py; see logs/launcher/voice_output.log.",
     ))
@@ -297,5 +298,10 @@ def _print_summary(supervisor: Supervisor, log: Callable[[str], None]) -> None:
         pid = f" pid {c.handle.pid}" if c.handle is not None and c.handle.returncode is None else ""
         extra = f" — {c.detail}" if c.detail and c.state.value in ("failed", "skipped") else ""
         log(f"[launcher]   {c.spec.name:<13} {c.state.value.upper():<8}{pid}{extra}")
-    log("[launcher] say the wake word (voice.input.wake_model) — Ctrl+C or `vesper down` to stop")
+    voice_in = next((c for c in supervisor.components if c.spec.name == "voice_input"), None)
+    if voice_in is not None and voice_in.state.value == "ready":
+        log("[launcher] say the wake word (voice.input.wake_model) — Ctrl+C or `vesper down` to stop")
+    else:
+        log("[launcher] voice input is NOT running (see above) — text and the HUD still work; "
+            "Ctrl+C or `vesper down` to stop")
     log("[launcher] ------------------------------------------------------------")

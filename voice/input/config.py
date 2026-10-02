@@ -57,6 +57,9 @@ class VoiceInputConfig:
     vad_silence_ms: int = 800  # trailing silence that ends an utterance
     vad_speech_prob: float = 0.5  # silero speech-probability threshold
     listen_timeout_ms: int = 6000  # no speech after wake -> back to idle
+    #: The mic must deliver its first frame within this long or voice input exits as
+    #: "unavailable" (blocked permission prompt, another app holding the device). 0 = off.
+    first_frame_timeout_seconds: float = 15.0
     max_utterance_ms: int = 15000  # hard cap on a single utterance
 
     # STT stage (faster-whisper).
@@ -109,6 +112,7 @@ class VoiceInputConfig:
             vad_silence_ms=int(g("vad_silence_ms", cls.vad_silence_ms)),
             vad_speech_prob=float(g("vad_speech_prob", cls.vad_speech_prob)),
             listen_timeout_ms=int(g("listen_timeout_ms", cls.listen_timeout_ms)),
+            first_frame_timeout_seconds=float(g("first_frame_timeout_seconds", cls.first_frame_timeout_seconds)),
             max_utterance_ms=int(g("max_utterance_ms", cls.max_utterance_ms)),
             whisper_model=str(g("whisper_model", cls.whisper_model)),
             whisper_compute_type=str(g("whisper_compute_type", cls.whisper_compute_type)),

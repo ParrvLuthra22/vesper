@@ -19,6 +19,11 @@ class VoiceOutputConfig:
 
     streaming: bool = True  # speak sentence-by-sentence as the reply streams
 
+    # Load Kokoro and run one silent synthesis at startup (~490MB resident from
+    # boot) instead of on the first reply. Trades idle RAM for failing at boot,
+    # where the launcher reports it, rather than losing the first spoken reply.
+    preload: bool = True
+
     # Also speak proactive call-outs (observations are serif voice, not traces).
     speak_observations: bool = True
 
@@ -53,6 +58,7 @@ class VoiceOutputConfig:
             speed=float(g("speed", cls.speed)),
             lang=str(g("lang", cls.lang)),
             streaming=bool(g("streaming", cls.streaming)),
+            preload=bool(g("preload", cls.preload)),
             speak_observations=bool(g("speak_observations", cls.speak_observations)),
             model_path=str(g("model_path", cls.model_path)),
             voices_path=str(g("voices_path", cls.voices_path)),

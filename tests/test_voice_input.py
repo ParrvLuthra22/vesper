@@ -147,3 +147,78 @@ def test_config_from_app_config_reads_voice_input_block():
     assert c.whisper_model == "base.en"
     assert c.gateway_port == 8760
     assert c.frame_samples == 480  # 30 ms @ 16 kHz
+
+
+# --------------------------------------------------------------------------- first-frame watchdog
+# NOTE: patch MicSource.frames on the CLASS — _AnnouncingMicSource's base is bound at import,
+# so replacing the module attribute would leave it reading the real microphone.
+
+def test_silent_microphone_trips_the_first_frame_watchdog(monkeypatch):
+    """A mic that never delivers (blocked permission prompt / held by another app) makes the
+    blocking read hang forever; the watchdog must fire and exit EXIT_UNAVAILABLE."""
+    import threading
+
+    from voice.input import service as svc
+
+    release = threading.Event()
+    seen = []
+
+    def silent_frames(self):
+        release.wait(5)            # blocks like sounddevice's read() on a dead device
+        return iter(())
+
+    monkeypatch.setattr(svc.MicSource, "frames", silent_frames)
+    src = svc._AnnouncingMicSource(16000, 480, None, first_frame_timeout=0.1,
+                                   on_timeout=lambda t: (seen.append(t), release.set()))
+    assert list(src.frames()) == []
+    assert seen == [0.1]
+
+
+def test_watchdog_is_cancelled_once_audio_flows(monkeypatch):
+    import time
+
+    import numpy as np
+
+    from voice.input import service as svc
+
+    def good_frames(self):
+        yield np.zeros(480, dtype=np.int16)
+        time.sleep(0.3)            # longer than the watchdog: it must already be cancelled
+        yield np.zeros(480, dtype=np.int16)
+
+    fired = []
+    monkeypatch.setattr(svc.MicSource, "frames", good_frames)
+    src = svc._AnnouncingMicSource(16000, 480, None, first_frame_timeout=0.1, on_timeout=lambda t: fired.append(t))
+    assert len(list(src.frames())) == 2 and fired == []
+
+
+def test_watchdog_disabled_with_zero_timeout(monkeypatch):
+    import numpy as np
+
+    from voice.input import service as svc
+
+    monkeypatch.setattr(svc.MicSource, "frames", lambda self: iter([np.zeros(480, dtype=np.int16)]))
+    src = svc._AnnouncingMicSource(16000, 480, None, first_frame_timeout=0.0)
+    assert len(list(src.frames())) == 1
+
+
+def test_watchdog_exit_uses_the_unavailable_status_and_a_clear_message(monkeypatch):
+    from voice.input import service as svc
+
+    exits, logged = [], []
+    monkeypatch.setattr(svc.os, "_exit", lambda code: exits.append(code))
+    monkeypatch.setattr(svc.logger, "error", lambda msg, *a: logged.append(msg % a))
+    monkeypatch.setattr(svc.logging, "shutdown", lambda: None)
+    svc._exit_no_audio(15.0)
+    assert exits == [69] and svc.EXIT_UNAVAILABLE == 69
+    assert "delivered no audio within 15s" in logged[0] and "Microphone" in logged[0]
+
+
+def test_first_frame_timeout_is_configurable_and_survives_the_config_loader():
+    from config.settings import load_config_dict
+    from voice.input.config import VoiceInputConfig
+
+    assert VoiceInputConfig().first_frame_timeout_seconds == 15.0
+    assert VoiceInputConfig.from_app_config(
+        {"voice": {"input": {"first_frame_timeout_seconds": 3}}}).first_frame_timeout_seconds == 3.0
+    assert load_config_dict()["voice"]["input"]["first_frame_timeout_seconds"] == 15.0

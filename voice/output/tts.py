@@ -37,6 +37,14 @@ class KokoroTTS:
 
         self._kokoro = Kokoro(self._config.model_path, self._config.voices_path)
 
+    def warm_up(self) -> None:
+        """Load the model AND run one silent synthesis, so every first-use cost
+        (ONNX session creation, espeak/phonemizer init, memory allocation) is paid
+        now. The first real reply used to pay it and, under memory pressure, the
+        process aborted there and the reply was lost."""
+        self.load()
+        self.synthesize("Ready.")
+
     def synthesize(self, text: str) -> Tuple[np.ndarray, int]:
         """text -> (float32 mono samples in [-1, 1], sample_rate)."""
         self.load()

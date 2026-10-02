@@ -89,6 +89,7 @@ class VoiceInputSettings(BaseModel):
     vad_aggressiveness: int = 2
     vad_silence_ms: int = 800
     listen_timeout_ms: int = 6000
+    first_frame_timeout_seconds: float = 15.0
     mic_device: Optional[Any] = None
 
 
@@ -100,6 +101,7 @@ class VoiceOutputSettings(BaseModel):
     speed: float = 0.92
     lang: str = "en-gb"
     streaming: bool = True
+    preload: bool = True
     speak_observations: bool = True
     model_path: str = "voice/models/kokoro-v1.0.onnx"
     voices_path: str = "voice/models/voices-v1.0.bin"
