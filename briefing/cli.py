@@ -64,7 +64,7 @@ def row_fields(s, b: Briefing, red: Optional[Redactor] = None) -> dict:
         who = red.subject(it.title) if red else f"{clean_text(it.title, 58)}"
     elif it.source == "slack":
         when = _age(it.timestamp, b.as_of)
-        who = (f"{red.sender(it.sender)} — {red.subject(it.title)}" if red
+        who = (f"{red.person(it.sender)} — {red.subject(it.title)}" if red
                else f"{clean_text(it.sender, 20)} — {clean_text(it.title, 38)}")
     else:
         when = _age(it.timestamp, b.as_of)

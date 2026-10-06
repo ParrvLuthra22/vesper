@@ -195,6 +195,10 @@ class Redactor:
                 self._tokens.update(_WORD.findall(an))
         if not nn and not an:
             self._tokens.update(_WORD.findall(n))
+        if " " in n and "@" not in n and "<" not in n:
+            # A bare multi-word display name ("Alice Example", as Slack gives them). parseaddr keeps only its
+            # first word as an "address", so without this a lone surname would not be guarded.
+            self._tokens.update(_WORD.findall(n))
 
     # ----------------------------------------------------------- redacting
     def sender(self, raw: object) -> str:
@@ -202,6 +206,14 @@ class Redactor:
         self.seed_identity(raw)
         name, addr = parseaddr(str(raw or ""))
         return self._ph("sender", addr or name or str(raw or ""))
+
+    def person(self, name: object) -> str:
+        """A bare display name (Slack): one placeholder per full name — not per first word, which is all
+        parseaddr would keep — and every word of it guarded."""
+        n = _norm(name)
+        self._add_full(n)
+        self._tokens.update(_WORD.findall(n))
+        return self._ph("sender", n)
 
     def address(self, addr: object) -> str:
         return self.sender(addr)
