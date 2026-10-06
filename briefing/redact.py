@@ -82,6 +82,9 @@ _STATIC_REASONS = [
     r"known domain \(I've written to others there\)", r"reply in a thread I sent in", r"is a reply",
     r"fresh \(\d+h old\)", r"unread for \d+ days", r"text reads like instructions to an AI",
     r"title reads like instructions to an AI", r"no start time", r"already over",
+    r"DM from a person", r"group DM from a person", r"@mention of you", r"reply to a message I wrote",
+    r"bot/app message", r"allowlisted bot/app: penalty waived", r"allowlisted bot/app \(allowlist boost\)",
+    r"decaying: unread for \d+ days",
     r"all-day, today", r"all-day, tomorrow", r"beyond the briefing window", r"all-day event",
     r"in progress now", r"starts within [\d.]+h", r"later today", r"tomorrow", r"no signals",
 ]

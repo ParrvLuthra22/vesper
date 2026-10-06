@@ -12,7 +12,7 @@
     ... --redact                    # --explain/--json/--known/--mark/--rules with every sender, subject,
                                     # snippet and domain replaced by <sender:N>/<subject:N>/... (fail closed)
 
-Read-only against Gmail and Calendar. It writes only the local cache file and, when you
+Read-only against Gmail, Calendar and Slack. It writes only the local cache file and, when you
 run --mark, your rules file (data/briefing_rules.json).
 """
 
@@ -29,7 +29,7 @@ from dataclasses import replace
 from datetime import datetime
 from typing import List, Optional
 
-from briefing.builder import Briefing, build_briefing, load_known, render_tool_result, spoken_script
+from briefing.builder import Briefing, _slack_counts, build_briefing, load_known, render_tool_result, spoken_script
 from briefing.config import BriefingConfig, load_briefing_config
 from briefing.items import Item
 from briefing.redact import RedactionLeak, Redactor, safe_reason, scan_fields
@@ -62,6 +62,10 @@ def row_fields(s, b: Briefing, red: Optional[Redactor] = None) -> dict:
     if it.source == "calendar":
         when = datetime.fromtimestamp(it.start_at or 0).strftime("%a %H:%M")
         who = red.subject(it.title) if red else f"{clean_text(it.title, 58)}"
+    elif it.source == "slack":
+        when = _age(it.timestamp, b.as_of)
+        who = (f"{red.sender(it.sender)} — {red.subject(it.title)}" if red
+               else f"{clean_text(it.sender, 20)} — {clean_text(it.title, 38)}")
     else:
         when = _age(it.timestamp, b.as_of)
         who = (f"{red.sender(it.sender)} — {red.subject(it.title)}" if red
@@ -85,9 +89,12 @@ def explain_table(b: Briefing, red: Optional[Redactor] = None) -> str:
 def status_lines(b: Briefing, red: Optional[Redactor] = None) -> List[str]:
     sources = b.sources if red is None else [
         replace(s, error="(details withheld)" if s.error else None) for s in b.sources]
-    return ["sources: " + "; ".join(s.describe() + ("" if s.available else " [tools unavailable]") for s in sources),
-            f"unread mail: {b.total_unread} | priority: {len(b.priority)} | other: {b.other_count} "
-            f"({b.bulk_count} bulk) | meetings shown: {len(b.meetings)}"]
+    lines = ["sources: " + "; ".join(s.describe() + ("" if s.available else " [tools unavailable]") for s in sources),
+             f"unread mail: {b.total_unread} | priority: {len(b.priority)} | other: {b.other_count} "
+             f"({b.bulk_count} bulk) | meetings shown: {len(b.meetings)}"]
+    if b.slack_dms is not None:
+        lines.append(f"{_slack_counts(b)} | named: {len(b.slack)}")
+    return lines
 
 
 # --------------------------------------------------------------------- known / rules / mark
@@ -278,6 +285,9 @@ async def _run(args: argparse.Namespace) -> int:
                 "as_of": b.as_of, "unread": b.total_unread,
                 "meetings": [{"title": s.item.title, "start": s.item.start_at, "score": s.score} for s in b.meetings],
                 "priority": [{"id": s.item.id, "score": s.score, "why": s.explain()} for s in b.priority],
+                "slack": None if b.slack_dms is None else {
+                    "unread_dms": b.slack_dms, "mentions": b.slack_mentions,
+                    "top": [{"id": s.item.id, "score": s.score, "why": s.explain()} for s in b.slack]},
                 "sources": [vars(s) for s in b.sources],
             }
         else:  # every string is a placeholder, an allowlisted label, or a fixed word
@@ -288,6 +298,11 @@ async def _run(args: argparse.Namespace) -> int:
                 "priority": [{"id": s.item.id, "score": s.score,
                               "why": ", ".join(f"{r.delta:+g} {safe_reason(r.label, red)}" for r in s.reasons)}
                              for s in b.priority],
+                "slack": None if b.slack_dms is None else {
+                    "unread_dms": b.slack_dms, "mentions": b.slack_mentions,
+                    "top": [{"score": s.score,
+                             "why": ", ".join(f"{r.delta:+g} {safe_reason(r.label, red)}" for r in s.reasons)}
+                            for s in b.slack]},
                 "sources": [{"name": x.name, "available": x.available, "age_seconds": x.age_seconds,
                              "stale": x.stale, "error": "(details withheld)" if x.error else None}
                             for x in b.sources],
@@ -312,7 +327,7 @@ async def _run(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="vesper briefing",
-        description="Inspect and tune the briefing engine. Read-only against Gmail and Calendar; the only things "
+        description="Inspect and tune the briefing engine. Read-only against Gmail, Calendar and Slack; the only things "
                     "it ever writes are the local cache and your own rules file.")
     p.add_argument("--explain", action="store_true", help="print each item's score and why")
     p.add_argument("--spoken", action="store_true", help="print the spoken script")
