@@ -43,7 +43,7 @@ flowchart TB
         CLI["CLI<br/><i>rich terminal</i>"]
         HUD["HUD<br/><i>Tauri panel</i>"]
         VOICE["Voice<br/><i>wake · STT · TTS</i>"]
-        REMOTE["Discord<br/><i>remote, restricted</i>"]
+        REMOTE["Discord · Telegram<br/><i>remote, restricted</i>"]
     end
 
     GW["Gateway<br/><i>FastAPI over the event bus · localhost only</i>"]
@@ -51,6 +51,7 @@ flowchart TB
     subgraph Proactive["Second input path — Vesper initiates"]
         SENSORS["Sensors<br/><i>focus · calendar · inbox</i>"]
         ENGINE["Proactive engine<br/><i>rules · cooldowns · schedules</i>"]
+        BRIEF["Briefing engine<br/><i>collectors · scorer · ≤600-token digest</i>"]
     end
 
     PLANNER["LLM Planner<br/><i>tool-calling loop</i>"]
@@ -66,6 +67,7 @@ flowchart TB
     REMOTE <--> GW
     GW <--> PLANNER
     SENSORS --> ENGINE --> PLANNER
+    BRIEF --> PLANNER
     PLANNER <--> ROUTER
     PLANNER --> GUARD --> TOOLS --> MCP
     PLANNER <--> MEM
@@ -83,6 +85,7 @@ Every surface is a client of the same gateway, so the CLI, the HUD, voice, and t
 - **The Guardian gates.** Every tool carries a tier: `safe` runs, `confirm` needs an explicit yes and times out into a denial, `dangerous` is refused outright on restricted surfaces. Consequential actions cannot reach execution without passing it. → [`guardian/gate.py`](guardian/gate.py)
 - **Sensors observe.** Focus changes, upcoming meetings, and unread mail become *pending observations* that ride into the planner's context block — the second input path that lets Vesper speak first. → [`sensors/`](sensors/), [`proactive/engine.py`](proactive/engine.py)
 - **Memory reflects.** A session-end pass distils a transcript into at most five durable items, each typed `preference` / `fact` / `pattern`, embedded locally with MiniLM so recall is by meaning, not keywords. → [`proactive/reflection.py`](proactive/reflection.py), [`rag/rag_service.py`](rag/rag_service.py)
+- **The briefing is deterministic.** "Good morning" returns a ranked, spoken briefing from a SQLite cache of read-only Gmail and Calendar collectors. A scorer ranks every item and gives a reason for each point; no LLM scores, selects, or writes it, and the model never sees a raw inbox. → [`briefing/`](briefing/), [docs/BRIEFING.md](docs/BRIEFING.md)
 - **Everything is a tool.** Built-ins and MCP servers register into one registry with one schema, so adding a capability is a registration, not a new code path. → [`tools/registry.py`](tools/registry.py), [`tools/mcp_bridge.py`](tools/mcp_bridge.py)
 
 ---
@@ -100,9 +103,11 @@ Every surface is a client of the same gateway, so the CLI, the HUD, voice, and t
 | **HUD** | Tauri always-on-top panel: serif voice lines, mono plan traces, gold call-outs, confirmation cards |
 | **Gateway** | FastAPI over the event bus, localhost-bound, bearer-token auth |
 | **MCP** | Gmail and Apple Calendar/Reminders enabled; Notion, GitHub, Spotify, Slack, Discord shipped behind config flags |
-| **Remote** | Discord interface: owner-only, `dangerous` disabled entirely, confirms need an explicit approval |
+| **Briefing** | Read-only Gmail + Calendar collectors → deterministic 0–100 scorer → SQLite cache → spoken briefing capped at 600 tokens; tunable with known correspondents, an allowlist, and rules |
+| **Remote** | Discord and Telegram: owner-only, `dangerous` disabled entirely, confirms need an explicit approval; Telegram runs as its own process behind a restricted gateway door and is off by default — see [CHANNELS.md](docs/CHANNELS.md) |
+| **Launcher** | `vesper up` starts and supervises gateway → TTS → HUD → voice; `vesper doctor` is a read-only environment check |
 | **Tracing** | always-on local JSONL; LangSmith is opt-in (`tracing.langsmith_enabled`) — see [what leaves the machine](docs/PRIVACY.md) |
-| **Tests** | 331 automated |
+| **Tests** | 1,083 automated |
 
 ### Deliberately not built (and why)
 
@@ -211,14 +216,14 @@ python -m voice.input                       # wake word + STT
 python -m voice.output                      # Kokoro TTS
 ```
 
-`python scripts/doctor.py` checks every dependency and reports memory headroom before you start a local model.
+`vesper doctor` is a read-only environment check (it sends nothing and prints no secret). `python scripts/doctor.py` checks every dependency and reports memory headroom before you start a local model. To verify a fresh install end to end against your real accounts, follow [docs/LIVE_VERIFICATION.md](docs/LIVE_VERIFICATION.md).
 </details>
 
 ---
 
 ## Roadmap
 
-**Shipped** — LLM planner · Guardian tiers · proactive sensors and call-outs · semantic memory with reflection · Gmail and Calendar over MCP · gateway · Tauri HUD with the wake flow · voice in and out · Discord remote · tracing · 8GB-tuned routing with rate-limit survival.
+**Shipped** — LLM planner · Guardian tiers · proactive sensors and call-outs · semantic memory with reflection · Gmail and Calendar over MCP · gateway · Tauri HUD with the wake flow · voice in and out · Discord and Telegram remotes · briefing engine with a tunable scorer · `vesper up` launcher · tracing · 8GB-tuned routing with rate-limit survival.
 
 **Planned**
 - Custom wake word (`"wake up daddy's home"`). The pipeline, trainer, and config swap are done and verified on a pretrained model; the phrase itself needs ~30 voice recordings and a one-time GPU run — see [`voice/TRAINING.md`](voice/TRAINING.md).
@@ -230,10 +235,10 @@ python -m voice.output                      # Kokoro TTS
 
 ## Documentation
 
-[Architecture](docs/ARCHITECTURE.md) · [Test plan](docs/TESTPLAN.md) · [Demo script](docs/DEMO_SCRIPT.md) · [Demo recording checklist](docs/DEMO.md) · [Wake-word training](voice/TRAINING.md) · [Voice output](voice/output/README.md)
+[Architecture](docs/ARCHITECTURE.md) · [Briefing engine](docs/BRIEFING.md) · [Chat channels](docs/CHANNELS.md) · [Launcher](docs/LAUNCHER.md) · [Privacy](docs/PRIVACY.md) · [Live verification](docs/LIVE_VERIFICATION.md) · [Test plan](docs/TESTPLAN.md) · [Demo script](docs/DEMO_SCRIPT.md) · [Demo recording checklist](docs/DEMO.md) · [Wake-word training](voice/TRAINING.md) · [Voice output](voice/output/README.md)
 
 ```bash
-pytest    # 331 tests
+pytest    # 1,083 tests
 ```
 
 ---
