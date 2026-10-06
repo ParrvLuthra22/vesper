@@ -36,6 +36,9 @@ class Collector(ABC):
     name: str = ""
     #: Marker for the contract above; the service refuses collectors that clear it.
     read_only: bool = True
+    #: An optional collector (Slack) that is not configured is skipped silently: no failure is recorded,
+    #: and the briefing shows no source line for it. Gmail/Calendar are not optional.
+    optional: bool = False
 
     @abstractmethod
     async def fetch_since(self, cursor: Optional[str]) -> List[Item]:

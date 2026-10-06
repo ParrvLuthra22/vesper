@@ -24,6 +24,7 @@ from briefing.collectors import CalendarCollector, Collector, GmailCollector
 from briefing.config import BriefingConfig, load_briefing_config
 from briefing.known import META_KEY as KNOWN_META_KEY, derive_known
 from briefing.readonly import ReadOnlyTools
+from briefing.slack import SlackCollector
 from tools.registry import ToolRegistry, get_registry
 from utils.logger import get_logger
 
@@ -67,7 +68,9 @@ class BriefingService:
                       cache: Optional[BriefingCache] = None) -> "BriefingService":
         cfg = cfg or load_briefing_config()
         tools = ReadOnlyTools(registry or get_registry())
-        return cls([GmailCollector(tools, cfg), CalendarCollector(tools, cfg)], cfg, cache)
+        cache = cache or BriefingCache(cfg.cache_path)
+        slack = SlackCollector(cfg, cached=lambda: cache.active_items("slack"))
+        return cls([GmailCollector(tools, cfg), CalendarCollector(tools, cfg), slack], cfg, cache)
 
     # ------------------------------------------------------------- refresh
     async def refresh(self) -> Dict[str, CollectorReport]:
@@ -82,6 +85,8 @@ class BriefingService:
     async def _run_one(self, c: Collector) -> CollectorReport:
         timeout = self.cfg.collector_timeout_seconds
         started = self._clock()
+        if getattr(c, "optional", False) and not c.available():
+            return CollectorReport(c.name, ok=True, skipped=True, error="not configured")
         if not c.available():
             self.cache.record_failure(c.name, "tools unavailable (is its MCP server connected?)", now=started)
             return CollectorReport(c.name, ok=False, skipped=True, error="tools unavailable")
@@ -127,7 +132,7 @@ class BriefingService:
         now = self._clock()
         for c in self._collectors:
             if not c.available():
-                continue
+                continue          # (also covers optional collectors that are not configured)
             age = self.cache.health(c.name).age_seconds(now)
             if age is None or age > limit:
                 return True
@@ -171,7 +176,8 @@ class BriefingService:
 
     # --------------------------------------------------------------- output
     def briefing(self, now: Optional[float] = None) -> Briefing:
-        avail = {c.name: c.available() for c in self._collectors}
+        # an optional collector that is not configured is not a source at all (no line, no staleness note)
+        avail = {c.name: c.available() for c in self._collectors if not (getattr(c, "optional", False) and not c.available())}
         return build_briefing(self.cache, self.cfg, self._clock() if now is None else now, avail)
 
     def tool_result(self, now: Optional[float] = None) -> str:
