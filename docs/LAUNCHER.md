@@ -4,7 +4,8 @@
 vesper up [--strict]     # start everything, supervised, in the foreground (Ctrl+C stops it)
 vesper status [--json]   # components, state, pid, uptime, restarts; live gateway check
 vesper down              # clean ordered shutdown from another terminal
-vesper logs [component]  # tail logs/launcher/<component>.log
+vesper logs [component] [--tail N] [--redact-transcripts]   # tail logs/launcher/<component>.log;
+                                                            # the flag replaces anything said (or said to you) with <text:N>
 ```
 `python -m launcher up` is the same without the console script; `python main.py` and `scripts/run_voice.sh` are
 now thin redirects to it. The terminal text REPL (`vesper`, no subcommand) is unchanged and uses no microphone.
@@ -42,6 +43,16 @@ generated per run (or taken from `VESPER_GATEWAY_TOKEN`) and handed to every chi
 * Refuses to start if a supervisor is already running, or if the gateway port is already in use.
 * Config: the `launcher:` block in `config/settings.yaml` (components on/off, backoff, timeouts, HUD binary path).
 
+## Pasting logs safely: `vesper logs <component> --tail N --redact-transcripts`
+
+Component logs can contain what you said ("Payload: {'text': '…'}" on a voice event) and what was said back. With
+`--redact-transcripts` every recognised transcript or message text becomes a `<text:N>` placeholder (the same text gets the
+same number within one run, and the number says nothing about the content); event names, ids, sources, tool names and
+timings stay, so the log is still useful. Payload fields are masked unless their key is on a short allow-list of identifiers
+and flags (unknown keys are treated as text), and a payload that cannot be parsed is masked whole. It recognises the shapes
+Vesper itself writes (`launcher/logsafe.py`); a new log line that interpolates text some other way would not be caught, so read
+the output once before pasting. The log files themselves are never modified.
+
 ## `vesper doctor`
 
 A read-only environment check: microphone devices (and, with `--probe-mic`, permission), Telegram token *presence* in
@@ -58,7 +69,7 @@ It sends nothing and exits 1 only on FAIL. The full end-to-end checklist is [LIV
    ("what's on my calendar today") and one that needs approval ("close Safari") — approve it from the HUD card.
 4. **Barge-in**: start a long answer ("brief me"), say "Hey Jarvis" mid-sentence → speech stops.
 5. **First reply after boot**: confirm it is actually spoken (a cold Kokoro load once crashed and lost it; see RESOURCES.md).
-6. **Crash recovery**: `kill -9` the `voice.output` pid from `vesper status` → restarted within ~1–2 s, next reply spoken.
+6. **Crash recovery**: in your own terminal run `kill -9 $(pgrep -f "voice.output")` (the process is `python -m voice.output`; `vesper status` shows the component as `voice_output`, so `pkill -f voice_output` matches nothing) → restarted within ~1–2 s, `RESTARTS` goes to 1, next reply spoken.
    Repeat with the HUD and with voice input. `kill -9` the **gateway** → it restarts; HUD/voice reconnect on their own.
 7. **Microphone denied**: revoke Microphone for your terminal, `vesper up` → voice input FAILED with a clear hint,
    everything else still up, no restart loop.

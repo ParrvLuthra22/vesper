@@ -110,13 +110,23 @@ def cmd_logs(args: argparse.Namespace) -> int:
     if not names:
         print(f"No launcher logs in {log_dir} yet.")
         return 1
+    safe = bool(getattr(args, "redact_transcripts", False))
+    placeholders = None
+    if safe:
+        from launcher.logsafe import Placeholders, redact_lines
+
+        placeholders = Placeholders()          # shared across components: the same utterance keeps the same <text:N>
     for name in names:
         path = log_dir / f"{name}.log"
         if not path.exists():
             print(f"No log for {name!r} ({path}).")
             return 1
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-args.lines:]
-        print(f"===== {name} (last {len(lines)} lines) =====")
+        note = ""
+        if safe:
+            lines, changed = redact_lines(lines, placeholders)
+            note = f"; transcripts/message text replaced in {changed} line(s)"
+        print(f"===== {name} (last {len(lines)} lines{note}) =====")
         print("\n".join(lines))
     return 0
 
@@ -151,7 +161,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     logs = sub.add_parser("logs", help="tail a component's log")
     logs.add_argument("component", nargs="?")
-    logs.add_argument("-n", "--lines", type=int, default=40)
+    logs.add_argument("-n", "--lines", "--tail", dest="lines", type=int, default=40, metavar="N",
+                      help="how many recent lines per component (default 40)")
+    logs.add_argument("--redact-transcripts", action="store_true",
+                      help="replace anything you said (or that was said to you) with <text:N> placeholders, so the "
+                           "output is safe to paste; see launcher/logsafe.py for exactly what is recognised")
     logs.set_defaults(func=cmd_logs)
     return parser
 

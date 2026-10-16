@@ -6,7 +6,7 @@ Telegram account. It merges the manual steps of the launcher ([LAUNCHER.md](LAUN
 bottom — later phases assume earlier ones passed.
 
 **Rules for capturing evidence.** Never paste real mail or messages into an issue or chat.
-Use `--redact` for anything that prints inbox rows (`vesper briefing --explain --redact`), and send counts, exit
+Use `--redact` for anything that prints inbox rows (`vesper briefing --explain --redact`), and `vesper logs <component> --tail 40 --redact-transcripts` for voice-test logs (it replaces what you said and what was said back with `<text:N>`); otherwise send counts, exit
 codes and log *paths* rather than log contents when a log might hold message text. Tick `☐ pass` or `☐ fail`;
 every step says what to capture on failure.
 
@@ -35,7 +35,7 @@ Conventions: logs are in `logs/launcher/<component>.log` (`gateway`, `voice_outp
 | 1.3 | "…what time is it", then "…what's on my calendar today", then one needing approval ("close Safari") and approve from the HUD card | spoken answers; HUD reply; the approval runs only after you approve | ☐ pass ☐ fail | `logs/launcher/gateway.log`; the new `data/audit.jsonl` lines (`tail -3`, look at `tool`/`verdict`/`channel` only) |
 | 1.4 | Barge-in: start "brief me", say "Hey Jarvis" mid-sentence | speech stops | ☐ pass ☐ fail | `logs/launcher/voice_output.log` |
 | 1.5 | First reply after a cold boot is actually spoken | spoken (a cold Kokoro load once lost it; see RESOURCES.md) | ☐ pass ☐ fail | `logs/launcher/voice_output.log` (look for the preload/"Ready." line and any crash) |
-| 1.6 | `kill -9` the `voice.output` pid (from `vesper status`); then the HUD; then voice input; then the **gateway** | each restarts in ~1–2 s; HUD/voice reconnect on their own; `RESTARTS` column increments | ☐ pass ☐ fail | `vesper status --json`; that component's log |
+| 1.6 | In **your own terminal** (not through `bash -c`/`zsh -c`, whose command line would also match the pattern): `kill -9 $(pgrep -f "voice.output")`. Then the HUD: `kill -9 $(pgrep -f "hud/src-tauri")`; voice input: `kill -9 $(pgrep -f "voice.input")`; the **gateway**: `kill -9 $(pgrep -f "gateway.server")`. One at a time; wait for READY between them. (The component names in `vesper status` use an underscore — `voice_output` — but the processes are `python -m voice.output`, so `pkill -f voice_output` matches nothing.) | each restarts in ~1–2 s; HUD/voice reconnect on their own. **Confirm with `vesper status`**: the component is `READY` again with a new PID, and its `RESTARTS` column went from 0 to **1** (it goes to 2 if you repeat the kill). `vesper logs voice_output -n 20` shows a `voice_output: died (signal …); restarting in …` line (the wording in RESOURCES.md's SIGABRT example) followed by a READY line | ☐ pass ☐ fail | `vesper status --json`; that component's log |
 | 1.7 | Revoke Microphone for your terminal, `vesper up` | voice_input FAILED with a clear hint, everything else up, **no restart loop** | ☐ pass ☐ fail | `vesper status --json`; `logs/launcher/voice_input.log` |
 | 1.8 | Start another app that holds the mic, `vesper up` | same loud failure | ☐ pass ☐ fail | same as 1.7 |
 | 1.9 | `vesper down` from a second terminal; then `pgrep -fl "gateway.server\|voice\.\|hud"` | ordered stop; no leftover processes | ☐ pass ☐ fail | `pgrep -fl` output; `vesper status` |
