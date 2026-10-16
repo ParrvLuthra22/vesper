@@ -170,3 +170,34 @@ def test_doctor_is_a_registered_subcommand():
     from launcher import cli
     assert "doctor" in cli.COMMANDS
     assert cli.build_parser().parse_args(["doctor", "--probe-mic"]).probe_mic is True
+
+
+# ------------------------------------------------------------------ messages / Full Disk Access (no real chat.db)
+
+def test_messages_check_reports_the_three_states_without_reading_anything():
+    ok = doctor.check_messages(True, "/x/chat.db", state=lambda p: "ok")[0]
+    assert ok.status == PASS and "nothing was read" in ok.detail and ok.fix == ""
+    off = doctor.check_messages(False, "/x/chat.db", state=lambda p: "ok")[0]
+    assert off.status == PASS and "messages.enabled: true" in off.fix
+    denied = doctor.check_messages(False, "/x/chat.db", state=lambda p: "denied")[0]
+    assert denied.status == WARN and "Full Disk Access" in denied.fix and "System Settings" in denied.fix
+    missing_on = doctor.check_messages(True, "/x/chat.db", state=lambda p: "missing")[0]
+    missing_off = doctor.check_messages(False, "/x/chat.db", state=lambda p: "missing")[0]
+    assert missing_on.status == WARN and missing_off.status == PASS
+
+
+def test_messages_check_only_opens_the_file_and_never_reads_it(tmp_path, monkeypatch):
+    f = tmp_path / "chat.db"
+    f.write_bytes(b"SQLite format 3\x00 not really a database")
+    calls = []
+    real_open = __import__("os").open
+    monkeypatch.setattr("os.open", lambda path, flags, *a: calls.append((str(path), flags)) or real_open(path, flags, *a))
+    monkeypatch.setattr("os.read", lambda *a: (_ for _ in ()).throw(AssertionError("read!")))
+    out = doctor.check_messages(True, str(f))
+    assert out[0].status == PASS and calls == [(str(f), __import__("os").O_RDONLY)]
+
+
+def test_run_checks_includes_messages_only_when_asked(tmp_path):
+    base = dict(env={}, root=tmp_path, audit_path=tmp_path / "a.jsonl", briefing_db=str(tmp_path / "b.db"))
+    none = doctor.run_checks({}, **base)
+    assert not any(c.label.startswith("Messages") for c in none)

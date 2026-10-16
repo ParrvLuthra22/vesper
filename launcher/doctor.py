@@ -231,6 +231,24 @@ def check_briefing(db_path: str, interval_minutes: float = 10.0, now: Optional[f
     return out
 
 
+# ------------------------------------------------------------------ messages (Full Disk Access)
+
+def check_messages(enabled: bool, db_path: str, state: Optional[Callable[[str], str]] = None) -> List[Check]:
+    """Can this terminal open Messages' chat.db? Only the OPEN is attempted (what Full Disk Access gates): no
+    byte of the database is read, nothing is copied, no prompt is shown."""
+    from briefing.messages import FDA_STEPS, permission_state
+
+    result = (state or permission_state)(db_path)
+    on = "enabled" if enabled else "disabled (messages.enabled: false)"
+    if result == "ok":
+        return [Check(PASS, "Messages: Full Disk Access", f"chat.db can be opened; collector {on} (nothing was read)",
+                      "" if enabled else "set messages.enabled: true in config/briefing.local.yaml to include it")]
+    if result == "denied":
+        return [Check(WARN, "Messages: Full Disk Access", f"not granted; collector {on}", FDA_STEPS)]
+    return [Check(WARN if enabled else PASS, "Messages: chat.db", f"no Messages database found; collector {on}",
+                  "sign in to Messages on this Mac, or point messages.db_path at the right file")]
+
+
 # ------------------------------------------------------------------ audit log
 
 def check_audit(path: Path, now: Optional[float] = None) -> List[Check]:
@@ -268,13 +286,13 @@ def check_audit(path: Path, now: Optional[float] = None) -> List[Check]:
 def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, probe_mic: bool = False,
                root: Path = PROJECT_ROOT, supervisor_pid: Optional[int] = None,
                audit_path: Optional[Path] = None, briefing_db: Optional[str] = None,
-               briefing_interval: float = 10.0) -> List[Check]:
+               briefing_interval: float = 10.0, messages: Optional[tuple] = None) -> List[Check]:
     env = dict(os.environ) if env is None else env
     audit = audit_path or Path(env.get("VESPER_AUDIT_LOG") or root / "data" / "audit.jsonl")
     db = env.get("VESPER_BRIEFING_DB") or briefing_db or str(root / "data" / "briefing.db")
     return [*check_microphone(probe_mic), *check_telegram(cfg, env), *check_models(cfg, root),
             *check_ports(cfg, supervisor_pid), *check_briefing(db, briefing_interval),
-            *check_audit(audit)]
+            *(check_messages(*messages) if messages else []), *check_audit(audit)]
 
 
 def render(checks: List[Check], color: bool = False) -> str:
@@ -306,7 +324,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     bcfg = load_briefing_config()
     checks = run_checks(cfg, probe_mic=args.probe_mic, supervisor_pid=pid, briefing_db=bcfg.cache_path,
-                        briefing_interval=float(bcfg.interval_minutes))
+                        briefing_interval=float(bcfg.interval_minutes),
+                        messages=(bcfg.messages_enabled, bcfg.messages_db_path))
     print(render(checks, color=sys.stdout.isatty()))
     return 1 if any(c.status == FAIL for c in checks) else 0
 
