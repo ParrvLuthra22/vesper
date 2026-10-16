@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -43,11 +44,15 @@ class WakeDetector:
     (e.g. "hey_jarvis") or a path to a custom .onnx (e.g. a trained
     "wake up daddy's home"). Buffers arbitrary frames into 80 ms windows."""
 
-    def __init__(self, config: VoiceInputConfig):
+    def __init__(self, config: VoiceInputConfig, clock=None):
         self._config = config
         self._model = None
         self._model_key: Optional[str] = None
         self._buf = np.zeros(0, dtype=np.int16)
+        self._clock = clock or time.monotonic
+        #: highest wake score seen in the current 10 s window (logged at DEBUG: scores only, never audio)
+        self._win_max = 0.0
+        self._win_start: Optional[float] = None
         #: Set once a load has permanently failed, so the next frame re-raises
         #: from memory instead of retrying the same import.
         self._load_error: Optional[VoiceInputUnavailable] = None
@@ -160,19 +165,47 @@ class WakeDetector:
             return float(predictions[self._model_key])
         return float(max(predictions.values())) if predictions else 0.0
 
+    def feed(self, frame: np.ndarray) -> List[float]:
+        """Feed one frame; returns the wake score of each 80 ms window it completed. No threshold, no reset — this is what
+        `vesper mic-test` uses to show the scores."""
+        self.load()
+        self._buf = np.concatenate([self._buf, frame.astype(np.int16)])
+        scores: List[float] = []
+        while len(self._buf) >= _WAKE_WINDOW:
+            window = self._buf[:_WAKE_WINDOW]
+            self._buf = self._buf[_WAKE_WINDOW:]
+            scores.append(self.score(self._model.predict(window)))
+        return scores
+
+    def _note_scores(self, scores: List[float]) -> None:
+        """Track the max score per 10 s window and log it at DEBUG, so the threshold can be tuned from real use."""
+        now = self._clock()
+        if self._win_start is None:
+            self._win_start = now
+        if scores:
+            self._win_max = max(self._win_max, max(scores))
+        if now - self._win_start >= 10.0:
+            logger.debug("wake: max score %.3f over the last %.0fs (threshold %.2f)", self._win_max,
+                         now - self._win_start, self._config.wake_threshold)
+            self._win_max, self._win_start = 0.0, now
+
     def process(self, frame: np.ndarray) -> bool:
         """Feed one frame. Returns True when the wake word is detected."""
         self.load()
         self._buf = np.concatenate([self._buf, frame.astype(np.int16)])
         detected = False
+        seen: List[float] = []
         while len(self._buf) >= _WAKE_WINDOW:
             window = self._buf[:_WAKE_WINDOW]
             self._buf = self._buf[_WAKE_WINDOW:]
             predictions = self._model.predict(window)
-            if self.score(predictions) >= self._config.wake_threshold:
+            s = self.score(predictions)
+            seen.append(s)
+            if s >= self._config.wake_threshold:
                 detected = True
                 self.reset()
                 break
+        self._note_scores(seen)
         return detected
 
 

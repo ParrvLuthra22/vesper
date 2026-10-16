@@ -15,6 +15,8 @@ from pathlib import Path
 
 from voice.input.audio import FileSource, MicSource
 from voice.input.config import VoiceInputConfig, VoiceTransition
+from voice.input.devices import (
+    DeviceResolutionError, default_input_index, list_input_devices, read_transport_types, resolve_input_device)
 from voice.input.pipeline import VoiceInputPipeline
 from voice.input.sink import GatewayRestSink
 from voice.input.stages import Transcriber, VoiceInputUnavailable, WakeDetector
@@ -77,6 +79,8 @@ class _AnnouncingMicSource(MicSource):
                     announced = True
                     if timer is not None:
                         timer.cancel()
+                    logger.info("mic stream open | device index %s | opened at %s Hz%s", self._device, self.open_rate,
+                                " -> resampled to the pipeline rate" if self.resampled else "")
                     logger.info(READY_MARKER)
                 yield frame
         finally:
@@ -92,6 +96,16 @@ def _exit_no_audio(timeout: float) -> None:
     )
     logging.shutdown()
     os._exit(EXIT_UNAVAILABLE)
+
+
+def resolve_device(config: VoiceInputConfig, query=None, transports=None, default_index=None):
+    """The ONE input device voice input will use (voice.input.device). Raises DeviceResolutionError, which lists the
+    input devices that were found, if it is missing — there is no fallback to the system default."""
+    devices = list_input_devices(query)
+    return resolve_input_device(
+        config.device, devices,
+        transports=read_transport_types() if transports is None else transports,
+        default_index=default_input_index() if default_index is None else default_index)
 
 
 def load_config() -> VoiceInputConfig:
@@ -123,14 +137,24 @@ def main() -> int:
         logger.info("voice.input.enabled is false — voice input is off. Enable it in settings.yaml.")
         return 0
 
+    try:
+        device = resolve_device(config)
+    except DeviceResolutionError as exc:
+        # Permanent for this session: the launcher must NOT restart-loop against a microphone that is not there.
+        logger.error("Voice input unavailable — %s Set voice.input.device in settings.yaml (see `vesper doctor`).", exc)
+        return EXIT_UNAVAILABLE
+    except Exception as exc:  # noqa: BLE001 — sounddevice missing / PortAudio failure while listing devices
+        logger.error("Voice input unavailable — cannot list audio input devices: %s. Run scripts/doctor.py.", exc)
+        return EXIT_UNAVAILABLE
+
     logger.info(
-        "Voice input starting | wake_model=%s | whisper=%s (%s) | vad=%s | mic=%s",
+        "Voice input starting | wake_model=%s | whisper=%s (%s) | vad=%s | mic=%s (index %d, native %d Hz)",
         config.wake_model, config.whisper_model, config.whisper_compute_type,
-        config.vad_backend, config.mic_device if config.mic_device is not None else "default",
+        config.vad_backend, device.name, device.index, int(device.default_samplerate),
     )
     pipeline = build_pipeline(config)
     source = _AnnouncingMicSource(
-        config.sample_rate, config.frame_samples, config.mic_device,
+        config.sample_rate, config.frame_samples, device.index,
         first_frame_timeout=config.first_frame_timeout_seconds,
     )
     try:
@@ -151,10 +175,14 @@ def main() -> int:
         logger.warning("Voice input disabled for this session — %s", exc)
         return EXIT_UNAVAILABLE
     except Exception as exc:
+        try:
+            found = ", ".join(f"'{d.name}'" for d in list_input_devices()) or "none"
+        except Exception:  # noqa: BLE001
+            found = "unknown"
         logger.warning(
-            "Voice input disabled for this session — microphone unavailable: %s. "
+            "Voice input disabled for this session — could not open '%s': %s. Input devices found: %s. "
             "Run scripts/doctor.py to check the audio stack.",
-            exc,
+            device.name, exc, found,
         )
         return EXIT_UNAVAILABLE
 
