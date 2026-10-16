@@ -454,6 +454,12 @@ def run() -> None:
 
         sys.exit(dnd_main(sys.argv[2:]))
 
+    # `vesper mic-test` — what the pinned microphone hears and what the wake word scores (records nothing).
+    if len(sys.argv) > 1 and sys.argv[1] == "mic-test":
+        from voice.input.mictest import main as mic_test_main
+
+        sys.exit(mic_test_main(sys.argv[2:]))
+
     # `vesper route "<utterance>"` — which deterministic skill would answer it, and why (runs nothing).
     if len(sys.argv) > 1 and sys.argv[1] == "route":
         from router.cli import main as route_main
@@ -469,7 +475,7 @@ def run() -> None:
     # Anything else that is not a flag is a typo or a mis-split argument (`vesper "doctor --help"`, `vesper doctr`).
     # Starting the whole stack (real MCP servers, memory, a briefing refresh) because of that is a surprise nobody wants.
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-        print(f"vesper: unknown command {sys.argv[1]!r}. Commands: up, down, status, logs, doctor, briefing, route, dnd. "
+        print(f"vesper: unknown command {sys.argv[1]!r}. Commands: up, down, status, logs, doctor, briefing, route, dnd, mic-test. "
               "Run `vesper` with no arguments for the text REPL (or --remote to drive a running gateway).", file=sys.stderr)
         sys.exit(2)
 
