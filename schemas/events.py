@@ -745,6 +745,9 @@ class ConfirmationRequestedEvent(BaseEvent):
     #: channel-side user id; a channel only offers confirmations that carry its own name.
     channel: str = "local"
     channel_user: str = ""
+    #: True when the tool delivers content to another person AND the turn came from a non-local channel:
+    #: only a local surface (HUD, voice, CLI) may approve it. A channel may still offer "Deny".
+    mac_only: bool = False
 
 
 @dataclass(frozen=True)

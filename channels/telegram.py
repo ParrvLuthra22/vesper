@@ -598,10 +598,14 @@ class TelegramChannel:
         nonce = self.broker.issue(request_id, str(uid))
         summary = str(event.get("summary", ""))[: self.cfg.summary_chars]
         minutes = max(1, round(self.cfg.confirm_ttl / 60))
-        text = f"Confirmation needed:\n{summary}\n\nThis expires in {minutes} min."
-        markup = {"inline_keyboard": [[
-            {"text": "Approve", "callback_data": f"{CALLBACK_PREFIX}:{nonce}:a"},
-            {"text": "Deny", "callback_data": f"{CALLBACK_PREFIX}:{nonce}:d"}]]}
+        mac_only = bool(event.get("mac_only"))
+        text = (f"This needs your approval on your Mac (HUD or voice) — it can't be approved from here.\n{summary}"
+                f"\n\nIt expires in {minutes} min." if mac_only
+                else f"Confirmation needed:\n{summary}\n\nThis expires in {minutes} min.")
+        buttons = [{"text": "Deny", "callback_data": f"{CALLBACK_PREFIX}:{nonce}:d"}]
+        if not mac_only:                       # no Approve button for an outbound action: that is the Mac's call
+            buttons.insert(0, {"text": "Approve", "callback_data": f"{CALLBACK_PREFIX}:{nonce}:a"})
+        markup = {"inline_keyboard": [buttons]}
         message_id = await self._send(uid, text, markup)
         if message_id:
             self._cards[nonce] = _Card(uid, message_id, text)
@@ -644,6 +648,8 @@ class TelegramChannel:
             status = await self.gateway.confirm(res.request_id, approved, CHANNEL, str(uid))
         except (GatewayUnavailable, GatewayRefused):
             return await self._toast(cq_id, "I couldn't reach Vesper's core — try again.")
+        if status == "needs_mac":
+            return await self._toast(cq_id, "Approve this on your Mac.")
         verdict = "Approved" if approved else "Denied"
         if status == "unknown":
             verdict = "Expired"

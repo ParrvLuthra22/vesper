@@ -22,13 +22,16 @@ gate or execute them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Dict, List, Optional
+from typing import Tuple, Any, Awaitable, Callable, Dict, List, Optional
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-VALID_TIERS = ("safe", "confirm", "dangerous")
+#: "draft" is a tier of its own: the tool only PREPARES something in an external account (an email draft) — nothing
+#: reaches anyone. It always needs an explicit approval (like confirm), the approval must come from a local surface when
+#: the request arrived over a remote channel, and the tainted-input rule raises it to "confirm" (never to "dangerous").
+VALID_TIERS = ("safe", "draft", "confirm", "dangerous")
 
 ToolHandler = Callable[..., Awaitable[Any]]
 
@@ -63,12 +66,23 @@ class ToolSpec:
     #: user did not supply are "tainted" and the Guardian bumps them up a tier
     #: (see guardian/gate.py, "Tainted-input rule").
     untrusted_output: bool = False
+    #: True if running this tool would DELIVER content to another person (send an email or message, post
+    #: somewhere). Such a tool can never be "safe" tier, and when a turn that arrived over a non-local
+    #: channel (Telegram, Discord...) raises it, the Guardian will only accept an APPROVAL from a local
+    #: surface (HUD, voice, CLI) — never from the remote channel itself. See guardian/gate.py.
+    outbound: bool = False
+    #: Argument names that hold recipient addresses. If any value is not something the user said this turn (it came
+    #: from an email, a thread, a chat message), the call is treated as tainted: the Guardian raises its tier one rung.
+    recipient_args: Tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.tier not in VALID_TIERS:
             raise ValueError(
                 f"Invalid tier {self.tier!r} for tool {self.name!r}; must be one of {VALID_TIERS}"
             )
+
+        if self.outbound and self.tier == "safe":
+            raise ValueError(f"Tool {self.name!r} delivers content to other people and cannot be 'safe' tier")
 
         has_handler = self.handler is not None
         has_bus_route = bool(self.target_agent) and bool(self.action)

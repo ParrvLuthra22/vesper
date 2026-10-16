@@ -122,7 +122,8 @@ class ChannelTurnService:
             # Only this turn's own confirmations: same channel AND same user.
             if event.channel == msg.channel and event.channel_user == msg.user_id:
                 queue.put_nowait({"type": "confirm", "request_id": event.request_id,
-                                  "summary": event.summary, "tool_name": event.tool_name})
+                                  "summary": event.summary, "tool_name": event.tool_name,
+                                  "mac_only": bool(getattr(event, "mac_only", False))})
 
         async def run() -> None:
             try:
@@ -161,8 +162,9 @@ class ChannelTurnService:
 
     # ------------------------------------------------------------- confirmations
     async def confirm(self, request_id: str, approved: bool, channel: str, user_id: str) -> str:
-        """"ok" | "unknown" | "forbidden". A confirmation may only be answered by the channel and user it
-        was raised for."""
+        """"ok" | "unknown" | "forbidden" | "needs_mac". A confirmation may only be answered by the channel and user
+        it was raised for. Approving something that delivers content to another person is refused here ("needs_mac")
+        and again by the Guardian; denying is always allowed."""
         self.authorize(channel, user_id)
         owner = self._guardian.pending_channel(request_id) if self._guardian is not None else None
         if owner is None:
@@ -171,6 +173,10 @@ class ChannelTurnService:
             self._audit("callback_rejected", {"reason": "confirmation belongs to another channel or user",
                                               "request_id": request_id}, channel, user_id)
             return "forbidden"
+        if approved and self._guardian is not None and self._guardian.pending_mac_only(request_id):
+            self._audit("approval_needs_mac", {"request_id": request_id, "reason": "outbound action: approve on the Mac"},
+                        channel, user_id)
+            return "needs_mac"
         await self._bus.emit(ConfirmationResponseEvent(
             request_id=request_id, approved=bool(approved), source=f"{channel}:{user_id}"))
         return "ok"

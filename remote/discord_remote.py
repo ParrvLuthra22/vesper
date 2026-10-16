@@ -154,13 +154,17 @@ class DiscordRemote:
         if self._active_turns <= 0:
             return
         short = event.request_id[:SHORT_ID_LEN]
+        mac_only = bool(getattr(event, "mac_only", False))
         prompt = (
             f"Confirmation required (id: {short})\n{event.summary}\n\n"
-            f"Reply `{short}` or react ✅ to approve; reply `no` to cancel. "
-            "A plain 'yes' will not approve it."
+            + ("This sends content to another person, so it can only be approved on your Mac (HUD or voice). "
+               "Reply `no` to cancel it."
+               if mac_only else
+               f"Reply `{short}` or react ✅ to approve; reply `no` to cancel. A plain 'yes' will not approve it.")
         )
         prompt_msg_id = await self._transport.send(self._channel, prompt)
-        self._pending[event.request_id] = {"summary": event.summary, "prompt_msg_id": str(prompt_msg_id or "")}
+        self._pending[event.request_id] = {"summary": event.summary, "prompt_msg_id": str(prompt_msg_id or ""),
+                                           "mac_only": "1" if mac_only else ""}
 
     async def _handle_approval_reply(self, msg: IncomingMessage) -> None:
         if msg.is_reaction:
@@ -209,6 +213,9 @@ class DiscordRemote:
         return None
 
     async def _resolve(self, request_id: str, approved: bool) -> None:
+        if approved and (self._pending.get(request_id) or {}).get("mac_only"):
+            await self._transport.send(self._channel, "That one can only be approved on your Mac, Sir.")
+            return                       # stays pending until the Mac approves, someone says no, or it expires
         self._pending.pop(request_id, None)
         await self._event_bus.emit(
             ConfirmationResponseEvent(request_id=request_id, approved=approved, source="discord_remote")

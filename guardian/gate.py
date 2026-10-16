@@ -26,6 +26,24 @@ user did not say, the Planner marks the call tainted
 so a `safe` tool steered by an email still needs an explicit approval, with a
 summary that says why.
 
+Outbound-action rule (and the "draft" tier)
+-------------------------------------------
+A tool marked `outbound=True` would deliver content to another person (an email, a message, a post). When
+such a call is raised by a turn that arrived over a NON-LOCAL channel (Telegram, Discord, any adapter, or any
+restricted session policy), it is "Mac-only": the confirmation is shown on the remote channel as information,
+but an APPROVAL is accepted only from a local surface (`LOCAL_APPROVER_SOURCES`: the HUD via the gateway, the
+CLI, local voice). An approval from the remote channel itself is refused, audited
+(`channel:approval_needs_mac`) and the request stays pending for the real approver until it expires; a remote
+DENY is always honoured. Remote approval remains fine for local-only actions (reminders, git, files...). The
+`outbound` flag also forbids the "safe" tier, so a tool that delivers content can never skip confirmation.
+The "draft" tier (a tool that only PREPARES something, e.g. an email draft in Gmail) follows the same Mac-only
+rule for remote channels, always needs an explicit approval, and is raised to "confirm" — not "dangerous" — by the
+tainted-input rule (including the planner's recipient check: `ToolSpec.recipient_args`).
+
+Trust boundary: `ConfirmationResponseEvent.source` is set by the in-process component that emits it (the
+gateway stamps "gateway" only on its authenticated local /confirm endpoint and `"<channel>:<user>"` on
+/channel/confirm), so a channel adapter cannot claim to be local over HTTP.
+
 A turn starts tainted if it was handed untrusted text up front: a calendar-title
 observation (`ObservationEvent.untrusted`) or a retrieved memory flagged
 `tainted` (written by reflection from a tainted turn; a missing flag means
@@ -66,6 +84,9 @@ DEFAULT_AUDIT_LOG_PATH = Path("data/audit.jsonl")
 #: real audit trail.
 AUDIT_LOG_ENV_VAR = "VESPER_AUDIT_LOG"
 DEFAULT_CONFIRMATION_TIMEOUT_SECONDS = 120.0
+#: Sources that count as "approved on the Mac": the HUD / local clients through the authenticated gateway
+#: endpoint, the CLI, and local voice. Anything else (a channel adapter, a remote interface) is remote.
+LOCAL_APPROVER_SOURCES = frozenset({"gateway", "cli", "voice_agent", "voice", "hud"})
 
 
 @dataclass(frozen=True)
@@ -151,7 +172,10 @@ _TIER_ORDER = ("safe", "confirm", "dangerous")
 
 
 def bump_tier(tier: str) -> str:
-    """One rung up the tier ladder (dangerous stays dangerous)."""
+    """One rung up the tier ladder (dangerous stays dangerous). "draft" sits beside the ladder: one rung up from it is
+    "confirm" (a draft whose recipient came from untrusted content is a full confirmation, not a dangerous call)."""
+    if tier == "draft":
+        return "confirm"
     idx = _TIER_ORDER.index(tier)
     return _TIER_ORDER[min(idx + 1, len(_TIER_ORDER) - 1)]
 
@@ -188,6 +212,8 @@ class _PendingConfirmation:
     #: arrives later on another task, where the contextvars are no longer set.
     channel: str = LOCAL_CHANNEL
     channel_user: str = ""
+    #: outbound tool raised from a non-local channel: approvable only from LOCAL_APPROVER_SOURCES
+    mac_only: bool = False
 
 
 class Guardian:
@@ -243,6 +269,11 @@ class Guardian:
             return verdict
 
         summary = await self._render_summary(tool_spec, arguments)
+        mac_only = (bool(tool_spec.outbound) or tool_spec.tier == "draft") and audit_channel_name() != LOCAL_CHANNEL
+        if mac_only:
+            what = "delivers content to another person" if tool_spec.outbound else "writes into your mail account"
+            summary = (f"Requested from {audit_channel_name()} — this {what}, so it can only be "
+                       f"approved on your Mac.\n{summary}")
         if tainted:
             reason = (context or {}).get("taint_reason") or "external content"
             summary = (
@@ -265,6 +296,7 @@ class Guardian:
             tainted=tainted,
             channel=audit_channel_name(),
             channel_user=(current_channel().user_id if current_channel() is not None else ""),
+            mac_only=mac_only,
         )
 
         await self._event_bus.emit(
@@ -276,6 +308,7 @@ class Guardian:
                 source="Guardian",
                 channel=audit_channel_name(),
                 channel_user=(current_channel().user_id if current_channel() is not None else ""),
+                mac_only=mac_only,
             )
         )
 
@@ -288,6 +321,11 @@ class Guardian:
         if pending is None or pending.future.done():
             return None
         return pending.channel, pending.channel_user
+
+    def pending_mac_only(self, request_id: str) -> bool:
+        """True if the unresolved request can only be approved on the Mac (outbound + remote origin)."""
+        pending = self._pending.get(request_id)
+        return bool(pending is not None and not pending.future.done() and pending.mac_only)
 
     async def await_resolution(self, request_id: str) -> Verdict:
         """Wait for a pending confirmation to resolve (approved, denied, or expired).
@@ -337,9 +375,19 @@ class Guardian:
         if pending is None:
             return
 
-        pending.expiry_task.cancel()
         if pending.future.done():
             return
+        if event.approved and pending.mac_only and str(event.source) not in LOCAL_APPROVER_SOURCES:
+            # A remote channel tried to approve something that delivers content to another person. Refuse, keep the
+            # request pending for the real approver (the expiry timer is untouched), and leave a trail.
+            self.record_channel_event(
+                "approval_needs_mac",
+                {"request_id": event.request_id, "tool": pending.tool_name, "approver": str(event.source)[:80]},
+                channel=pending.channel, user_id=pending.channel_user)
+            logger.warning(f"[Guardian] refused remote approval of outbound tool '{pending.tool_name}' "
+                           f"from '{event.source}': approve on the Mac")
+            return
+        pending.expiry_task.cancel()
 
         outcome = VerdictType.ALLOW if event.approved else VerdictType.DENY
         reason = "approved by user" if event.approved else "denied by user"
@@ -354,7 +402,7 @@ class Guardian:
         who_approved: Optional[str],
     ) -> None:
         self._audit(pending.tool_name, pending.arguments, verdict, who_approved, tainted=pending.tainted,
-                    channel=pending.channel)
+                    channel=pending.channel, mac_only=pending.mac_only)
 
     def record_channel_event(self, event: str, detail: Dict[str, Any], channel: str, user_id: str = "") -> None:
         """Audit something a channel refused or noticed that never reached a tool call — a stale, reused or
@@ -380,6 +428,7 @@ class Guardian:
         who_approved: Optional[str],
         tainted: bool = False,
         channel: Optional[str] = None,
+        mac_only: bool = False,
     ) -> None:
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -391,6 +440,8 @@ class Guardian:
         }
         if tainted:
             entry["tainted_input"] = True
+        if mac_only:
+            entry["mac_only"] = True          # outbound tool raised from a non-local channel
         self._write_entry(entry)
 
     def _write_entry(self, entry: Dict[str, Any]) -> None:
