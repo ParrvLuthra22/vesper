@@ -15,6 +15,10 @@ Statements here are from reading the code and from config; I did **not** packet-
 | Weather location string | **Open-Meteo** | `current_weather` tool | no key; tool-level |
 | What the briefing engine collects: sender, subject and a ≤200-char snippet of **unread mail**, and calendar titles/times (never notes) | nowhere — a local SQLite file, `data/briefing.db` (git-ignored) | every ~10 min | `config/briefing.yaml` (`refresh.enabled: false` stops the timer) |
 | Of that, what the LLM sees: ≤600 tokens — at most 5 priority mail items (sender name, subject, 90-char preview), 3 meetings, counts | **Groq**, only when you ask for a briefing (the "good morning" fast path sends nothing — it is spoken from the cache) | on demand | – |
+| **Slack** (only with a user token configured — see [SLACK.md](SLACK.md)): for **unread DMs, group DMs and channel @mentions** — sender display name, a sanitised ≤160-char snippet, timestamp, channel id and (mentions) channel name; a hostile message stores **no** snippet | nowhere — the same local SQLite file, `data/briefing.db` | every ~10 min | `VESPER_SLACK_USER_TOKEN` / Keychain item `vesper-slack-user`; `slack.*` in `config/briefing.yaml` |
+| **What Slack sees** of that: API calls from this machine, authenticated as you, to `slack.com` — six read methods only (list your DMs, read their "last read" marker and new messages, look up a sender's name, search for messages that mention you). The search query contains your own user id. Nothing is written: no posts, reactions or read-marks, and senders are not told you looked. Slack's own logs (and your workspace admins) can see the app, its scopes and its API activity | **Slack** | every ~10 min | no token = no calls |
+| The Slack **user token** | stays on this machine (Keychain or env); sent only to `slack.com` as an `Authorization` header — never in a URL, never logged, never committed | – | `scrub()` masks token-shaped text in any error as a backstop |
+| Of the Slack data, what the LLM sees: counts ("3 unread DMs, 1 mention") and **at most 2 named items** (display name, 90-char preview), inside the ≤600-token block, quoted as data. Hostile text is withheld | **Groq**, only when you ask for a briefing (the "good morning" fast path sends nothing) | on demand | `builder.max_slack_items` |
 | Derived from your SENT mail: the **known-correspondent set**, i.e. recipient addresses and domains with message counts, from header addresses only (no body, subject or snippet) | nowhere; inside `data/briefing.db` (list it with `vesper briefing --known`) | refreshed daily | `collect.sent_days`, `collect.sent_max_messages` |
 | Your `--mark` feedback rules: a sender address or domain and an action, nothing else | nowhere; `data/briefing_rules.json` (plain JSON, git-ignored) | when you run `--mark` | `vesper briefing --rules` |
 | Memory text | nowhere — Chroma + SQLite on disk, embeddings computed locally (MiniLM) | – | – |
@@ -23,8 +27,8 @@ Statements here are from reading the code and from config; I did **not** packet-
 | Hugging Face Hub (model metadata) | **blocked** — the launcher sets `HF_HUB_OFFLINE=1` for its processes | – | `launcher.offline_models` (set false for a first-run model download) |
 
 Only if the matching keys are set (none are by default): Tavily (web search/research queries), OpenRouter
-(`WebSearchAgent` answer synthesis), Slack/Discord/GitHub/Notion/Spotify MCP servers (they talk to those
-services), the Discord remote (messages via Discord), the Telegram channel (messages via Telegram — see below).
+(`WebSearchAgent` answer synthesis), the Slack/Discord/GitHub/Notion/Spotify MCP servers (they talk to those
+services; the briefing's Slack collector above is separate and read-only), the Discord remote (messages via Discord), the Telegram channel (messages via Telegram — see below).
 
 ## Opt-in: LangSmith tracing (`tracing.langsmith_enabled: true` **and** `LANGSMITH_API_KEY`)
 

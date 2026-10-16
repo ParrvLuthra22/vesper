@@ -4,6 +4,8 @@ Deterministic scorer: 0-100 per item, no LLM, every point explained.
     mail      15 base + sender importance + reply signals + urgency words + freshness
               - newsletter / promo / mailing-list / noreply / automated signals
               (clamped to 0..mail_max_score so mail can never outrank an imminent meeting)
+    slack     unread DM / group DM from a person, @mention, thread reply to me; fresh bonus, then a decay
+              per day unread; bot/app messages penalised unless the sender is allowlisted
     calendar  100 if it starts within `imminent_hours` or is in progress (always top),
               60 later today, 45 tomorrow, +bonus for interview/exam-style titles
 
@@ -13,6 +15,7 @@ the reasons so `vesper briefing --explain` can show exactly why.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -97,6 +100,8 @@ def _is_vip(sender: str, cfg: BriefingConfig) -> Optional[str]:
 def score_item(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredItem:
     if item.source == "calendar":
         return _score_event(item, ctx, cfg)
+    if item.source == "slack":
+        return _score_slack(item, ctx, cfg)
     return _score_mail(item, ctx, cfg)
 
 
@@ -221,6 +226,60 @@ def _score_mail(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredI
 
     score = max(0.0, min(w.mail_max_score, sum(r.delta for r in reasons)))
     return ScoredItem(item, int(round(score)), reasons, bulk=bulk, suspicious=suspicious)
+
+
+# --------------------------------------------------------------------------- slack
+
+def _score_slack(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredItem:
+    """Unread Slack DMs / group DMs / @mentions. Every weight is in config/briefing.yaml (weights.slack_*)."""
+    from briefing.slack import hostile_text   # lazy: slack.py imports collectors, which import this package
+
+    w = cfg.weights
+    if not item.unread:
+        return ScoredItem(item, 0, [Reason("already read", 0)], excluded=True)
+    sig = item.signals or {}
+    kind = str(sig.get("kind") or "dm")
+    bot, allowlisted = bool(sig.get("bot")), bool(sig.get("allowlisted"))
+    reasons: List[Reason] = []
+
+    if bot and allowlisted:
+        reasons.append(Reason("allowlisted bot/app: penalty waived", 0))
+        if w.important_automated:
+            reasons.append(Reason("allowlisted bot/app (allowlist boost)", w.important_automated))
+    elif bot:
+        reasons.append(Reason("bot/app message", w.slack_bot_penalty))
+    elif kind in ("dm", "group_dm"):
+        reasons.append(Reason("DM from a person" if kind == "dm" else "group DM from a person", w.slack_dm_human))
+    if sig.get("mention") and kind != "dm":
+        reasons.append(Reason("@mention of you", w.slack_mention))
+    if sig.get("reply_to_me"):
+        reasons.append(Reason("reply to a message I wrote", w.slack_reply_to_mine))
+
+    # urgency words: the same list as mail, ignored for an un-allowlisted bot (a webhook shouting "urgent" earns nothing)
+    if not bot or allowlisted:
+        total, hits = 0.0, []
+        for word, weight in cfg.urgency_keywords.items():
+            if re.search(rf"(?<![\w]){re.escape(word)}(?![\w])", item.snippet or "", re.IGNORECASE):
+                total += weight; hits.append(word)
+        if hits:
+            reasons.append(Reason(f"urgency words ({', '.join(sorted(hits))})", min(total, w.urgency_total_cap)))
+
+    # age: a fresh bonus, then a decay that grows with every further day unread
+    if item.timestamp:
+        age_h = max(0.0, (ctx.now - item.timestamp) / 3600.0)
+        if age_h <= w.fresh_hours:
+            reasons.append(Reason(f"fresh ({age_h:.0f}h old)", w.fresh_bonus))
+        else:
+            steps = math.ceil((age_h - w.fresh_hours) / 24.0)
+            reasons.append(Reason(f"decaying: unread for {age_h / 24:.0f} days",
+                                  max(w.slack_decay_floor, w.slack_decay_per_day * steps)))
+
+    suspicious = bool(sig.get("hostile")) or hostile_text(item.snippet, item.sender)
+    if suspicious:
+        reasons.append(Reason("text reads like instructions to an AI", w.injection_suspected))
+
+    score = max(0.0, min(w.mail_max_score, sum(r.delta for r in reasons)))
+    return ScoredItem(item, int(round(score)), reasons, bulk=bot and not allowlisted, suspicious=suspicious)
 
 
 # ------------------------------------------------------------------------ calendar

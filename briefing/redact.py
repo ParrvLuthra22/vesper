@@ -82,6 +82,9 @@ _STATIC_REASONS = [
     r"known domain \(I've written to others there\)", r"reply in a thread I sent in", r"is a reply",
     r"fresh \(\d+h old\)", r"unread for \d+ days", r"text reads like instructions to an AI",
     r"title reads like instructions to an AI", r"no start time", r"already over",
+    r"DM from a person", r"group DM from a person", r"@mention of you", r"reply to a message I wrote",
+    r"bot/app message", r"allowlisted bot/app: penalty waived", r"allowlisted bot/app \(allowlist boost\)",
+    r"decaying: unread for \d+ days",
     r"all-day, today", r"all-day, tomorrow", r"beyond the briefing window", r"all-day event",
     r"in progress now", r"starts within [\d.]+h", r"later today", r"tomorrow", r"no signals",
 ]
@@ -192,6 +195,10 @@ class Redactor:
                 self._tokens.update(_WORD.findall(an))
         if not nn and not an:
             self._tokens.update(_WORD.findall(n))
+        if " " in n and "@" not in n and "<" not in n:
+            # A bare multi-word display name ("Alice Example", as Slack gives them). parseaddr keeps only its
+            # first word as an "address", so without this a lone surname would not be guarded.
+            self._tokens.update(_WORD.findall(n))
 
     # ----------------------------------------------------------- redacting
     def sender(self, raw: object) -> str:
@@ -199,6 +206,14 @@ class Redactor:
         self.seed_identity(raw)
         name, addr = parseaddr(str(raw or ""))
         return self._ph("sender", addr or name or str(raw or ""))
+
+    def person(self, name: object) -> str:
+        """A bare display name (Slack): one placeholder per full name — not per first word, which is all
+        parseaddr would keep — and every word of it guarded."""
+        n = _norm(name)
+        self._add_full(n)
+        self._tokens.update(_WORD.findall(n))
+        return self._ph("sender", n)
 
     def address(self, addr: object) -> str:
         return self.sender(addr)

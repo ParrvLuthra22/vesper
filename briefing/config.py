@@ -46,6 +46,13 @@ class Weights:
     meeting_tomorrow: float = 45
     meeting_keyword_bonus: float = 10
     all_day_event: float = -30
+    # Slack (see docs/SLACK.md). Added to the same 0..mail_max_score scale as mail.
+    slack_dm_human: float = 25
+    slack_mention: float = 20
+    slack_reply_to_mine: float = 10
+    slack_decay_per_day: float = -5
+    slack_decay_floor: float = -30
+    slack_bot_penalty: float = -30
 
 
 @dataclass
@@ -64,6 +71,17 @@ class BriefingConfig:
     sent_days: int = 365
     sent_max_messages: int = 500
     sent_refresh_hours: float = 24
+    # Slack collector: only runs when a user token is configured; otherwise it reports "not configured"
+    slack_token_env: str = "VESPER_SLACK_USER_TOKEN"
+    slack_token_keychain_service: str = "vesper-slack-user"
+    slack_lookback_days: float = 2
+    slack_max_conversations: int = 60
+    slack_max_messages: int = 30
+    slack_snippet_chars: int = 160
+    slack_mentions_via_search: bool = True
+    slack_max_mentions: int = 20
+    slack_muted_channels: List[str] = field(default_factory=list)
+    slack_allowlisted_senders: List[str] = field(default_factory=list)
     cache_path: str = "data/briefing.db"
     rules_path: str = "data/briefing_rules.json"
     # known correspondents
@@ -106,6 +124,7 @@ class BriefingConfig:
     # builder
     max_meetings: int = 3
     max_priority_mail: int = 5
+    max_slack_items: int = 2
     min_priority_score: float = 30
     token_cap: int = 600
     subject_chars: int = 70
@@ -150,10 +169,15 @@ def from_dict(data: Optional[Dict[str, Any]]) -> BriefingConfig:
                     "sent_days": "sent_days", "sent_max_messages": "sent_max_messages",
                     "sent_refresh_hours": "sent_refresh_hours", "cache_path": "cache_path",
                     "rules_path": "rules_path"})
+    put("slack", {"token_env": "slack_token_env", "token_keychain_service": "slack_token_keychain_service",
+                  "lookback_days": "slack_lookback_days", "max_conversations": "slack_max_conversations",
+                  "max_messages": "slack_max_messages", "snippet_chars": "slack_snippet_chars",
+                  "mentions_via_search": "slack_mentions_via_search", "max_mentions": "slack_max_mentions",
+                  "muted_channels": "slack_muted_channels", "allowlisted_senders": "slack_allowlisted_senders"})
     put("known", {"public_domains": "public_domains"})
     put("important_automated", {"domains": "important_domains", "patterns": "important_patterns"})
     put("vips", {"addresses": "vip_addresses", "domains": "vip_domains", "names": "vip_names"})
-    put("builder", {k: k for k in ("max_meetings", "max_priority_mail", "min_priority_score", "token_cap",
+    put("builder", {k: k for k in ("max_meetings", "max_priority_mail", "max_slack_items", "min_priority_score", "token_cap",
                                    "subject_chars", "sender_chars", "preview_chars")})
     put("speech", {"address_as": "address_as", "max_words": "max_words", "morning_until_hour": "morning_until_hour"})
     fp = _section(d, "fast_path")
@@ -183,6 +207,9 @@ def from_dict(data: Optional[Dict[str, Any]]) -> BriefingConfig:
     cfg.vip_addresses = [a.lower() for a in cfg.vip_addresses]
     cfg.vip_domains = [x.lower().lstrip("@") for x in cfg.vip_domains]
     cfg.vip_names = [n.lower() for n in cfg.vip_names]
+    cfg.slack_muted_channels = [str(x).strip().lower().lstrip("#") for x in cfg.slack_muted_channels if str(x).strip()]
+    cfg.slack_allowlisted_senders = [str(x).strip().lower().lstrip("@") for x in cfg.slack_allowlisted_senders
+                                     if str(x).strip()]
     return cfg
 
 

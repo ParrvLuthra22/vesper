@@ -26,6 +26,23 @@ collect:
   cache_path: "data/briefing.db"          # git-ignored
   rules_path: "data/briefing_rules.json"  # your --mark feedback; git-ignored, plain JSON
 
+# Slack (read-only; see docs/SLACK.md). The collector only runs when a USER token (xoxp-...) is available in
+# $VESPER_SLACK_USER_TOKEN or the macOS Keychain; with none, it reports "not configured" and the briefing has no
+# Slack section at all. Put your own muted channels / allowlist in config/briefing.local.yaml (git-ignored).
+slack:
+  token_env: VESPER_SLACK_USER_TOKEN
+  token_keychain_service: vesper-slack-user   # security add-generic-password -s vesper-slack-user -a user-token -w
+  lookback_days: 2              # first run only: how far back to look for unread messages
+  max_conversations: 60         # DMs + group DMs examined per run (Slack does not order them by activity)
+  max_messages: 30              # newest messages read per conversation per run
+  snippet_chars: 160            # HARD truncation at collection time (the briefing shows less)
+  mentions_via_search: true     # @mentions in channels via search.messages (needs the search:read scope); false = DMs only
+  max_mentions: 20              # mention hits read per run
+  # Slack's own "muted" flag is not exposed by the official API, so mute here: channel IDs (C0123...) or names.
+  muted_channels: []            # e.g. ["random", "C01234ABCDE"]
+  # Bot/app messages are penalised (weights.slack_bot_penalty) unless the sender is listed: user/bot IDs or display names.
+  allowlisted_senders: []       # e.g. ["Github", "U01234ABCDE"]
+
 # People who matter. Matching is case-insensitive. EMPTY by default — fill it in.
 vips:
   addresses: []                 # e.g. ["priya@example.com"]
@@ -96,6 +113,14 @@ weights:
   meeting_tomorrow: 45          # tomorrow
   meeting_keyword_bonus: 10     # title contains one of meeting_keywords
   all_day_event: -30            # all-day items (birthdays, holidays) are never "imminent"; they sit lower
+  # ---- Slack (unread only; clamped to 0..mail_max_score; fresh_bonus / fresh_hours / injection_suspected /
+  #      urgency_keywords from above apply too) ----
+  slack_dm_human: 25            # a DM or group DM from a human (not a bot/app) — the base for Slack
+  slack_mention: 20             # an @mention of me in a channel (or in a group DM)
+  slack_reply_to_mine: 10       # a thread reply to a message I wrote (only visible when Slack sends it: see docs/SLACK.md)
+  slack_decay_per_day: -5       # unread longer than fresh_hours: this much per extra full day ...
+  slack_decay_floor: -30        # ... down to at most this
+  slack_bot_penalty: -30        # bot/app messages, unless the sender is in slack.allowlisted_senders
 
 # Words that raise a mail item's score (matched as whole words in subject + snippet,
 # each counted once). Ignored for bulk mail ("URGENT: 50% off!" earns nothing).
@@ -138,6 +163,7 @@ patterns:
 builder:
   max_meetings: 3               # meetings listed (imminent first, then later today, then tomorrow)
   max_priority_mail: 5          # priority mail items listed
+  max_slack_items: 2            # Slack items NAMED (the rest are only counted: "Slack: N unread DMs, M mentions")
   min_priority_score: 30        # unread mail below this is "everything else" (a count)
   token_cap: 600                # HARD cap on the context handed to the planner (estimate_tokens)
   subject_chars: 70
