@@ -167,13 +167,17 @@ urgency_keywords:
 
 # Strong urgency: if the subject or snippet contains one of these, the combined bulk penalties
 # (noreply + newsletter + promo + list header + auto) are capped at weights.strong_urgency_bulk_cap,
-# and the urgency words apply even though the mail is automated. A deadline notice from a
-# no-reply portal should not score 0.
+# and the urgency words apply even though the mail is automated. This override is deliberately narrow:
+#   * it applies to mail from someone I have WRITTEN TO (the known-correspondent set), and
+#   * it NEVER applies to a mailing-list mail (List-Unsubscribe, List-Id, Precedence: bulk/list/junk) or to anything
+#     Gmail filed under Promotions or Social.
+# A no-reply PORTAL that matters (college, hackathon platform, payment provider) belongs in important_automated: its
+# penalties are then waived outright, which also lets these words count. A newsletter that says "deadline" stays out.
 strong_urgency: [deadline, evaluation, shortlisted, submission, interview, payment failed, action required, expires]
 # ...except these when the mail ALSO reads like a promotion ("coupon expires tonight").
 strong_urgency_ignored_for_promo: [expires]
-# Gmail's own Promotions/Social category beats a keyword: such mail never gets the cap. (Measured on the real
-# inbox: its only "action required" item was a Gmail-Promotions mail with an unsubscribe header.)
+# Legacy switch, kept so old config files still load. Gmail Promotions/Social is now ALWAYS excluded from the override
+# whatever this says.
 strong_urgency_respects_gmail_promotions: true
 
 meeting_keywords: [interview, exam, offer, deadline, review, demo, presentation]

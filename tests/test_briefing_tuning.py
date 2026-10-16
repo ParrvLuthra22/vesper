@@ -202,8 +202,19 @@ def test_urgency_words_apply_to_allowlisted_automated_mail():
 
 
 # ================================================================ strong-urgency override
+#
+# The override (cap the combined bulk penalties, let urgency words count) is for mail from SOMEONE I HAVE WRITTEN TO, and
+# never for a mailing-list mail (List-Unsubscribe / List-Id / Precedence: bulk) or anything Gmail filed under Promotions or
+# Social. An allowlisted portal does not need it: its penalties are waived outright.
 
 PEN_ALL = dict(sender="Portal <noreply@portal.com>", signals={"has_list_unsubscribe": True})     # noreply -25, list -20
+# A known correspondent whose mail still carries two bulk penalties but is NOT a mailing-list mail: noreply -25, auto -15.
+PEN_KNOWN = dict(sender="Portal <noreply@portal.com>", signals={"auto_submitted": "auto-generated"})
+KNOWN = {"noreply@portal.com"}
+
+
+def kctx() -> ScoringContext:
+    return ScoringContext(now=NOW, sent_recipients=set(KNOWN))
 
 
 @pytest.mark.parametrize("label,kwargs,capped", [
@@ -216,27 +227,71 @@ PEN_ALL = dict(sender="Portal <noreply@portal.com>", signals={"has_list_unsubscr
     ("no strong term", dict(subject="Your monthly statement"), False),
     ("weak urgency word only", dict(subject="Report due tomorrow"), False),
 ])
-def test_strong_urgency_caps_combined_bulk_penalties_at_minus_ten(label, kwargs, capped):
-    s = score_item(mail(**{**PEN_ALL, **kwargs}), ctx(), cfg())
-    penalties = sum(r.delta for r in s.reasons if r.label in ("noreply sender", "mailing-list header"))
+def test_strong_urgency_caps_combined_bulk_penalties_at_minus_ten_for_a_known_correspondent(label, kwargs, capped):
+    s = score_item(mail(**{**PEN_KNOWN, **kwargs}), kctx(), cfg())
+    penalties = sum(r.delta for r in s.reasons if r.label in ("noreply sender", "auto-submitted"))
     capture = [r for r in s.reasons if r.label.startswith("strong urgency")]
-    assert penalties == -45
+    assert penalties == -40
     if capped:
         assert capture and penalties + capture[0].delta == -10, label           # net bulk effect is exactly -10
         assert not s.bulk and "urgency words" in reasons(s)
     else:
-        assert not capture and s.bulk and s.score == 0, label
+        assert not capture and s.bulk and s.score < cfg().min_priority_score, label
+
+
+@pytest.mark.parametrize("who,item_kw,context", [
+    ("an unknown sender (a no-reply portal I never wrote to)", dict(**PEN_KNOWN), ctx),
+    ("a known sender, but the mail has a List-Unsubscribe header", dict(**PEN_ALL), kctx),
+    ("a known sender, but the mail has a List-Id", dict(sender="Portal <noreply@portal.com>", signals={"list_id": "<l.portal.com>"}), kctx),
+    ("a known sender, but Precedence: bulk", dict(sender="Portal <noreply@portal.com>", signals={"precedence": "bulk"}), kctx),
+    ("a known sender, but Gmail says Promotions", dict(**PEN_KNOWN, ), kctx),
+    ("a known sender, but Gmail says Social", dict(**PEN_KNOWN), kctx),
+])
+def test_the_override_never_applies_to_strangers_list_mail_or_gmail_promotions(who, item_kw, context):
+    kw = dict(item_kw)
+    kw["subject"] = "Submission deadline today"
+    if "Promotions" in who:
+        kw["signals"] = {**kw["signals"], "labels": ["CATEGORY_PROMOTIONS"]}
+    if "Social" in who:
+        kw["signals"] = {**kw["signals"], "labels": ["CATEGORY_SOCIAL"]}
+    s = score_item(mail(**kw), context(), cfg())
+    assert not [r for r in s.reasons if r.label.startswith("strong urgency")], (who, reasons(s))
+    assert s.bulk and s.score < cfg().min_priority_score, (who, s.score, reasons(s))
+
+
+def test_a_newsletter_with_deadline_in_the_subject_stays_below_the_threshold():
+    news = mail(subject="Weekly digest: submission deadline extended", sender="Digest <digest@news.io>",
+                signals={"has_list_unsubscribe": True, "list_id": "<d.news.io>", "labels": ["CATEGORY_UPDATES"]})
+    for c in (ctx(), ScoringContext(now=NOW, sent_recipients={"digest@news.io"})):          # even if I once wrote to it
+        s = score_item(news, c, cfg())
+        assert s.score < cfg().min_priority_score and s.bulk, reasons(s)
+
+
+def test_an_allowlisted_portal_notice_with_the_same_word_still_surfaces():
+    notice = mail(subject="Submission deadline today", sender="Portal <noreply@portal.edu>",
+                  signals={"has_list_unsubscribe": True})
+    stranger = score_item(notice, ctx(), cfg())
+    allowed = score_item(notice, ctx(), cfg(**ALLOW))
+    assert stranger.score < cfg().min_priority_score
+    assert allowed.score >= cfg().min_priority_score and "important automated sender" in reasons(allowed)
+    assert "urgency words" in reasons(allowed)
+
+
+def test_a_known_correspondent_with_urgent_still_surfaces():
+    s = score_item(mail(subject="urgent: can you look at this today", sender="Pat Person <pat@example.com>"),
+                   ScoringContext(now=NOW, sent_recipients={"pat@example.com"}), cfg())
+    assert s.score >= cfg().min_priority_score and "known correspondent" in reasons(s) and "urgency words" in reasons(s)
 
 
 def test_cap_is_a_cap_not_a_floor_when_penalties_are_already_small():
-    c = cfg(weights={"noreply_sender": -4, "mailing_list_header": -3})
-    s = score_item(mail(**{**PEN_ALL, "subject": "Deadline today"}), ctx(), c)
+    c = cfg(weights={"noreply_sender": -4, "auto_submitted": -3})
+    s = score_item(mail(**{**PEN_KNOWN, "subject": "Deadline today"}), kctx(), c)
     assert not [r for r in s.reasons if r.label.startswith("strong urgency")]    # -7 is already above -10
 
 
 def test_cap_value_is_configurable():
-    s = score_item(mail(**{**PEN_ALL, "subject": "Deadline today"}), ctx(), cfg(weights={"strong_urgency_bulk_cap": -20}))
-    assert sum(r.delta for r in s.reasons if r.label in ("noreply sender", "mailing-list header", "strong urgency (deadline): bulk penalties capped at -20")) == -20
+    s = score_item(mail(**{**PEN_KNOWN, "subject": "Deadline today"}), kctx(), cfg(weights={"strong_urgency_bulk_cap": -20}))
+    assert sum(r.delta for r in s.reasons if r.label in ("noreply sender", "auto-submitted", "strong urgency (deadline): bulk penalties capped at -20")) == -20
 
 
 @pytest.mark.parametrize("label,kwargs,lifted", [
@@ -248,15 +303,18 @@ def test_cap_value_is_configurable():
     ("Gmail Updates label + 'deadline'", dict(subject="Deadline reminder", signals={"labels": ["CATEGORY_UPDATES"]}), True),
 ])
 def test_promotions_do_not_get_the_override(label, kwargs, lifted):
-    s = score_item(mail(**{**PEN_ALL, **kwargs}), ctx(), cfg())
+    kw = {**PEN_KNOWN, **kwargs}
+    kw["signals"] = {**PEN_KNOWN["signals"], **kwargs.get("signals", {})}
+    s = score_item(mail(**kw), kctx(), cfg())
     assert bool([r for r in s.reasons if r.label.startswith("strong urgency")]) is lifted, (label, reasons(s))
 
 
-def test_gmail_promotions_respect_can_be_turned_off():
-    kw = {**PEN_ALL, "subject": "Action required: complete your profile", "signals": {"labels": ["CATEGORY_PROMOTIONS"]}}
-    assert not [r for r in score_item(mail(**kw), ctx(), cfg()).reasons if r.label.startswith("strong urgency")]
-    off = cfg(strong_urgency_respects_gmail_promotions=False)
-    assert [r for r in score_item(mail(**kw), ctx(), off).reasons if r.label.startswith("strong urgency")]
+def test_gmail_promotions_are_excluded_whatever_the_legacy_flag_says():
+    """strong_urgency_respects_gmail_promotions used to relax this; the exclusion is now unconditional."""
+    kw = {**PEN_KNOWN, "subject": "Action required: complete your profile", "signals": {**PEN_KNOWN["signals"], "labels": ["CATEGORY_PROMOTIONS"]}}
+    for flag in (True, False):
+        s = score_item(mail(**kw), kctx(), cfg(strong_urgency_respects_gmail_promotions=flag))
+        assert not [r for r in s.reasons if r.label.startswith("strong urgency")], flag
 
 
 @pytest.mark.parametrize("subject,age_h,surfaces", [
@@ -264,11 +322,12 @@ def test_gmail_promotions_respect_can_be_turned_off():
     ("Interview scheduled for Monday", 50, True),
     ("Submission deadline: evaluation round", 50, True),
     ("Action required on your account", 2, True),               # fresh
-    ("Action required on your account", 50, False),             # weaker term, stale
-    ("Your monthly statement", 2, False),
+    ("Action required on your account", 50, True),              # a known correspondent keeps its +25 even when stale
+    ("Your monthly statement", 2, False),                       # no strong term: stays bulk
+    ("Your monthly statement", 50, False),
 ])
-def test_strongly_urgent_automated_mail_reaches_the_priority_bar(subject, age_h, surfaces):
-    s = score_item(mail(**{**PEN_ALL, "subject": subject, "age_h": age_h}), ctx(), cfg())
+def test_strongly_urgent_mail_from_a_known_correspondent_reaches_the_priority_bar(subject, age_h, surfaces):
+    s = score_item(mail(**{**PEN_KNOWN, "subject": subject, "age_h": age_h}), kctx(), cfg())
     assert (s.score >= cfg().min_priority_score) is surfaces, (subject, s.score, reasons(s))
 
 
@@ -489,16 +548,17 @@ def _subjects(b) -> List[str]:
     return [s.item.title for s in b.priority]
 
 
-def test_calibration_default_config_surfaces_the_human_and_the_strongly_urgent_and_keeps_bulk_out():
+def test_calibration_default_config_surfaces_the_human_only_and_keeps_all_bulk_out():
     b, c = _build(_inbox_like_the_real_one())
     got = _subjects(b)
     assert got[0] == "Re: project meeting"                                    # the human reply, a known sender, first
-    assert "Final submission deadline Friday" in got and "Payment failed for your subscription" in got
-    assert len(got) == 3
+    # Without an allowlist, a no-reply portal I never wrote to does not get the strong-urgency override any more
+    assert "Final submission deadline Friday" not in got and "Payment failed for your subscription" not in got
+    assert len(got) == 1
     assert not any("#" in t for t in got)                                      # none of the 45 bulk items
     assert "Action required: complete your profile" not in got                 # Gmail-Promotions: no override
     assert "[repo] new comment on your pull request" not in got                # allowlist is off by default
-    assert b.other_count == len(_inbox_like_the_real_one()) - 3
+    assert b.other_count == len(_inbox_like_the_real_one()) - 1
 
 
 def test_calibration_with_the_allowlist_a_plain_notification_stays_out_but_an_urgent_one_gets_in():

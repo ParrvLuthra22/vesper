@@ -162,9 +162,15 @@ def _score_mail(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredI
     waived_by = ("important automated sender (allowlist)" if important
                  else "your rule: priority sender" if rule is not None and rule.action == "priority" else None)
     strong = _strong_hits(text, cfg, promo)
+    # The strong-urgency override (cap the bulk penalties, let urgency words count) is a privilege of mail from someone
+    # I have written to — and NEVER of a mailing-list mail (List-Unsubscribe / List-Id) or anything Gmail filed under
+    # Promotions or Social. An allowlisted sender does not need it: its penalties are waived outright (waived_by).
+    known_sender = bool(addr and addr in ctx.sent_recipients)
+    list_mail = bool(sig.get("has_list_unsubscribe") or sig.get("list_id")
+                     or str(sig.get("precedence", "")) in _BULK_PRECEDENCE)        # anything that earns "mailing-list header"
     gmail_says_promo = bool(labels & _CATEGORY_PROMO)
-    if strong and gmail_says_promo and cfg.strong_urgency_respects_gmail_promotions and not waived_by:
-        strong = []          # Gmail itself filed it as marketing: a keyword does not lift it
+    if strong and not waived_by and (not known_sender or list_mail or gmail_says_promo):
+        strong = []
     bulk = False
     if penalties:
         if waived_by:
