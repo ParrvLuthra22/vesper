@@ -65,6 +65,8 @@ from sensors.focus_sensor import FocusSensor
 from sensors.inbox_sensor import InboxSensor
 from tasks.queue import TaskQueue
 from tools.mcp_bridge import MCPBridge
+from router import build_router
+from router.runner import SkillRunner
 from tools import gmail_draft
 from tools.registry import ToolSpec, get_registry
 from tracing.tracer import Tracer
@@ -432,6 +434,17 @@ class Brain:
             task_queue=self._task_queue,
             config=self._config,
         )
+
+        # Deterministic skill router: the common commands ("what time is it", "open Safari", "volume up") are answered
+        # without the LLM; anything unmatched or ambiguous falls through to the planner untouched. Off with
+        # router.enabled: false. Every skill still goes through the Guardian (router/runner.py, docs/ROUTER.md).
+        router_cfg = self._config.get("router", {}) or {}
+        self._skill_runner: Optional[SkillRunner] = None
+        if router_cfg.get("enabled", True):
+            self._skill_runner = SkillRunner(
+                build_router(disabled=router_cfg.get("disabled_skills", []) or []),
+                get_registry(), self._guardian, self._planner.run_approved_tool,
+                address_as=str((self._config.get("briefing", {}) or {}).get("address_as", "Sir")))
 
         # MCP bridge (P07): connects to configured MCP servers (Gmail, ...)
         # and auto-registers their tools into the ToolRegistry.
@@ -1240,6 +1253,12 @@ class Brain:
         if self._briefing is not None and is_briefing_request(text, self._briefing.cfg):
             return await self._answer_briefing_from_cache(text, correlation_id, on_token, speak=speak)
 
+        # Deterministic skills (docs/ROUTER.md): never for turns that carry third-party text (a forwarded message).
+        if self._skill_runner is not None and not input_taint:
+            routed = await self._answer_with_skill(text, correlation_id, on_token, speak)
+            if routed is not None:
+                return routed
+
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
         observations_untrusted = self._context.pending_observations_untrusted()
@@ -1281,6 +1300,35 @@ class Brain:
                 correlation_id=correlation_id,
             ))
 
+        return result
+
+    async def _answer_with_skill(self, text: str, correlation_id: Optional[UUID],
+                                 on_token: Optional[Callable[[str], None]], speak: bool) -> Optional[PlannerResult]:
+        """Try the deterministic skill router. Same bookkeeping as a planner turn, minus the LLM. None = not handled."""
+        assert self._skill_runner is not None
+        self._skill_runner._briefing = self._briefing
+        try:
+            outcome = await self._skill_runner.try_handle(text)
+        except Exception as exc:          # the router must never be able to break a turn
+            logger.warning(f"Skill router error; falling through to the planner: {exc}")
+            return None
+        if outcome is None:
+            return None
+        self._context.add_turn(user_input=text)
+        await self._event_bus.emit(ContextUpdatedEvent(
+            context_type="turn", context_key="user_input", context_value=text,
+            turn_number=self._context.turn_count, source="Brain",
+        ))
+        if on_token is not None:
+            try:
+                on_token(outcome.text)
+            except Exception:
+                pass
+        result = PlannerResult(text=outcome.text, tool_trace=[f"router:{outcome.skill}"], tainted=outcome.tainted)
+        self._context.consume_observations()
+        self._context.update_last_response(result.text, action=f"router:{outcome.skill}", tainted=outcome.tainted)
+        if speak:
+            await self._event_bus.emit(VoiceOutputEvent(text=result.text, source="Brain", correlation_id=correlation_id))
         return result
 
     async def _answer_briefing_from_cache(

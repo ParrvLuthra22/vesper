@@ -30,6 +30,7 @@ include = [
     "orchestrator*",
     "plugins*",
     "proactive*",
+    "router*",
     "rag*",
     "schemas*",
     "sensors*",

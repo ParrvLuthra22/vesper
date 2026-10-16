@@ -448,6 +448,12 @@ def run() -> None:
 
         sys.exit(launcher_main(sys.argv[1:]))
 
+    # `vesper route "<utterance>"` — which deterministic skill would answer it, and why (runs nothing).
+    if len(sys.argv) > 1 and sys.argv[1] == "route":
+        from router.cli import main as route_main
+
+        sys.exit(route_main(sys.argv[2:]))
+
     # `vesper briefing [--explain]` — inspect the briefing engine (read-only).
     if len(sys.argv) > 1 and sys.argv[1] == "briefing":
         from briefing.cli import main as briefing_main

@@ -544,6 +544,10 @@ class Planner:
             )
         )
 
+    async def run_approved_tool(self, tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
+        """Execute a tool the CALLER has already put through the Guardian (the deterministic skill router does)."""
+        return await self._run_tool(tool_spec, arguments)
+
     async def _run_tool(self, tool_spec: ToolSpec, arguments: Dict[str, Any]) -> str:
         if tool_spec.slow:
             return await self._run_slow_tool(tool_spec, arguments)

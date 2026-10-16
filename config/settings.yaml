@@ -898,6 +898,15 @@ tracing:
 # server needs only a new entry here (command/args/tiers/slow_tools) — no
 # bridge code changes.
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Deterministic skill router (router/, docs/ROUTER.md): "what time is it", "open Safari", "volume up", "aaj ka schedule
+# batao" are answered with no LLM call. Anything unmatched or ambiguous falls through to the planner untouched, and every
+# skill still goes through the Guardian. `vesper route "<utterance>"` explains a decision.
+# -----------------------------------------------------------------------------
+router:
+  enabled: true
+  disabled_skills: []        # e.g. [close_app, volume_step]
+
 mcp:
   servers:
     gmail:
