@@ -8,6 +8,7 @@ The component logs are written for debugging, and several line shapes carry what
     Observation: kind=meeting_soon detail='<calendar text>'
     [VoiceAgent] Received VoiceOutputEvent: '<text>' from Brain
     heard: <transcript>  /  transcript=<...>  /  user_text=<...>
+    voice transcribing -> injected (<transcript>)        (the voice pipeline's own state-change line)
 
 Rules (fail closed, mirroring `--redact` for the briefing):
 
@@ -46,6 +47,8 @@ _FIELD = re.compile(
     r"message|reply|said|query|prompt|content|title|context_value)(?P<sep>\s*=\s*)(?P<val>" + _QUOTED + r"|\S.*)$")
 _AFTER_VERB = re.compile(
     r"(?i)(?P<pre>\b(?:heard|transcript|transcription|transcribed|said|speaking|saying|utterance|you said|user said)\s*[:\-]\s*)(?P<val>.+)$")
+#: The voice pipeline logs what it heard as the detail of its "injected" transition: "voice transcribing -> injected (<text>)".
+_TRANSITION = re.compile(r"(?P<pre>\bvoice \w+ -> injected \()(?P<val>.*)\)\s*$")
 _RECEIVED = re.compile(r"(?P<pre>Received \w*Event:\s*)(?P<val>" + _QUOTED + r")")
 
 
@@ -88,6 +91,7 @@ def redact_line(line: str, ph: Placeholders) -> Tuple[str, bool]:
     """(line with transcripts / message text replaced, whether anything was replaced)."""
     original = line
     line = _PAYLOAD.sub(lambda m: _redact_payload(m, ph), line)
+    line = _TRANSITION.sub(lambda m: m.group("pre") + ph(m.group("val")) + ")", line)
     line = _RECEIVED.sub(lambda m: m.group("pre") + ph(m.group("val")), line)
     line = _FIELD.sub(lambda m: f"{m.group('k')}{m.group('sep')}{ph(m.group('val'))}", line)
     line = _AFTER_VERB.sub(lambda m: m.group("pre") + ph(m.group("val")), line)

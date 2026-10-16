@@ -43,6 +43,27 @@ generated per run (or taken from `VESPER_GATEWAY_TOKEN`) and handed to every chi
 * Refuses to start if a supervisor is already running, or if the gateway port is already in use.
 * Config: the `launcher:` block in `config/settings.yaml` (components on/off, backoff, timeouts, HUD binary path).
 
+## Which microphone voice input listens to, and how to check it
+
+Voice input is **pinned**: `voice.input.device` (default `"builtin"`) is resolved explicitly at startup to the MacBook's own
+microphone — matched by CoreAudio transport type when readable and by name (`MacBook Pro Microphone`, `MacBook Air
+Microphone`, `Built-in Microphone` and the localized forms) — never by "whatever macOS has as default" (AirPods, a virtual
+device...). You can instead give an exact device name, a sounddevice index, or `"default"` (only if you ask for it). If the
+chosen mic is missing, voice input logs the input devices it found (names only) and exits **69**, the permanent-failure
+code, so the launcher reports it once instead of restarting; it never falls back silently. The startup line logs the chosen
+device's name, index and native rate. A mic that only offers 44.1/48 kHz is opened at that rate and converted to the 16 kHz
+mono the wake word and Whisper need (an unconverted stream would be slowed 3x with no error).
+
+* `vesper mic-test` — 10 s on the pinned device: level bar (RMS/peak), wake score every 0.5 s with the max so far, then
+  `no signal` / `signal but wake word never above threshold` / `wake word fired`. Records nothing, no speech-to-text,
+  sends nothing. Exit 3 = no signal, 69 = device unavailable.
+* `vesper doctor` — shows which input device voice input would use (name only), **WARN** if the system default input is not
+  the built-in mic (voice input is unaffected, other apps are), **FAIL** if the built-in mic is not found.
+* Sensitivity: `voice.wake.threshold` (default 0.5, unchanged). Lower = hears you more easily and mis-fires more. Voice
+  input logs the max wake score per 10 s window at DEBUG (scores only, no audio) so you can tune it from real use.
+* `vesper logs voice_input --tail 40 --redact-transcripts` — the log with what you said replaced by `<text:N>` (the
+  pipeline logs the transcript on its `injected` line).
+
 ## Pasting logs safely: `vesper logs <component> --tail N --redact-transcripts`
 
 Component logs can contain what you said ("Payload: {'text': '…'}" on a voice event) and what was said back. With
@@ -71,6 +92,7 @@ It sends nothing and exits 1 only on FAIL. The full end-to-end checklist is [LIV
 5. **First reply after boot**: confirm it is actually spoken (a cold Kokoro load once crashed and lost it; see RESOURCES.md).
 6. **Crash recovery**: in your own terminal run `kill -9 $(pgrep -f "voice.output")` (the process is `python -m voice.output`; `vesper status` shows the component as `voice_output`, so `pkill -f voice_output` matches nothing) → restarted within ~1–2 s, `RESTARTS` goes to 1, next reply spoken.
    Repeat with the HUD and with voice input. `kill -9` the **gateway** → it restarts; HUD/voice reconnect on their own.
+6b. **Which microphone**: `vesper mic-test` first (see above), then check the `Voice input starting | … mic=<name> (index N, native R Hz)` line in `vesper logs voice_input` names the built-in mic.
 7. **Microphone denied**: revoke Microphone for your terminal, `vesper up` → voice input FAILED with a clear hint,
    everything else still up, no restart loop.
 8. **Mic busy**: start another app holding the mic, then `vesper up` → same loud failure.

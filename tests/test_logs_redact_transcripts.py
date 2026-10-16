@@ -35,6 +35,8 @@ LEAKY_LINES = [
     "2026-10-17 02:41:01,100 | INFO | vesper.voice | Transcript: Wilhelmina Fizzlewick wants the marzipan invoice",
     "2026-10-17 02:41:01,100 | INFO | vesper.voice | transcript='hunter2 is my password' confidence=0.8",
     "2026-10-17 02:41:02 INFO x: user_text=glockenspiel rehearsal at 4155550142",
+    "2026-10-17 02:41:03,200 | INFO | vesper.voice | voice transcribing -> injected (call my dentist about the tangerine)",
+    "2026-10-17 02:41:03,201 | INFO | vesper.voice | voice transcribing -> injected (hunter2 and (4155550142) quokka)",
     # a payload cut off mid-string by the logger
     emit("VoiceInputEvent", "{'text': 'play the glockenspiel rehea"),
     # an UNKNOWN key must be treated as text (fail closed)
@@ -49,6 +51,9 @@ BENIGN = [
     "[02:40:11] INFO event_bus: [HANDLED] VoiceOutputEvent by _forward | Time: 0.4ms | Event ID: 3f9a1c2e-0b7d-4e55-9a61-8c2d4f6a1b09",
     "[02:40:11] INFO event_bus: [SUBSCRIBE] Handler 'on_x' subscribed to VoiceInputEvent (total handlers: 2)",
     "launcher: voice_output: died (signal SIGKILL (-9)); restarting in 1s",
+    "2026-10-17 02:41:03,000 | INFO | vesper.voice | voice idle -> wake_detected",
+    "2026-10-17 02:41:03,100 | INFO | vesper.voice | voice listening -> idle (no speech)",
+    "2026-10-17 02:41:03,300 | INFO | vesper.voice | voice injected -> idle",
     "Traceback (most recent call last):",
 ]
 
