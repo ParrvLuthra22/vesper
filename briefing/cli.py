@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import io
 import json
+import os
 import sys
 import time
 from dataclasses import replace
@@ -37,6 +38,9 @@ from briefing.rules import ACTIONS, Rule, RuleSet
 from briefing.sanitize import clean_text, display_name
 from briefing.scorer import sender_address
 from briefing.service import BriefingService
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 MIN_REF_CHARS = 6
 
@@ -318,7 +322,7 @@ async def _run(args: argparse.Namespace) -> int:
         from tools.registry import get_registry
 
         bridge = MCPBridge(config=load_app_config(), registry=get_registry())
-        print("[briefing] connecting MCP servers (read-only collectors)...", file=sys.stderr)
+        _progress(red, "[briefing] connecting MCP servers (read-only collectors)...")
         await bridge.start()
         service = BriefingService.from_registry(get_registry(), cfg)
         try:
@@ -329,7 +333,7 @@ async def _run(args: argparse.Namespace) -> int:
                 reports = {}
             for r in reports.values():
                 note = "ok" if r.ok else ("FAILED (details withheld by --redact)" if red is not None else f"FAILED: {r.error}")
-                print(f"[briefing] {r.name}: {note} ({r.new_items} item(s) fetched)", file=sys.stderr)
+                _progress(red, f"[briefing] {r.name}: {note} ({r.new_items} item(s) fetched)")
         finally:
             await bridge.stop()
 
@@ -407,6 +411,72 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def _progress(red: Optional[Redactor], message: str) -> None:
+    """A progress note: on stderr normally; under --redact only in the log file, so the guard scans what is printed
+    and nothing else reaches the terminal."""
+    if red is None:
+        print(message, file=sys.stderr)
+    else:
+        logger.info(message)
+
+
+def _log_file_path() -> str:
+    import logging as _logging
+    for h in _logging.getLogger().handlers:
+        if isinstance(h, _logging.FileHandler):
+            return h.baseFilename
+    return os.devnull
+
+
+@contextlib.contextmanager
+def logs_to_file_only():
+    """For the duration of the block, NOTHING reaches the terminal except what the command deliberately prints:
+    console log handlers are detached (the file handler keeps everything), Python warnings go to the log, and file
+    descriptor 2 is pointed at the log file so child processes and native libraries cannot write to the terminal
+    either. Everything is restored afterwards. No log-shape exemptions anywhere: the guard simply never has to
+    judge log text."""
+    import logging as _logging
+
+    get_logger("briefing.cli")                        # make sure logging is configured BEFORE any stream is swapped
+    detached = []
+    loggers = [_logging.getLogger()] + [lg for lg in _logging.root.manager.loggerDict.values()
+                                        if isinstance(lg, _logging.Logger)]
+    for lg in loggers:
+        for h in list(lg.handlers):
+            # every console-style handler, whatever stream it holds (a stale or closed one would otherwise make
+            # logging print a traceback WITH the log message to stderr, i.e. into the text the guard scans)
+            if isinstance(h, _logging.StreamHandler) and not isinstance(h, _logging.FileHandler):
+                lg.removeHandler(h)
+                detached.append((lg, h))
+    _logging.captureWarnings(True)
+    raise_exceptions = _logging.raiseExceptions
+    _logging.raiseExceptions = False              # a failing handler must stay silent, not print the record it failed on
+    saved_fd = None
+    log_fd = None
+    try:
+        sys.stderr.flush()
+    except Exception:
+        pass
+    try:
+        log_fd = os.open(_log_file_path(), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        saved_fd = os.dup(2)
+        os.dup2(log_fd, 2)
+    except OSError:
+        saved_fd = None
+    try:
+        yield
+    finally:
+        if saved_fd is not None:
+            os.dup2(saved_fd, 2)
+            os.close(saved_fd)
+        if log_fd is not None:
+            os.close(log_fd)
+        _logging.captureWarnings(False)
+        _logging.raiseExceptions = raise_exceptions
+        for lg, h in detached:
+            lg.addHandler(h)
+
+
 def run_redacted(args: argparse.Namespace) -> int:
     """Run with every byte of stdout/stderr (and any error text) buffered, then released only if the
     guard finds none of the locally stored sensitive values in it. A leak withholds ALL output."""
@@ -414,7 +484,7 @@ def run_redacted(args: argparse.Namespace) -> int:
     args.redactor = red
     out, err = io.StringIO(), io.StringIO()
     code = 1
-    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+    with logs_to_file_only(), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         try:
             code = asyncio.run(_run(args))
         except KeyboardInterrupt:
