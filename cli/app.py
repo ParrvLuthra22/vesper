@@ -466,6 +466,13 @@ def run() -> None:
 
         sys.exit(briefing_main(sys.argv[2:]))
 
+    # Anything else that is not a flag is a typo or a mis-split argument (`vesper "doctor --help"`, `vesper doctr`).
+    # Starting the whole stack (real MCP servers, memory, a briefing refresh) because of that is a surprise nobody wants.
+    if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
+        print(f"vesper: unknown command {sys.argv[1]!r}. Commands: up, down, status, logs, doctor, briefing, route, dnd. "
+              "Run `vesper` with no arguments for the text REPL (or --remote to drive a running gateway).", file=sys.stderr)
+        sys.exit(2)
+
     remote = _parse_remote_args(sys.argv[1:])
     try:
         if remote is not None:

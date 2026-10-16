@@ -238,3 +238,35 @@ async def test_confirmation_requested_denies_on_anything_but_y(
 
     assert len(responses) == 1
     assert responses[0].approved is False
+
+
+# ------------------------------------------------------------------ unknown subcommands never start the stack
+
+def test_an_unknown_subcommand_exits_2_and_does_not_start_the_brain(monkeypatch, capsys):
+    """`vesper doctr` or a mis-split `vesper "doctor --help"` used to fall through to the REPL, which boots a REAL Brain
+    (MCP servers, memory, a briefing refresh)."""
+    import asyncio
+    from cli import app
+
+    def boom(*a, **k):
+        raise AssertionError("the stack must not start for an unknown command")
+
+    monkeypatch.setattr(app.asyncio, "run", boom)
+    for argv in (["vesper", "doctr"], ["vesper", "doctor --help"], ["vesper", "route --help"], ["vesper", "hello"]):
+        monkeypatch.setattr(app.sys, "argv", argv)
+        with pytest.raises(SystemExit) as exc:
+            app.run()
+        assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "unknown command" in err and "doctor" in err
+
+
+def test_flags_still_reach_the_repl_path(monkeypatch):
+    from cli import app
+
+    calls = []
+    monkeypatch.setattr(app.asyncio, "run", lambda coro: (coro.close(), calls.append("ran"))[1] or 0)
+    monkeypatch.setattr(app.sys, "argv", ["vesper"])
+    with pytest.raises(SystemExit):
+        app.run()
+    assert calls == ["ran"]
