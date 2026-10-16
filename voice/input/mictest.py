@@ -7,6 +7,9 @@ every 0.5 s: a level bar with RMS / peak, the wake-word model's score, and the m
     signal but wake word never above threshold  the mic works; the wake word did not score high enough (say "Hey Jarvis")
     wake word fired                             the wake score reached voice.wake.threshold
 
+`vesper mic-test --selftest` skips the microphone entirely and feeds a synthesized "Hey Jarvis" through the same path (see
+voice/input/selftest.py), to tell a pipeline fault from a quiet mic.
+
 It does NOT record or save audio, does NOT run speech-to-text, and sends nothing anywhere: the only things it reads are
 audio frames (held for one frame at a time) and the wake model's score. Only device NAMES are printed.
 """
@@ -27,6 +30,9 @@ VERDICT_NO_SIGNAL = "no signal"
 VERDICT_QUIET = "signal but wake word never above threshold"
 VERDICT_FIRED = "wake word fired"
 REPORT_EVERY_MS = 500
+#: A peak below this means the Input volume is probably too low for the wake word to hear you comfortably.
+LOW_LEVEL_DBFS = -20.0
+LOW_LEVEL_HINT = "input level is low: raise the Input volume in System Settings > Sound"
 
 
 def to_dbfs(level: float) -> float:
@@ -61,7 +67,8 @@ def verdict_for(peak: float, max_score: float, threshold: float) -> str:
 
 
 def run_mic_test(frames, wake_feed: Callable[[np.ndarray], Sequence[float]], *, threshold: float, device: str = "",
-                 seconds: float = 10.0, frame_ms: int = 30, out: Callable[[str], None] = print) -> MicTestResult:
+                 seconds: float = 10.0, frame_ms: int = 30, out: Callable[[str], None] = print,
+                 gain_stage: Optional[Callable[[np.ndarray], np.ndarray]] = None) -> MicTestResult:
     """Consume `frames` (an iterator of int16 mono frames) for `seconds` of AUDIO TIME (frames x frame_ms, so tests need no
     sleeping). Nothing is stored beyond the running maxima."""
     lines: List[str] = []
@@ -83,7 +90,7 @@ def run_mic_test(frames, wake_feed: Callable[[np.ndarray], Sequence[float]], *, 
             peak, win_peak = max(peak, fp), max(win_peak, fp)
             win_sq += float(np.sum(x * x))
             win_n += len(x)
-        scores = list(wake_feed(frame))
+        scores = list(wake_feed(gain_stage(frame) if gain_stage is not None else frame))     # the wake word sees what voice input feeds it
         if scores:
             win_score = max(win_score, max(scores))
             max_score = max(max_score, max(scores))
@@ -92,7 +99,7 @@ def run_mic_test(frames, wake_feed: Callable[[np.ndarray], Sequence[float]], *, 
             rms = math.sqrt(win_sq / win_n) if win_n else 0.0
             max_rms = max(max_rms, rms)
             emit(f"{elapsed_ms / 1000.0:5.1f}s {meter_bar(rms)} rms {rms:6.4f} ({to_dbfs(rms):5.1f} dBFS)  "
-                 f"peak {win_peak:6.4f}  wake {win_score:5.3f}  max {max_score:5.3f}")
+                 f"peak {win_peak:6.4f} ({to_dbfs(win_peak):5.1f} dBFS)  wake {win_score:5.3f}  max {max_score:5.3f}")
             win_peak = win_sq = 0.0
             win_n = 0
             win_score = 0.0
@@ -102,12 +109,19 @@ def run_mic_test(frames, wake_feed: Callable[[np.ndarray], Sequence[float]], *, 
     verdict = verdict_for(peak, max_score, threshold)
     emit(f"verdict: {verdict}   (peak {peak:.4f} = {to_dbfs(peak):.1f} dBFS, max wake score {max_score:.3f}, "
          f"threshold {threshold:.2f})")
+    if peak >= NO_SIGNAL_PEAK and to_dbfs(peak) < LOW_LEVEL_DBFS:
+        emit(f"hint: {LOW_LEVEL_HINT}  (peak {to_dbfs(peak):.1f} dBFS; speech at a laptop should reach about -20 dBFS or higher)")
     return MicTestResult(device, elapsed_ms / 1000.0, peak, max_rms, max_score, threshold, verdict, lines)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="vesper mic-test", description=__doc__.split("\n\n")[0])
     ap.add_argument("--seconds", type=float, default=10.0, help="how long to listen (default 10)")
+    ap.add_argument("--selftest", action="store_true",
+                    help="no microphone: synthesize 'Hey Jarvis' with the local Kokoro TTS and feed it through the same path "
+                         "as live frames, at three volume levels")
+    ap.add_argument("--rate", type=int, default=None,
+                    help="with --selftest: the device sample rate to simulate (default: the pinned device's, else 48000)")
     args = ap.parse_args(list(argv) if argv is not None else sys.argv[1:])
 
     from voice.input.audio import MicSource
@@ -116,6 +130,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from voice.input.stages import VoiceInputUnavailable, WakeDetector
 
     config = load_config()
+    if args.selftest:
+        return selftest_main(config, args.rate)
     try:
         device = resolve_device(config)
     except DeviceResolutionError as exc:
@@ -135,10 +151,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except VoiceInputUnavailable as exc:
         print(f"wake model unavailable: {exc}", file=sys.stderr)
         return EXIT_UNAVAILABLE
+    from voice.input.gain import GainStage
+
+    stage = GainStage(config.gain_db, config.auto_gain)
+    if stage.active:
+        print(f"input gain: {'auto' if config.auto_gain else 'fixed'} {config.gain_db:+.1f} dB "
+              "(voice.input.gain_db / auto_gain) is applied before the wake model, as in voice input")
     source = MicSource(config.sample_rate, config.frame_samples, device.index)
     try:
         result = run_mic_test(source.frames(), wake.feed, threshold=config.wake_threshold, device=device.name,
-                              seconds=args.seconds, frame_ms=config.frame_ms)
+                              seconds=args.seconds, frame_ms=config.frame_ms, gain_stage=stage if stage.active else None)
     except KeyboardInterrupt:
         print("\ninterrupted")
         return 130
@@ -150,6 +172,47 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if source.resampled:
         print(f"(the device runs at {source.open_rate} Hz; audio was converted to {config.sample_rate} Hz for the wake model)")
     return 3 if result.verdict == VERDICT_NO_SIGNAL else 0
+
+
+def selftest_main(config, rate: Optional[int]) -> int:
+    """`--selftest`: synthetic 'Hey Jarvis' through the live path. No microphone, no audio stream."""
+    import dataclasses
+
+    from voice.input.devices import list_input_devices
+    from voice.input.selftest import VERDICT_OK, run_selftest
+    from voice.input.service import EXIT_UNAVAILABLE, resolve_device
+    from voice.input.stages import VoiceInputUnavailable, WakeDetector
+    from voice.output.config import VoiceOutputConfig
+    from voice.output.tts import KokoroTTS
+
+    device_rate = rate
+    if device_rate is None:
+        try:
+            device_rate = int(resolve_device(config).default_samplerate)        # read-only: the pinned device's native rate
+        except Exception:  # noqa: BLE001
+            device_rate = 48000
+    from config.settings import load_config_dict
+
+    out_cfg = VoiceOutputConfig.from_app_config(load_config_dict())
+    voices = {}
+    for name in dict.fromkeys([out_cfg.tts_voice, "af_heart", "am_michael"]):
+        tts = KokoroTTS(dataclasses.replace(out_cfg, tts_voice=name, speed=1.0))
+        voices[name] = (lambda t=tts: t.synthesize("Hey Jarvis."))
+    print(f"selftest: no microphone, nothing played/recorded/sent. Simulated device rate {device_rate} Hz -> 16 kHz; "
+          f"voices {', '.join(voices)}; wake model {config.wake_model}; threshold {config.wake_threshold:.2f}")
+    wake = WakeDetector(config)
+    try:
+        wake.load()
+        other = KokoroTTS(dataclasses.replace(out_cfg, tts_voice=out_cfg.tts_voice, speed=1.0))
+        result = run_selftest(voices, wake, device_rate=device_rate, threshold=config.wake_threshold,
+                              other_phrase=lambda: other.synthesize("What time is it today?"))
+    except VoiceInputUnavailable as exc:
+        print(f"wake model unavailable: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    except Exception as exc:  # noqa: BLE001 — Kokoro files missing etc.
+        print(f"selftest could not run: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_UNAVAILABLE
+    return 0 if result.verdict == VERDICT_OK else 4
 
 
 if __name__ == "__main__":

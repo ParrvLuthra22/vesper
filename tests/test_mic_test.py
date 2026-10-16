@@ -202,3 +202,42 @@ def test_the_command_is_reachable_as_vesper_mic_test(monkeypatch):
     with pytest.raises(SystemExit) as exc:
         app.run()
     assert exc.value.code == 0 and called["argv"] == ["--seconds", "3"]
+
+
+# ------------------------------------------------------------------ level hint, dBFS, gain
+
+def test_the_report_shows_the_peak_in_dbfs_and_the_verdict_too():
+    res, out = run("tone", score=0.1)
+    reports = [l for l in out if l.lstrip()[0].isdigit()]
+    assert all("peak" in l and "dBFS)" in l.split("peak")[1] for l in reports)
+    assert "peak 0.8" in out[-1].split("verdict:")[1] or "dBFS" in out[-1]
+
+
+def test_a_low_peak_prints_the_hint_to_raise_the_input_volume():
+    res, out = run("noise", score=0.01)                         # ~ -28 dBFS peak: a real but quiet mic
+    assert to_dbfs(res.peak) < -20
+    assert any(l == "hint: input level is low: raise the Input volume in System Settings > Sound  "
+                    f"(peak {to_dbfs(res.peak):.1f} dBFS; speech at a laptop should reach about -20 dBFS or higher)" for l in out)
+
+
+def test_no_hint_for_a_healthy_level_and_none_for_digital_silence():
+    assert not [l for l in run("tone", score=0.1)[1] if l.startswith("hint:")]
+    assert not [l for l in run("silence")[1] if l.startswith("hint:")]          # that is "no signal", a different problem
+
+
+def test_the_hint_threshold_is_about_minus_20_dbfs():
+    def at(peak):
+        return [np.full(FRAME, int(peak * 32767), dtype=np.int16) for _ in range(40)]
+    quiet = run_mic_test(iter(at(0.09)), const_score(0.0), threshold=0.5, out=lambda s: None, seconds=1.0)
+    loud = run_mic_test(iter(at(0.11)), const_score(0.0), threshold=0.5, out=lambda s: None, seconds=1.0)
+    assert any(l.startswith("hint:") for l in quiet.lines) and not any(l.startswith("hint:") for l in loud.lines)
+
+
+def test_gain_is_applied_before_the_wake_model_but_the_meter_and_hint_describe_the_raw_mic():
+    from voice.input.gain import GainStage
+    seen = []
+    res = run_mic_test(iter([np.full(FRAME, 300, dtype=np.int16)] * 40), lambda f: seen.append(int(f.max())) or [0.0],
+                       threshold=0.5, out=lambda s: None, seconds=1.0, gain_stage=GainStage(gain_db=20.0))
+    assert max(seen) == pytest.approx(3000, abs=5)                              # the model saw +20 dB
+    assert res.peak == pytest.approx(300 / 32768.0, rel=0.01)                  # the verdict/meter is the raw mic
+    assert any(l.startswith("hint:") for l in res.lines)                       # raw peak is -40 dBFS: still low
