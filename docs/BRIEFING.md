@@ -256,3 +256,11 @@ Start by filling in `vips:` — with it empty, only reply/thread/urgency signals
   mute flag isn't in the API (you list muted channels), and quiet in-thread replies to your messages are often invisible.
 * Scheduled morning briefing (`BriefingRequestedEvent`) uses the same compact block, plus the existing day-plan/Slack/dev
   sections.
+
+## Messages (optional, local, read-only)
+
+`MessagesCollector` adds unread, unanswered iMessages/SMS the same way Slack adds DMs: an `Item` with
+`source="messages"`, scored deterministically (`weights.messages_*`), grouped as `Messages: N unread`, and named only
+for the top `builder.max_messages_items` (2). It is **off** until `messages.enabled: true` and Full Disk Access is
+granted — setup and limits in [MESSAGES.md](MESSAGES.md). Like Slack and mail, text that reads like instructions to
+an AI stores no snippet and shows up only as a neutral count ("N messages filtered as unsafe").
