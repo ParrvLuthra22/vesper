@@ -100,7 +100,7 @@ _EXPLICIT: Tuple[Tuple[str, Tuple["re.Pattern[str]", ...], Tuple[str, ...]], ...
         rf"\b{_FIRST}?drafted\b",
         r"\b(?:draft|reply)\b[^.?!]{0,30}\b(?:is|has\s+been|was)\s+(?:now\s+)?(?:ready|saved|created|waiting|prepared)\b",
         rf"\b{_FIRST}(?:written|prepared|saved)\s+(?:a\s+|the\s+)?(?:reply|response|draft)\b",
-    ), ("draft_reply",)),
+    ), ("draft_reply", "gmail_create_draft")),
     ("email archive", _rx(
         rf"\b{_FIRST}?archived\b",
         r"\b(?:email|message|thread)\b[^.?!]{0,30}\b(?:is|has\s+been|was)\s+(?:now\s+)?archived\b",
@@ -159,7 +159,7 @@ _INTENTS: Tuple[Tuple[str, "re.Pattern[str]", Tuple[str, ...]], ...] = (
      ("add_reminder", "create_event")),
     ("calendar event", re.compile(r"\b(?:schedule|book)\b|\b(?:add|put|create)\b[^.?!]{0,40}\b(?:calendar|event|meeting|appointment)\b", re.I),
      ("create_event",)),
-    ("email draft", re.compile(r"\bdraft\b|\b(?:reply|respond)\s+to\b", re.I), ("draft_reply",)),
+    ("email draft", re.compile(r"\bdraft\b|\b(?:reply|respond)\s+to\b", re.I), ("draft_reply", "gmail_create_draft")),
     ("email archive", re.compile(r"\barchive\b", re.I), ("archive",)),
     ("mark read", re.compile(r"\bmark\b[^.?!]{0,30}\bas\s+read\b", re.I), ("mark_read",)),
     ("message sent", re.compile(r"\b(?:send|text|dm)\b[^.?!]{0,40}\b(?:email|e-mail|message|mail|text|slack|dm)\b|\bsend\s+(?:an?\s+)?(?:email|message|text)\b", re.I),

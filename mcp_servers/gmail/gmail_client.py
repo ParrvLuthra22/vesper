@@ -233,6 +233,23 @@ def _draft_reply_sync(message_id: str, instruction: str) -> str:
     return draft.get("id", "")
 
 
+def _create_draft_sync(to: List[str], cc: List[str], subject: str, body: str, thread_id: str = "") -> str:
+    """Store a new DRAFT. Uses users.drafts.create only — there is no delivery call anywhere in this module."""
+    service = _get_service_sync()
+    message = EmailMessage()
+    message["To"] = ", ".join(to)
+    if cc:
+        message["Cc"] = ", ".join(cc)
+    message["Subject"] = subject
+    message.set_content(body)
+    raw = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+    payload: Dict[str, Any] = {"raw": raw}
+    if thread_id:
+        payload["threadId"] = thread_id
+    draft = service.users().drafts().create(userId="me", body={"message": payload}).execute()
+    return draft.get("id", "")
+
+
 def _archive_sync(message_id: str) -> None:
     service = _get_service_sync()
     service.users().messages().modify(userId="me", id=message_id, body={"removeLabelIds": ["INBOX"]}).execute()
@@ -404,6 +421,10 @@ async def search(query: str, max_n: int = 20) -> List[Dict[str, Any]]:
 async def draft_reply(message_id: str, instruction: str) -> str:
     async with _api_lock:
         return await asyncio.to_thread(_draft_reply_sync, message_id, instruction)
+
+
+async def create_draft(to: List[str], cc: List[str], subject: str, body: str, thread_id: str = "") -> str:
+    return await asyncio.to_thread(_create_draft_sync, to, cc, subject, body, thread_id)
 
 
 async def archive(message_id: str) -> None:

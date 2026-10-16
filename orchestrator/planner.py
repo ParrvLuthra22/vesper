@@ -413,6 +413,11 @@ class Planner:
                 f"[Planner] tainted input: '{tool_call.name}' has arguments not from the user "
                 f"after reading {context['taint_reason']}; Guardian tier raised one rung"
             )
+        if not context and self._recipient_not_said(tool_spec, tool_call.arguments, user_text):
+            # A recipient the user never said (it came from a thread, a message, memory): raise the tier even when
+            # nothing untrusted was read earlier in THIS turn.
+            context = {"tainted_input": True, "taint_reason": "a recipient taken from content rather than from you"}
+            logger.info(f"[Planner] '{tool_call.name}' has a recipient the user did not say; Guardian tier raised one rung")
         verdict = await self._guardian.check(tool_spec, tool_call.arguments, context=context)
         if verdict.outcome == VerdictType.NEEDS_CONFIRMATION:
             verdict = await self._guardian.await_resolution(verdict.request_id)
@@ -451,6 +456,21 @@ class Planner:
                 latency_ms=_elapsed_ms(start), success=False, error=str(exc),
             )
             return f"Error: {exc}"
+
+    @staticmethod
+    def _recipient_not_said(tool_spec: ToolSpec, arguments: Dict[str, Any], user_text: str) -> bool:
+        """True if a recipient argument (`ToolSpec.recipient_args`) holds an address the user did not say."""
+        if not tool_spec.recipient_args:
+            return False
+        haystack = " ".join(str(user_text or "").lower().split())
+        for name in tool_spec.recipient_args:
+            value = arguments.get(name)
+            values = value if isinstance(value, (list, tuple)) else [value]
+            for v in values:
+                text = " ".join(str(v or "").lower().split())
+                if text and text not in haystack:
+                    return True
+        return False
 
     @staticmethod
     def _notify(on_status: Optional[Callable[[str], None]], message: str) -> None:

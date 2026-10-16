@@ -103,9 +103,12 @@ def test_gmail_briefing_tools_are_hidden_and_safe_by_default_config() -> None:
     from config.settings import load_config_dict
 
     gmail = load_config_dict()["mcp"]["servers"]["gmail"]
-    assert set(gmail["hidden_tools"]) == {"list_inbox", "unread_ids", "sent_summary"}
-    for name in gmail["hidden_tools"]:
+    briefing_reads = {"list_inbox", "unread_ids", "sent_summary"}
+    # The only other hidden tool is the draft writer behind gmail_create_draft (tools/gmail_draft.py): never safe tier.
+    assert set(gmail["hidden_tools"]) == briefing_reads | {"create_draft"}
+    for name in briefing_reads:
         assert gmail["tiers"][name] == "safe"
+    assert gmail["tiers"]["create_draft"] == "confirm"
 
 
 @pytest.mark.asyncio

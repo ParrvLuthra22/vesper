@@ -65,6 +65,7 @@ from sensors.focus_sensor import FocusSensor
 from sensors.inbox_sensor import InboxSensor
 from tasks.queue import TaskQueue
 from tools.mcp_bridge import MCPBridge
+from tools import gmail_draft
 from tools.registry import ToolSpec, get_registry
 from tracing.tracer import Tracer
 
@@ -628,6 +629,7 @@ class Brain:
                 logger.warning(f"Briefing engine unavailable, falling back to raw briefing: {exc}")
                 self._briefing = None
             self._register_briefing_tool()
+            gmail_draft.register(get_registry())      # draft-only; backed by the Gmail MCP server's hidden create_draft
             self._register_day_planner_tool()
             self._register_memory_tools()
 

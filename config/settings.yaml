@@ -917,6 +917,7 @@ mcp:
         summarize_thread: safe
         unread_count: safe
         draft_reply: confirm
+        create_draft: confirm        # hidden: only tools/gmail_draft.py (gmail_create_draft, tier "draft") reaches it
         archive: confirm
         mark_read: confirm
         # Read-only, for the briefing engine's collectors (briefing/):
@@ -925,7 +926,7 @@ mcp:
         sent_summary: safe
       # Registered for programmatic callers but DISABLED for the planner: not in
       # its schema and refused if the model names one.
-      hidden_tools: [list_inbox, unread_ids, sent_summary]
+      hidden_tools: [list_inbox, unread_ids, sent_summary, create_draft]
       # Runs in the background task queue instead of blocking the turn —
       # fetching a whole thread can take a few seconds.
       slow_tools:

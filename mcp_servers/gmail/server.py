@@ -87,6 +87,16 @@ async def draft_reply(id: str, instruction: str) -> str:
 
 
 @mcp.tool()
+async def create_draft(to: List[str], subject: str, body: str, cc: List[str] = [], thread_id: str = "") -> str:
+    """HIDDEN from the planner (settings.yaml hidden_tools): store a new Gmail DRAFT.
+
+    Called only by tools/gmail_draft.py after the user approved the exact draft. Prepares a draft and nothing more.
+    """
+    draft_id = await gmail_client.create_draft(to=list(to), cc=list(cc), subject=subject, body=body, thread_id=thread_id)
+    return draft_id
+
+
+@mcp.tool()
 async def archive(id: str) -> str:
     """Archive an email: remove it from the inbox (it remains in All Mail, not deleted)."""
     await gmail_client.archive(message_id=id)
