@@ -795,6 +795,23 @@ sensors:
 # Proactive Engine (P05) — scheduled jobs + cooldown-gated call-out rules.
 # -----------------------------------------------------------------------------
 proactive:
+  # The quiet watcher (proactive/watcher.py, docs/PROACTIVE.md): speaks up only when it matters, under a strict budget.
+  # OFF by default. It reads the briefing cache only; an interruption carries a source label and a sender display name,
+  # never message text. `vesper dnd on|off|status` is the do-not-disturb switch.
+  watcher:
+    enabled: false
+    tick_seconds: 30
+    max_per_day: 6                 # hard ceiling on interruptions per local day
+    quiet_hours: {start: "23:00", end: "08:00", timezone: "Asia/Kolkata"}
+    events:
+      meeting_30min: {enabled: true}
+      meeting_5min: {enabled: true}
+      priority_item: {enabled: true, threshold: 60, max_age_minutes: 30}   # score >= threshold, arrived in the last 30 min
+      stale_collector: {enabled: true, after_minutes: 120}
+    cooldown_minutes: {meeting: 2, priority_item: 15, stale_collector: 360}  # per kind-group
+    delivery: {hud: true, macos_notification: true, speak: true}            # speak = only if voice mode is on
+    state_path: data/proactive_state.json
+    dnd_path: data/proactive_dnd.json
   rules:
     context_switch:
       enabled: true

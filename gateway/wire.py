@@ -18,6 +18,7 @@ from schemas.events import (
     LocalModelStateEvent,
     ObservationEvent,
     PlanCreatedEvent,
+    ProactiveNotificationEvent,
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
     VoiceOutputEvent,
@@ -55,6 +56,11 @@ WIRE_SPEC: Dict[Type[BaseEvent], Tuple[str, Extractor]] = {
     ObservationEvent: (
         "observation",
         lambda e: {"kind": e.kind, "detail": e.detail, "observation_id": e.observation_id},
+    ),
+    # A proactive interruption reaches the HUD as an ordinary observation call-out (the client renders `detail`).
+    ProactiveNotificationEvent: (
+        "observation",
+        lambda e: {"kind": "proactive", "detail": e.body, "observation_id": str(e.event_id)},
     ),
     ConfirmationRequestedEvent: (
         "confirmation_requested",

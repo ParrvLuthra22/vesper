@@ -58,6 +58,7 @@ from briefing.tool import is_briefing_request, make_cached_briefing_handler
 from proactive.briefing import deliver_scheduled_briefing, make_get_daily_briefing_handler
 from proactive.day_planner import make_plan_my_day_handler
 from proactive.engine import ProactiveEngine
+from proactive.watcher import MacNotifier, ProactiveWatcher, WatcherConfig
 from proactive.morning_routine import MorningRoutine
 from proactive.reflection import run_reflection
 from sensors.calendar_sensor import CalendarSensor
@@ -460,6 +461,7 @@ class Brain:
 
         # Proactive Engine (P05): scheduled jobs + cooldown-gated call-out rules.
         self._proactive_engine = ProactiveEngine(event_bus=self._event_bus, config=self._config)
+        self._watcher: Optional[ProactiveWatcher] = None      # built in start() once the briefing cache exists
 
         # Morning routine (PC4): the composed no-prompt briefing + environment
         # setup, triggered by the Proactive Engine's RoutineTriggeredEvent. It
@@ -656,6 +658,7 @@ class Brain:
             await self._proactive_engine.start()
             if self._briefing is not None:
                 self._briefing.start()  # first refresh immediately, then every ~10 min (jittered)
+                self._start_watcher()
 
             self._state = BrainState.RUNNING
             self._started_at = datetime.now(timezone.utc)
@@ -788,6 +791,8 @@ class Brain:
 
         # Stop sensors, the Proactive Engine, and the MCP bridge before
         # agents/event bus.
+        if self._watcher is not None:
+            await self._watcher.stop()
         await self._proactive_engine.stop()
         await self._inbox_sensor.stop()
         await self._calendar_sensor.stop()
@@ -1301,6 +1306,24 @@ class Brain:
             ))
 
         return result
+
+    def _start_watcher(self) -> None:
+        """The quiet proactive watcher (proactive/watcher.py, docs/PROACTIVE.md). OFF unless
+        proactive.watcher.enabled; reads only the briefing cache."""
+        raw = ((self._config.get("proactive", {}) or {}).get("watcher", {}) or {})
+        try:
+            cfg = WatcherConfig.from_dict(raw)
+            if not cfg.enabled or self._briefing is None:
+                return
+            voice_on = bool(self._enable_voice_agent or ((self._config.get("voice", {}) or {}).get("input", {}) or {}).get("enabled"))
+            self._watcher = ProactiveWatcher(
+                self._briefing.cache, cfg, briefing_cfg=self._briefing.cfg, event_bus=self._event_bus,
+                notifier=MacNotifier() if cfg.macos_notification else None, voice_mode=lambda: voice_on)
+            self._watcher.start()
+            logger.info("Proactive watcher started (budget %d/day, quiet %s-%s %s)",
+                        cfg.max_per_day, cfg.quiet_start, cfg.quiet_end, cfg.timezone)
+        except Exception as exc:          # a bad watcher config must never stop the assistant
+            logger.warning(f"Proactive watcher not started: {exc}")
 
     async def _answer_with_skill(self, text: str, correlation_id: Optional[UUID],
                                  on_token: Optional[Callable[[str], None]], speak: bool) -> Optional[PlannerResult]:

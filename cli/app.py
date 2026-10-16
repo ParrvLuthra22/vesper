@@ -448,6 +448,12 @@ def run() -> None:
 
         sys.exit(launcher_main(sys.argv[1:]))
 
+    # `vesper dnd on|off|status` — the proactive watcher's do-not-disturb switch.
+    if len(sys.argv) > 1 and sys.argv[1] == "dnd":
+        from proactive.cli import main as dnd_main
+
+        sys.exit(dnd_main(sys.argv[2:]))
+
     # `vesper route "<utterance>"` — which deterministic skill would answer it, and why (runs nothing).
     if len(sys.argv) > 1 and sys.argv[1] == "route":
         from router.cli import main as route_main

@@ -540,6 +540,20 @@ class UpcomingMeetingEvent(BaseEvent):
 
 
 @dataclass(frozen=True)
+class ProactiveNotificationEvent(BaseEvent):
+    """
+    Emitted by the ProactiveWatcher (proactive/watcher.py) when it decides to interrupt. Carries only what
+    `build_payload` allows: a title, a one-line body, the kind and the origin source. NEVER message text.
+    """
+
+    title: str = ""
+    body: str = ""
+    kind: str = ""
+    origin: str = ""
+    source: str = field(default="ProactiveWatcher")
+
+
+@dataclass(frozen=True)
 class ObservationEvent(BaseEvent):
     """
     Event emitted by the Proactive Engine's rule evaluator when a rule
