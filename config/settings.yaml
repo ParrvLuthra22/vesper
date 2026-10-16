@@ -1013,6 +1013,7 @@ mcp:
         search_code: safe
         add_issue_comment: confirm     # create_issue_comment
         create_branch: confirm
+      outbound_tools: [add_issue_comment]      # posts to other people: Mac-only approval when raised remotely
 
     # Spotify MCP server (PC1 — context-aware music). OFF by default. Needs the
     # server + a Spotify OAuth token cached under data/ (gitignored). ALL tools
@@ -1062,6 +1063,9 @@ mcp:
         get_mentions: safe
         post_message: confirm
         reply_thread: confirm
+      # These deliver content to other people: when a remote channel (Telegram/Discord) raises them, only the Mac can
+      # approve (guardian/gate.py). Leave them listed.
+      outbound_tools: [post_message, reply_thread]
 
     # Discord MCP server (PC3 — reach). OFF by default. Same shape as Slack.
     # This is the tool surface; the separate `remote:` block below is the DM
@@ -1084,6 +1088,9 @@ mcp:
         get_mentions: safe
         post_message: confirm
         reply_thread: confirm
+      # These deliver content to other people: when a remote channel (Telegram/Discord) raises them, only the Mac can
+      # approve (guardian/gate.py). Leave them listed.
+      outbound_tools: [post_message, reply_thread]
 
 
 # -----------------------------------------------------------------------------

@@ -377,6 +377,10 @@ class MCPBridge:
         # are never registered. Empty/absent means "expose everything".
         expose = server_cfg.get("expose")
         expose_set = set(expose) if expose else None
+        # Tools that DELIVER content to another person (post a message, comment on an issue). Marked `outbound` on the
+        # ToolSpec so the Guardian only accepts their approval from a local surface when a remote channel raised them
+        # (guardian/gate.py, "Outbound-action rule"). They can never be `safe` tier.
+        outbound_tools = set(server_cfg.get("outbound_tools", []) or [])
 
         for tool_schema in connection.tools:
             tool_name = tool_schema["name"]
@@ -390,6 +394,12 @@ class MCPBridge:
                     f"defaulting to {DEFAULT_UNMAPPED_TIER!r}"
                 )
                 tier = DEFAULT_UNMAPPED_TIER
+
+            outbound = tool_name in outbound_tools
+            if outbound and tier == "safe":
+                logger.warning(f"[MCPBridge] '{server_name}.{tool_name}' delivers content to other people; "
+                               "raising its configured tier from 'safe' to 'confirm'")
+                tier = "confirm"
 
             # Two servers can expose the same tool name (Slack and Discord both
             # have get_mentions/post_message/…). Registry names are unique, so
@@ -417,6 +427,7 @@ class MCPBridge:
                     # Mail / calendar / Slack / Notion / GitHub text is written
                     # by third parties: its output must not steer later calls.
                     untrusted_output=True,
+                    outbound=outbound,
                 )
             )
 

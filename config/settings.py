@@ -611,6 +611,8 @@ class MCPGithubServerSettings(BaseModel):
         "create_branch": "confirm",
     })
     slow_tools: List[str] = Field(default_factory=list)
+    #: Tools that deliver content to other people: Mac-only approval when a remote channel raises them (guardian/gate.py).
+    outbound_tools: List[str] = Field(default_factory=lambda: ['add_issue_comment'])
 
 
 class MCPSpotifyServerSettings(BaseModel):
@@ -662,6 +664,8 @@ class MCPSlackServerSettings(BaseModel):
         "reply_thread": "confirm",
     })
     slow_tools: List[str] = Field(default_factory=list)
+    #: Tools that deliver content to other people: Mac-only approval when a remote channel raises them (guardian/gate.py).
+    outbound_tools: List[str] = Field(default_factory=lambda: ['post_message', 'reply_thread'])
 
 
 class MCPDiscordServerSettings(BaseModel):
@@ -685,6 +689,8 @@ class MCPDiscordServerSettings(BaseModel):
         "reply_thread": "confirm",
     })
     slow_tools: List[str] = Field(default_factory=list)
+    #: Tools that deliver content to other people: Mac-only approval when a remote channel raises them (guardian/gate.py).
+    outbound_tools: List[str] = Field(default_factory=lambda: ['post_message', 'reply_thread'])
 
 
 class MCPServersSettings(BaseModel):

@@ -302,3 +302,31 @@ async def test_reconnect_gives_up_after_max_attempts(monkeypatch: pytest.MonkeyP
         assert "fake" not in bridge._connections
     finally:
         await bridge.stop()
+
+
+# ------------------------------------------------------------------ outbound tools (guardian/gate.py)
+
+@pytest.mark.asyncio
+async def test_outbound_tools_are_marked_and_a_safe_tier_is_raised_to_confirm() -> None:
+    registry = ToolRegistry()
+    bridge = MCPBridge(config=_config(outbound_tools=["echo", "fail"]), registry=registry)
+    await bridge.start()
+    try:
+        assert registry.get("echo").outbound is True and registry.get("fail").outbound is True
+        assert registry.get("echo").tier == "confirm"          # configured safe -> raised: it reaches other people
+        assert registry.get("fail").tier == "confirm"
+        assert registry.get("slow").outbound is False
+    finally:
+        await bridge.stop()
+
+
+def test_every_shipped_tool_that_posts_to_other_people_is_listed_as_outbound() -> None:
+    from config.settings import load_config_dict
+
+    servers = load_config_dict()["mcp"]["servers"]
+    must_be_outbound = {"slack": {"post_message", "reply_thread"}, "discord": {"post_message", "reply_thread"},
+                        "github": {"add_issue_comment"}}
+    for name, tools in must_be_outbound.items():
+        cfg = servers[name]
+        assert tools <= set(cfg["outbound_tools"]), name
+        assert all(cfg["tiers"][t] != "safe" for t in cfg["outbound_tools"]), name
