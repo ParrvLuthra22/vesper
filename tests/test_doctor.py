@@ -201,3 +201,115 @@ def test_run_checks_includes_messages_only_when_asked(tmp_path):
     base = dict(env={}, root=tmp_path, audit_path=tmp_path / "a.jsonl", briefing_db=str(tmp_path / "b.db"))
     none = doctor.run_checks({}, **base)
     assert not any(c.label.startswith("Messages") for c in none)
+
+
+# ------------------------------------------------------------------ which microphone would voice input use? (fake lists only)
+
+def _dev(i, name, ch=1, rate=48000.0):
+    return {"index": i, "name": name, "max_input_channels": ch, "default_samplerate": rate}
+
+
+FAKE_LIST = lambda *d: (lambda: list(d))        # noqa: E731
+
+
+def _by_label(checks):
+    return {c.label: c for c in checks}
+
+
+def test_doctor_shows_the_device_voice_input_would_use_by_name_and_passes_when_the_default_is_the_builtin_mic():
+    out = _by_label(doctor.check_input_device(
+        "builtin", FAKE_LIST(_dev(0, "MacBook Pro Microphone"), _dev(1, "Parrv's AirPods Pro")), default_index=0,
+        transports={}, use_real_default=False))
+    assert out["Voice input device"].status == PASS and "'MacBook Pro Microphone'" in out["Voice input device"].detail
+    assert out["Built-in microphone"].status == PASS
+    assert out["System default input"].status == PASS
+
+
+def test_doctor_warns_when_the_system_default_is_airpods_but_voice_input_is_still_pinned_to_the_builtin_mic():
+    out = _by_label(doctor.check_input_device(
+        "builtin", FAKE_LIST(_dev(0, "Parrv's AirPods Pro"), _dev(2, "MacBook Pro Microphone")), default_index=0,
+        transports={}, use_real_default=False))
+    assert out["Voice input device"].status == PASS and "MacBook Pro Microphone" in out["Voice input device"].detail
+    warn = out["System default input"]
+    assert warn.status == WARN and "AirPods" in warn.detail and "pinned" in warn.fix
+
+
+def test_doctor_warns_for_a_virtual_default_too():
+    out = _by_label(doctor.check_input_device(
+        "builtin", FAKE_LIST(_dev(1, "BlackHole 2ch"), _dev(2, "MacBook Pro Microphone")), default_index=1,
+        transports={}, use_real_default=False))
+    assert out["System default input"].status == WARN and "BlackHole" in out["System default input"].detail
+
+
+def test_doctor_fails_when_the_builtin_mic_is_not_found_and_lists_what_is():
+    checks = doctor.check_input_device("builtin", FAKE_LIST(_dev(0, "Parrv's AirPods Pro"), _dev(1, "BlackHole 2ch")),
+                                       default_index=0, transports={}, use_real_default=False)
+    out = _by_label(checks)
+    assert out["Voice input device"].status == FAIL and "will not fall back" in out["Voice input device"].detail
+    assert out["Built-in microphone"].status == FAIL
+    assert "AirPods" in out["Built-in microphone"].detail and "BlackHole 2ch" in out["Built-in microphone"].detail
+    assert any(c.status == FAIL for c in checks)
+
+
+def test_doctor_with_an_explicit_device_and_no_builtin_only_warns_about_the_builtin_mic():
+    out = _by_label(doctor.check_input_device(
+        "Yeti Stereo Microphone", FAKE_LIST(_dev(3, "Yeti Stereo Microphone")), default_index=3, transports={},
+        use_real_default=False))
+    assert out["Voice input device"].status == PASS and "Yeti Stereo Microphone" in out["Voice input device"].detail
+    assert out["Built-in microphone"].status == WARN
+
+
+def test_doctor_fails_for_an_explicit_device_that_does_not_exist():
+    out = _by_label(doctor.check_input_device("Studio Display Microphone", FAKE_LIST(_dev(2, "MacBook Pro Microphone")),
+                                              default_index=2, transports={}, use_real_default=False))
+    assert out["Voice input device"].status == FAIL and "MacBook Pro Microphone" in out["Voice input device"].detail
+
+
+def test_doctor_reports_an_unlistable_audio_stack_as_a_failure():
+    def boom():
+        raise OSError("PortAudio not initialised")
+    out = doctor.check_input_device("builtin", boom, use_real_default=False)
+    assert out[0].status == FAIL and "cannot list input devices" in out[0].detail
+
+
+def test_doctor_output_carries_device_names_only():
+    checks = doctor.check_input_device(
+        "builtin", FAKE_LIST(_dev(0, "Parrv's AirPods Pro", rate=16000.0), _dev(2, "MacBook Pro Microphone")),
+        default_index=0, transports={}, use_real_default=False)
+    text = doctor.render(checks)
+    assert "MacBook Pro Microphone" in text
+    assert "16000" not in text and "48000" not in text                      # no rates, ids or other device properties
+
+
+def test_run_checks_includes_the_input_device_checks_only_when_asked(tmp_path, monkeypatch):
+    base = dict(env={}, root=tmp_path, audit_path=tmp_path / "a.jsonl", briefing_db=str(tmp_path / "b.db"))
+    monkeypatch.setattr(doctor, "check_microphone", lambda probe, device=None: [])
+    none = doctor.run_checks({}, **base)
+    assert not any(c.label.startswith(("Voice input device", "Built-in microphone")) for c in none)
+    monkeypatch.setattr(doctor, "check_input_device", lambda setting, **k: [Check(PASS, "Voice input device", setting)])
+    some = doctor.run_checks({}, voice_input_device=("builtin",), **base)
+    assert any(c.label == "Voice input device" for c in some)
+
+
+def test_the_mic_probe_opens_the_pinned_device_not_the_default(monkeypatch):
+    seen = {}
+
+    class FakeSD:
+        @staticmethod
+        def query_devices():
+            return [_dev(2, "MacBook Pro Microphone")]
+
+        class InputStream:
+            def __init__(self, **kw):
+                seen.update(kw)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+    monkeypatch.setitem(__import__("sys").modules, "sounddevice", FakeSD)
+    monkeypatch.setattr(doctor.time, "sleep", lambda s: None)
+    doctor.check_microphone(True, device=2)
+    assert seen.get("device") == 2 and seen.get("samplerate") == 16000

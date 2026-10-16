@@ -57,7 +57,7 @@ def _age(seconds: float) -> str:
 # ------------------------------------------------------------------ microphone
 
 def check_microphone(probe: bool, devices: Optional[Callable[[], List[Dict[str, Any]]]] = None,
-                     frames: Optional[Callable[[float], int]] = None) -> List[Check]:
+                     frames: Optional[Callable[[float], int]] = None, device: Optional[int] = None) -> List[Check]:
     def default_devices() -> List[Dict[str, Any]]:
         import sounddevice as sd
 
@@ -71,7 +71,7 @@ def check_microphone(probe: bool, devices: Optional[Callable[[], List[Dict[str, 
         def cb(indata, frame_count, t, status):  # noqa: ARG001
             n["frames"] += frame_count
 
-        with sd.InputStream(samplerate=16000, channels=1, callback=cb):
+        with sd.InputStream(samplerate=16000, channels=1, callback=cb, device=device):   # the PINNED device, not the default
             time.sleep(seconds)
         return n["frames"]
 
@@ -99,6 +99,63 @@ def check_microphone(probe: bool, devices: Optional[Callable[[], List[Dict[str, 
         FAIL, "Microphone permission", "stream opened but delivered no audio (permission prompt pending/denied)",
         "System Settings > Privacy & Security > Microphone > enable your terminal, then retry"))
     return out
+
+
+def check_input_device(setting: Any, devices: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+                       default_index: Optional[int] = None, transports: Optional[Dict[str, str]] = None,
+                       use_real_default: bool = True) -> List[Check]:
+    """Which input device would voice input use (NAME only), is the system default something else, is the built-in mic there.
+    Pure given its inputs; with no stand-ins it reads the real device list and CoreAudio properties (no stream is opened)."""
+    from voice.input.devices import (
+        DeviceResolutionError, default_input_index, find_builtin, list_input_devices, read_transport_types,
+        resolve_input_device)
+
+    try:
+        found = list_input_devices(devices)
+    except Exception as exc:  # noqa: BLE001
+        return [Check(FAIL, "Voice input device", f"cannot list input devices ({type(exc).__name__})",
+                      "pip install sounddevice; brew install portaudio")]
+    if transports is None:
+        transports = read_transport_types() if use_real_default else {}
+    if default_index is None and use_real_default:
+        default_index = default_input_index()
+    out: List[Check] = []
+    builtin = find_builtin(found, transports)
+    try:
+        chosen = resolve_input_device(setting, found, transports, default_index)
+        out.append(Check(PASS, "Voice input device", f"would use '{chosen.name}' (voice.input.device = {setting!r})"))
+    except DeviceResolutionError as exc:
+        out.append(Check(FAIL, "Voice input device", str(exc),
+                         "plug in/enable the microphone, or set voice.input.device in settings.yaml; voice input "
+                         "never falls back to another device"))
+    if builtin is None:
+        out.append(Check(FAIL if str(setting).strip().lower() in ("builtin", "built-in", "built_in", "internal", "macbook", "none")
+                         else WARN, "Built-in microphone",
+                         "not found among: " + (", ".join(f"'{d.name}'" for d in found) or "no input devices"),
+                         "System Settings > Sound > Input should list 'MacBook … Microphone'; with a lid closed (clamshell) "
+                         "the built-in mic is disabled"))
+    else:
+        out.append(Check(PASS, "Built-in microphone", f"found '{builtin.name}'"))
+        if default_index is not None:
+            default = next((d for d in found if d.index == default_index), None)
+            if default is not None and default.index != builtin.index:
+                out.append(Check(WARN, "System default input", f"is '{default.name}', not the built-in mic",
+                                 "voice input is pinned (voice.input.device) so this does not affect it; change the macOS "
+                                 "default if you want other apps on the built-in mic too"))
+            elif default is not None:
+                out.append(Check(PASS, "System default input", f"is the built-in mic ('{default.name}')"))
+    return out
+
+
+def pinned_input_index(setting: Any) -> Optional[int]:
+    """Index of the device voice input would use, or None if it cannot be resolved (read-only)."""
+    from voice.input.devices import (
+        DeviceResolutionError, default_input_index, list_input_devices, read_transport_types, resolve_input_device)
+
+    try:
+        return resolve_input_device(setting, list_input_devices(), read_transport_types(), default_input_index()).index
+    except (DeviceResolutionError, Exception):  # noqa: BLE001
+        return None
 
 
 # ------------------------------------------------------------------ Telegram token (presence only)
@@ -286,11 +343,14 @@ def check_audit(path: Path, now: Optional[float] = None) -> List[Check]:
 def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, probe_mic: bool = False,
                root: Path = PROJECT_ROOT, supervisor_pid: Optional[int] = None,
                audit_path: Optional[Path] = None, briefing_db: Optional[str] = None,
-               briefing_interval: float = 10.0, messages: Optional[tuple] = None) -> List[Check]:
+               briefing_interval: float = 10.0, messages: Optional[tuple] = None,
+               voice_input_device: Optional[tuple] = None) -> List[Check]:
     env = dict(os.environ) if env is None else env
     audit = audit_path or Path(env.get("VESPER_AUDIT_LOG") or root / "data" / "audit.jsonl")
     db = env.get("VESPER_BRIEFING_DB") or briefing_db or str(root / "data" / "briefing.db")
-    return [*check_microphone(probe_mic), *check_telegram(cfg, env), *check_models(cfg, root),
+    pinned = pinned_input_index(voice_input_device[0]) if (voice_input_device and probe_mic) else None
+    return [*check_microphone(probe_mic, device=pinned),
+            *(check_input_device(voice_input_device[0]) if voice_input_device else []), *check_telegram(cfg, env), *check_models(cfg, root),
             *check_ports(cfg, supervisor_pid), *check_briefing(db, briefing_interval),
             *(check_messages(*messages) if messages else []), *check_audit(audit)]
 
@@ -323,9 +383,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     from briefing.config import load_briefing_config
 
     bcfg = load_briefing_config()
+    from voice.input.config import VoiceInputConfig
+
     checks = run_checks(cfg, probe_mic=args.probe_mic, supervisor_pid=pid, briefing_db=bcfg.cache_path,
                         briefing_interval=float(bcfg.interval_minutes),
-                        messages=(bcfg.messages_enabled, bcfg.messages_db_path))
+                        messages=(bcfg.messages_enabled, bcfg.messages_db_path),
+                        voice_input_device=(VoiceInputConfig.from_app_config(cfg).device,))
     print(render(checks, color=sys.stdout.isatty()))
     return 1 if any(c.status == FAIL for c in checks) else 0
 
