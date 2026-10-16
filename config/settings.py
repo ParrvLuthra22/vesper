@@ -90,7 +90,14 @@ class VoiceInputSettings(BaseModel):
     vad_silence_ms: int = 800
     listen_timeout_ms: int = 6000
     first_frame_timeout_seconds: float = 15.0
-    mic_device: Optional[Any] = None
+    device: Any = "builtin"  # "builtin" | an input device name | a sounddevice index | "default"
+    mic_device: Optional[Any] = None  # legacy alias of `device`
+
+
+class VoiceWakeSettings(BaseModel):
+    """The wake-word sensitivity knob (voice.wake.threshold). None = use voice.input.wake_threshold (default 0.5)."""
+
+    threshold: Optional[float] = None
 
 
 class VoiceOutputSettings(BaseModel):
@@ -117,6 +124,7 @@ class VoiceSettings(BaseModel):
     synthesis: VoiceSynthesisSettings = Field(default_factory=VoiceSynthesisSettings)
     address_user_as_sir: bool = True
     input: VoiceInputSettings = Field(default_factory=VoiceInputSettings)
+    wake: VoiceWakeSettings = Field(default_factory=VoiceWakeSettings)
     output: VoiceOutputSettings = Field(default_factory=VoiceOutputSettings)
 
 

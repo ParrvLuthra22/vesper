@@ -72,7 +72,10 @@ class VoiceInputConfig:
     # Audio.
     sample_rate: int = 16000
     frame_ms: int = 30  # 30 ms frames (480 samples @ 16 kHz) — webrtcvad-legal
-    mic_device: Optional[Any] = None  # sounddevice device index/name; None=default
+    #: Which microphone. "builtin" (default) = the MacBook's own mic, resolved explicitly at startup — never whatever macOS
+    #: has as default. Or an exact device name, a sounddevice index, or "default" (the system default, only by asking).
+    device: Any = "builtin"
+    mic_device: Optional[Any] = None  # LEGACY alias of `device` (used only when `device` is not set)
 
     # Where to inject the transcript (the gateway — "just another client").
     gateway_host: str = "127.0.0.1"
@@ -101,11 +104,17 @@ class VoiceInputConfig:
             return default if val is None else val
 
         token = os.getenv("VESPER_GATEWAY_TOKEN") or gw.get("token") or ""
+        wake = ((config.get("voice", {}) or {}).get("wake", {}) or {})
+        # voice.wake.threshold is the documented knob; voice.input.wake_threshold is honoured for old config files.
+        threshold = wake.get("threshold")
+        threshold = g("wake_threshold", cls.wake_threshold) if threshold is None else threshold
+        legacy_mic = g("mic_device", cls.mic_device)
+        device = g("device", legacy_mic if legacy_mic is not None else cls.device)
         return cls(
             enabled=bool(g("enabled", cls.enabled)),
             wake_model=str(g("wake_model", cls.wake_model)),
             wake_model_fallback=str(g("wake_model_fallback", cls.wake_model_fallback)),
-            wake_threshold=float(g("wake_threshold", cls.wake_threshold)),
+            wake_threshold=float(threshold),
             wake_vad_threshold=float(g("wake_vad_threshold", cls.wake_vad_threshold)),
             vad_backend=str(g("vad_backend", cls.vad_backend)),
             vad_aggressiveness=int(g("vad_aggressiveness", cls.vad_aggressiveness)),
@@ -121,7 +130,8 @@ class VoiceInputConfig:
             whisper_language=str(g("whisper_language", cls.whisper_language)),
             sample_rate=int(g("sample_rate", cls.sample_rate)),
             frame_ms=int(g("frame_ms", cls.frame_ms)),
-            mic_device=g("mic_device", cls.mic_device),
+            device=device,
+            mic_device=legacy_mic,
             gateway_host=str(gw.get("host", cls.gateway_host)),
             gateway_port=int(gw.get("port", cls.gateway_port)),
             gateway_token=str(token),

@@ -102,7 +102,6 @@ voice:
     # custom phrase can be set here *before* it is trained without leaving
     # voice input dead. Set to "" to make a missing model a hard failure.
     wake_model_fallback: "hey_jarvis"
-    wake_threshold: 0.5
     # faster-whisper: small/base English models keep latency low on M-series.
     whisper_model: "base.en"
     whisper_compute_type: "int8"
@@ -113,7 +112,21 @@ voice:
     listen_timeout_ms: 6000     # no speech after wake -> back to idle
     first_frame_timeout_seconds: 15   # mic must deliver audio within this or voice input exits "unavailable"
                                       # (a silent/blocked mic otherwise hangs forever); 0 disables
-    mic_device: null            # sounddevice index/name; null = default input
+    # Which microphone voice input listens to. "builtin" = the MacBook's own microphone, found by name and CoreAudio
+    # transport type ("MacBook Pro Microphone", "Built-in Microphone", and localized names) — NOT whatever macOS has as
+    # the default input today (AirPods, a virtual device...). Also accepted: an exact device name, a sounddevice index,
+    # or "default" (the system default, only if you ask for it). If the chosen mic is missing, voice input exits with
+    # status 69 and lists the input devices it found; it never falls back silently. `vesper mic-test` shows what it hears.
+    device: "builtin"
+    mic_device: null            # LEGACY alias of `device`; only read when `device` is not set
+
+  # Wake-word sensitivity for voice input (openWakeWord). The wake model scores every 80 ms window 0..1 and the word
+  # "fires" at or above this threshold. LOWER = more sensitive (hears you more easily, more false wakes from TV and
+  # chatter); HIGHER = stricter. 0.5 is the openWakeWord default and has NOT been tuned on this machine: run
+  # `vesper mic-test` to see the scores you actually produce, and run voice input with debug logging to see the max
+  # score per 10 s window (scores only, no audio) before changing it. Replaces voice.input.wake_threshold (still read).
+  wake:
+    threshold: 0.5
 
   # ---------------------------------------------------------------------------
   # Voice OUTPUT (PV4) — Kokoro-82M TTS. Speaks Vesper's serif voice lines
