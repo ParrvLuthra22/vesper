@@ -43,6 +43,22 @@ slack:
   # Bot/app messages are penalised (weights.slack_bot_penalty) unless the sender is listed: user/bot IDs or display names.
   allowlisted_senders: []       # e.g. ["Github", "U01234ABCDE"]
 
+# Messages (iMessage / SMS on this Mac; read-only; see docs/MESSAGES.md). OFF by default: it reads a COPY of
+# ~/Library/Messages/chat.db, which macOS only allows with Full Disk Access for your terminal. Nothing is ever sent,
+# marked read or written. Text from messages is third-party data: digit runs of 4+ (one-time codes) are replaced
+# with "[code]" before anything is stored, and text that reads like instructions to an AI is filtered out.
+messages:
+  enabled: false
+  db_path: "~/Library/Messages/chat.db"
+  lookback_days: 2              # first run only: how far back to look for unread messages
+  snippet_chars: 160            # HARD truncation at collection time (the briefing shows less)
+  unanswered_hours: 3           # an unread message older than this gets weights.messages_unanswered
+  contacts: true                # resolve numbers to names from the local Address Book (a private copy); false = numbers
+  # macOS does not expose per-chat mute in chat.db, so mute here: a chat_identifier (+91..., a group guid) or group name.
+  muted_chats: []               # e.g. ["Family group", "chat123456789"]
+  # Short codes and alphanumeric senders ("HDFCBK") are penalised (weights.messages_automated_penalty) unless listed.
+  allowlisted_senders: []       # e.g. ["+14155550123", "AMAZON"]
+
 # People who matter. Matching is case-insensitive. EMPTY by default — fill it in.
 vips:
   addresses: []                 # e.g. ["priya@example.com"]
@@ -121,6 +137,14 @@ weights:
   slack_decay_per_day: -5       # unread longer than fresh_hours: this much per extra full day ...
   slack_decay_floor: -30        # ... down to at most this
   slack_bot_penalty: -30        # bot/app messages, unless the sender is in slack.allowlisted_senders
+  # Messages (iMessage/SMS). Same scale as mail and Slack.
+  messages_dm_human: 25         # an unread 1:1 message from a person (phone number or email)
+  messages_group_human: 10      # an unread group-chat message (groups are chattier than DMs)
+  messages_unanswered: 5        # unread AND older than messages.unanswered_hours (a small nudge, never a flood)
+  messages_automated_penalty: -30   # short codes / alphanumeric sender ids ("HDFCBK"), unless allowlisted
+  messages_otp_penalty: -40     # a one-time-code message ("123456 is your code"): the code is masked, the message is noise
+  messages_decay_per_day: -5    # unread longer than fresh_hours: this much per extra full day ...
+  messages_decay_floor: -30     # ... down to at most this
 
 # Words that raise a mail item's score (matched as whole words in subject + snippet,
 # each counted once). Ignored for bulk mail ("URGENT: 50% off!" earns nothing).
@@ -163,6 +187,7 @@ patterns:
 builder:
   max_meetings: 3               # meetings listed (imminent first, then later today, then tomorrow)
   max_priority_mail: 5          # priority mail items listed
+  max_messages_items: 2         # Messages items NAMED (the rest are only counted: "Messages: N unread")
   max_slack_items: 2            # Slack items NAMED (the rest are only counted: "Slack: N unread DMs, M mentions")
   min_priority_score: 30        # unread mail below this is "everything else" (a count)
   token_cap: 600                # HARD cap on the context handed to the planner (estimate_tokens)

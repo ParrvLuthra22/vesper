@@ -879,7 +879,7 @@ class Brain:
                 ),
                 parameters={"type": "object", "properties": {}},
                 tier="safe",
-                untrusted_output=True,  # embeds email subjects/senders and calendar titles
+                untrusted_output=True,  # embeds email, calendar, Slack and Messages text (all third-party)
                 handler=(
                     make_cached_briefing_handler(self._briefing)
                     if self._briefing is not None

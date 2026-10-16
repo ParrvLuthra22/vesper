@@ -62,6 +62,10 @@ def row_fields(s, b: Briefing, red: Optional[Redactor] = None) -> dict:
     if it.source == "calendar":
         when = datetime.fromtimestamp(it.start_at or 0).strftime("%a %H:%M")
         who = red.subject(it.title) if red else f"{clean_text(it.title, 58)}"
+    elif it.source == "messages":
+        when = _age(it.timestamp, b.as_of)
+        who = (f"{red.person(it.sender)} — {red.subject(it.title)}" if red
+               else f"{clean_text(it.sender, 20)} — {clean_text(it.title, 38)}")
     elif it.source == "slack":
         when = _age(it.timestamp, b.as_of)
         who = (f"{red.person(it.sender)} — {red.subject(it.title)}" if red
@@ -93,6 +97,9 @@ def status_lines(b: Briefing, red: Optional[Redactor] = None) -> List[str]:
              f"unread mail: {b.total_unread} | priority: {len(b.priority)} | other: {b.other_count} "
              f"({b.bulk_count} bulk) | meetings shown: {len(b.meetings)}"
              + (f" | filtered as unsafe: {b.mail_flagged}" if b.mail_flagged else "")]
+    if b.messages_unread is not None:
+        lines.append(f"Messages: {b.messages_unread} unread | named: {len(b.messages)}"
+                     + (f" | filtered as unsafe: {b.messages_flagged}" if b.messages_flagged else ""))
     if b.slack_dms is not None:
         lines.append(f"{_slack_counts(b)} | named: {len(b.slack)}"
                      + (f" | filtered as unsafe: {b.slack_flagged}" if b.slack_flagged else ""))
@@ -225,6 +232,8 @@ def register_static(red: Redactor, cfg: BriefingConfig) -> None:
         "| filtered as unsafe: {int}",
         "Slack: {int} unread {DMs}, {int} {mentions} | named: {int}",
         "Slack: {int} unread {DMs}, {int} {mentions} | named: {int} | filtered as unsafe: {int}",
+        "Messages: {int} unread | named: {int}",
+        "Messages: {int} unread | named: {int} | filtered as unsafe: {int}",
         "Known correspondents — derived from {int} sent message(s) in the last {int} days (header addresses only; "
         "no message text is read or stored). Updated {when}.",
         "Addresses ({int}) — mail from these gets +{num}:",

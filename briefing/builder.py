@@ -34,6 +34,17 @@ HEADER = (
 )
 
 
+def _header(b: "Briefing") -> str:
+    """The provenance line names each kind of third-party content actually in the block. With neither Slack nor
+    Messages it is byte-for-byte HEADER."""
+    extra = (["Slack message"] if b.slack_dms is not None else []) + (["iMessage"] if b.messages_unread is not None else [])
+    if not extra:
+        return HEADER
+    names = ["an email", "calendar entry"] + extra
+    phrase = ", ".join(names[:-1]) + " or " + names[-1]
+    return HEADER.replace("an email or calendar entry", phrase)
+
+
 @dataclass
 class SourceStatus:
     name: str
@@ -65,6 +76,10 @@ class Briefing:
     slack_mentions: int = 0                  # unread @mentions in channels
     slack: List[ScoredItem] = field(default_factory=list)   # the top items — the only ones ever named
     mail_flagged: int = 0                    # unread emails filtered as unsafe (counted, never named or quoted)
+    #: Messages (None = not enabled / never synced: no line, no mention anywhere)
+    messages_unread: Optional[int] = None
+    messages_flagged: int = 0                # unread messages filtered as unsafe (counted, never named or quoted)
+    messages: List[ScoredItem] = field(default_factory=list)   # the top items — the only ones ever named
     slack_flagged: int = 0                   # unread Slack messages filtered as unsafe (counted, never named or quoted)
     all_scored: List[ScoredItem] = field(default_factory=list)
 
@@ -121,7 +136,13 @@ def build_briefing(
     names = sources or {"gmail": True, "calendar": True}
     if not sources and cache.health("slack").last_attempt is not None:
         names = {**names, "slack": True}          # cache-only view of a Slack that has been synced before
+    if not sources and cache.health("messages").last_attempt is not None:
+        names = {**names, "messages": True}       # cache-only view of a Messages that has been synced before
     slack_on = "slack" in names
+    msgs_on = "messages" in names
+    texts = [s for s in scored if s.item.source == "messages" and not s.excluded]
+    texts_top = sorted((s for s in texts if s.score >= cfg.min_priority_score),
+                       key=lambda s: (-s.score, -s.item.timestamp))[: cfg.max_messages_items] if msgs_on else []
     chat = [s for s in scored if s.item.source == "slack" and not s.excluded]
     slack_top = sorted((s for s in chat if s.score >= cfg.min_priority_score),
                        key=lambda s: (-s.score, -s.item.timestamp))[: cfg.max_slack_items] if slack_on else []
@@ -130,6 +151,9 @@ def build_briefing(
         slack_dms=(sum(1 for s in chat if (s.item.signals or {}).get("kind") in ("dm", "group_dm")) if slack_on else None),
         slack_mentions=(sum(1 for s in chat if (s.item.signals or {}).get("kind") == "mention") if slack_on else 0),
         slack=slack_top,
+        messages_unread=(len(texts) if msgs_on else None),
+        messages_flagged=(sum(1 for s in texts if s.suspicious) if msgs_on else 0),
+        messages=texts_top,
         mail_flagged=sum(1 for s in mail if s.suspicious),
         slack_flagged=(sum(1 for s in chat if s.suspicious) if slack_on else 0),
         bulk_count=sum(1 for s in rest if s.bulk), total_unread=len(mail),
@@ -190,10 +214,10 @@ def render_context(b: Briefing, cfg: BriefingConfig, budget: Optional[int] = Non
     (default cfg.token_cap): previews, then reasons, then named Slack items, then lowest-ranked mail,
     then meetings. The one-line Slack count is kept until the very end."""
     budget = cfg.token_cap if budget is None else budget
-    n_mail, n_meet, n_slack = len(b.priority), len(b.meetings), len(b.slack)
+    n_mail, n_meet, n_slack, n_msgs = len(b.priority), len(b.meetings), len(b.slack), len(b.messages)
     previews, why = True, True
     while True:
-        text = _render(b, cfg, n_meet, n_mail, previews, why, n_slack)
+        text = _render(b, cfg, n_meet, n_mail, previews, why, n_slack, n_msgs)
         tokens = estimate_tokens(text)
         if tokens <= budget:
             return text, tokens
@@ -203,6 +227,8 @@ def render_context(b: Briefing, cfg: BriefingConfig, budget: Optional[int] = Non
             why = False
         elif n_slack > 0:
             n_slack -= 1
+        elif n_msgs > 0:
+            n_msgs -= 1
         elif n_mail > 0:
             n_mail -= 1
         elif n_meet > 1:
@@ -222,11 +248,10 @@ def _flagged_clause(n: int, noun: str = "message") -> str:
 
 
 def _render(b: Briefing, cfg: BriefingConfig, n_meet: int, n_mail: int, previews: bool, why: bool,
-            n_slack: Optional[int] = None) -> str:
+            n_slack: Optional[int] = None, n_msgs: Optional[int] = None) -> str:
     stamp = datetime.fromtimestamp(b.as_of).strftime("%a %d %b %H:%M")
     # With Slack in the briefing the provenance line says so; without it the block is byte-for-byte what it was.
-    header = HEADER if b.slack_dms is None else HEADER.replace("an email or calendar entry",
-                                                                "an email, calendar entry or Slack message")
+    header = _header(b)
     lines = [header, f"as_of: {stamp} | " + " | ".join(s.describe() for s in b.sources)]
 
     lines.append("meetings:" if b.meetings[:n_meet] else "meetings: none in the next day")
@@ -261,6 +286,25 @@ def _render(b: Briefing, cfg: BriefingConfig, n_meet: int, n_mail: int, previews
         for i, s in enumerate(shown_slack, 1):
             sender = "[withheld]" if s.suspicious else clean_text(s.item.sender, cfg.sender_chars)
             where = {"dm": "DM", "group_dm": "group DM", "mention": "mention"}.get((s.item.signals or {}).get("kind"), "DM")
+            parts = [f"{i}. score {s.score}", f"from {quote(sender)}", f"in {where}"]
+            if previews and not s.suspicious and s.item.snippet:
+                parts.append(f"preview {quote(clean_text(s.item.snippet, cfg.preview_chars))}")
+            if s.suspicious:
+                parts.append("FLAGGED: text reads like instructions to an AI; preview withheld")
+            if why:
+                w = _short_why(s)
+                if w:
+                    parts.append(f"why {w}")
+            lines.append(" | ".join(parts))
+
+    if b.messages_unread is not None:
+        shown_msgs = b.messages[: len(b.messages) if n_msgs is None else n_msgs]
+        lines.append(f"Messages: {b.messages_unread} unread" + (" — top:" if shown_msgs else ""))
+        if b.messages_flagged:
+            lines.append("Messages: " + _flagged_clause(b.messages_flagged))
+        for i, s in enumerate(shown_msgs, 1):
+            sender = "[withheld]" if s.suspicious else clean_text(s.item.sender, cfg.sender_chars)
+            where = "group chat" if (s.item.signals or {}).get("kind") == "group" else "DM"
             parts = [f"{i}. score {s.score}", f"from {quote(sender)}", f"in {where}"]
             if previews and not s.suspicious and s.item.snippet:
                 parts.append(f"preview {quote(clean_text(s.item.snippet, cfg.preview_chars))}")
@@ -339,6 +383,27 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
             text += ", the top " + ("one" if len(names) == 1 else "ones") + " from " + " and ".join(names)
         return text + "." + flagged
 
+    def messages_sentence(n_names: int) -> str:
+        """"On Messages, 3 unread, the top one from Alice." Counts always; names only the top; never a phone number."""
+        n = b.messages_unread or 0
+        if not n:
+            return ""
+        text = f"On Messages, {n} unread"
+        names = []
+        for s in b.messages[:n_names]:
+            raw = _speak(s.item.sender, 28)
+            nm = "a flagged message" if s.suspicious else (
+                "an unknown number" if sum(c.isdigit() for c in raw) >= 5 else (raw or "someone"))
+            if nm not in names:
+                names.append(nm)
+        if names:
+            text += ", the top " + ("one" if len(names) == 1 else "ones") + " from " + " and ".join(names)
+        text += "."
+        if b.messages_flagged:
+            k = b.messages_flagged
+            text += f" {k} text message{'s were' if k != 1 else ' was'} filtered as unsafe."
+        return text
+
     def build(n_named: int, second_meeting: bool, other: bool, stale_note: bool, n_slack_names: int = 2) -> str:
         out = [f"Good {_tod(b.as_of)}, {who}."]
         if b.meetings:
@@ -374,6 +439,10 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
             out.append(f"{n} email{'s were' if n != 1 else ' was'} filtered as unsafe.")
         if b.slack_dms is not None:
             sentence = slack_sentence(n_slack_names)
+            if sentence:
+                out.append(sentence)
+        if b.messages_unread is not None:
+            sentence = messages_sentence(n_slack_names)
             if sentence:
                 out.append(sentence)
         if other and b.other_count:

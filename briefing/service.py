@@ -24,6 +24,7 @@ from briefing.collectors import CalendarCollector, Collector, GmailCollector
 from briefing.config import BriefingConfig, load_briefing_config
 from briefing.known import META_KEY as KNOWN_META_KEY, derive_known
 from briefing.readonly import ReadOnlyTools
+from briefing.messages import ContactBook, MessagesCollector
 from briefing.slack import SlackCollector
 from tools.registry import ToolRegistry, get_registry
 from utils.logger import get_logger
@@ -70,14 +71,18 @@ class BriefingService:
         tools = ReadOnlyTools(registry or get_registry())
         cache = cache or BriefingCache(cfg.cache_path)
         slack = SlackCollector(cfg, cached=lambda: cache.active_items("slack"))
-        return cls([GmailCollector(tools, cfg), CalendarCollector(tools, cfg), slack], cfg, cache)
+        collectors: List[Collector] = [GmailCollector(tools, cfg), CalendarCollector(tools, cfg), slack]
+        if cfg.messages_enabled:      # opt-in: the collector is not even created (nor chat.db touched) unless enabled
+            collectors.append(MessagesCollector(cfg, contacts=ContactBook.discover,
+                                                cached=lambda: cache.active_items("messages")))
+        return cls(collectors, cfg, cache)
 
     # ------------------------------------------------------------- refresh
     async def refresh(self) -> Dict[str, CollectorReport]:
         async with self._lock:
             results = await asyncio.gather(*(self._run_one(c) for c in self._collectors))
         for r in results:
-            if r.error:
+            if r.error and not (r.ok and r.skipped):      # an unconfigured optional collector is not a warning
                 logger.warning(f"[Briefing] {r.name} refresh failed: {r.error}")
         self.cache.prune(now=self._clock())
         return {r.name: r for r in results}

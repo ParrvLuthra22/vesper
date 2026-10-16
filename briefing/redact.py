@@ -99,6 +99,7 @@ _STATIC_REASONS = [
     r"fresh \(\d+h old\)", r"unread for \d+ days", r"text reads like instructions to an AI",
     r"title reads like instructions to an AI", r"no start time", r"already over",
     r"DM from a person", r"group DM from a person", r"@mention of you", r"reply to a message I wrote",
+    r"automated sender \(short code or sender id\)", r"one-time code message", r"unanswered for hours",
     r"bot/app message", r"allowlisted bot/app: penalty waived", r"allowlisted bot/app \(allowlist boost\)",
     r"decaying: unread for \d+ days",
     r"all-day, today", r"all-day, tomorrow", r"beyond the briefing window", r"all-day event",

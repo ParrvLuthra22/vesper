@@ -102,6 +102,8 @@ def score_item(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredIt
         return _score_event(item, ctx, cfg)
     if item.source == "slack":
         return _score_slack(item, ctx, cfg)
+    if item.source == "messages":
+        return _score_messages(item, ctx, cfg)
     return _score_mail(item, ctx, cfg)
 
 
@@ -280,6 +282,59 @@ def _score_slack(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> Scored
 
     score = max(0.0, min(w.mail_max_score, sum(r.delta for r in reasons)))
     return ScoredItem(item, int(round(score)), reasons, bulk=bot and not allowlisted, suspicious=suspicious)
+
+
+# ------------------------------------------------------------------------ messages
+
+def _score_messages(item: Item, ctx: ScoringContext, cfg: BriefingConfig) -> ScoredItem:
+    """Unread iMessage/SMS. Every weight is in config/briefing.yaml (weights.messages_*)."""
+    from briefing.slack import hostile_text   # lazy: slack.py imports collectors, which import this package
+
+    w = cfg.weights
+    if not item.unread:
+        return ScoredItem(item, 0, [Reason("already read", 0)], excluded=True)
+    sig = item.signals or {}
+    automated, otp, allowlisted = bool(sig.get("automated")), bool(sig.get("otp")), bool(sig.get("allowlisted"))
+    reasons: List[Reason] = []
+
+    if automated and allowlisted:
+        reasons.append(Reason("allowlisted bot/app: penalty waived", 0))
+        if w.important_automated:
+            reasons.append(Reason("allowlisted bot/app (allowlist boost)", w.important_automated))
+    elif automated:
+        reasons.append(Reason("automated sender (short code or sender id)", w.messages_automated_penalty))
+    elif sig.get("kind") == "group":
+        reasons.append(Reason("group DM from a person", w.messages_group_human))
+    else:
+        reasons.append(Reason("DM from a person", w.messages_dm_human))
+    if otp:
+        reasons.append(Reason("one-time code message", w.messages_otp_penalty))
+    if sig.get("unanswered") and not automated:
+        reasons.append(Reason("unanswered for hours", w.messages_unanswered))
+
+    if not automated or allowlisted:       # a short code shouting "urgent" earns nothing
+        total, hits = 0.0, []
+        for word, weight in cfg.urgency_keywords.items():
+            if re.search(rf"(?<![\w]){re.escape(word)}(?![\w])", item.snippet or "", re.IGNORECASE):
+                total += weight; hits.append(word)
+        if hits:
+            reasons.append(Reason(f"urgency words ({', '.join(sorted(hits))})", min(total, w.urgency_total_cap)))
+
+    if item.timestamp:
+        age_h = max(0.0, (ctx.now - item.timestamp) / 3600.0)
+        if age_h <= w.fresh_hours:
+            reasons.append(Reason(f"fresh ({age_h:.0f}h old)", w.fresh_bonus))
+        else:
+            steps = math.ceil((age_h - w.fresh_hours) / 24.0)
+            reasons.append(Reason(f"decaying: unread for {age_h / 24:.0f} days",
+                                  max(w.messages_decay_floor, w.messages_decay_per_day * steps)))
+
+    suspicious = bool(sig.get("hostile")) or hostile_text(item.snippet, item.sender)
+    if suspicious:
+        reasons.append(Reason("text reads like instructions to an AI", w.injection_suspected))
+
+    score = max(0.0, min(w.mail_max_score, sum(r.delta for r in reasons)))
+    return ScoredItem(item, int(round(score)), reasons, bulk=automated and not allowlisted, suspicious=suspicious)
 
 
 # ------------------------------------------------------------------------ calendar
