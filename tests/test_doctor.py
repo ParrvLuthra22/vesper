@@ -313,3 +313,14 @@ def test_the_mic_probe_opens_the_pinned_device_not_the_default(monkeypatch):
     monkeypatch.setattr(doctor.time, "sleep", lambda s: None)
     doctor.check_microphone(True, device=2)
     assert seen.get("device") == 2 and seen.get("samplerate") == 16000
+
+
+def test_doctor_says_so_when_the_system_default_input_cannot_be_determined():
+    out = _by_label(doctor.check_input_device(
+        "builtin", FAKE_LIST(_dev(2, "MacBook Pro Microphone")), default_index=None, transports={}, use_real_default=False))
+    d = out["System default input"]
+    assert d.status == WARN and "could not be determined" in d.detail and "pinned" in d.fix
+    assert out["Voice input device"].status == PASS                       # and the pinned mic is unaffected
+    gone = _by_label(doctor.check_input_device(
+        "builtin", FAKE_LIST(_dev(2, "MacBook Pro Microphone")), default_index=99, transports={}, use_real_default=False))
+    assert gone["System default input"].detail.startswith("could not be determined")      # a default that isn't an input device

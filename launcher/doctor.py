@@ -136,13 +136,16 @@ def check_input_device(setting: Any, devices: Optional[Callable[[], List[Dict[st
                          "the built-in mic is disabled"))
     else:
         out.append(Check(PASS, "Built-in microphone", f"found '{builtin.name}'"))
-        if default_index is not None:
-            default = next((d for d in found if d.index == default_index), None)
-            if default is not None and default.index != builtin.index:
+        default = next((d for d in found if d.index == default_index), None) if default_index is not None else None
+        if default is None:
+            out.append(Check(WARN, "System default input", "could not be determined (no default input device reported)",
+                             "informational: voice input is pinned (voice.input.device), so it does not depend on the default"))
+        else:
+            if default.index != builtin.index:
                 out.append(Check(WARN, "System default input", f"is '{default.name}', not the built-in mic",
                                  "voice input is pinned (voice.input.device) so this does not affect it; change the macOS "
                                  "default if you want other apps on the built-in mic too"))
-            elif default is not None:
+            else:
                 out.append(Check(PASS, "System default input", f"is the built-in mic ('{default.name}')"))
     return out
 
