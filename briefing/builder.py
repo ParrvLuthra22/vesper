@@ -64,6 +64,7 @@ class Briefing:
     slack_dms: Optional[int] = None          # unread DMs + group DMs
     slack_mentions: int = 0                  # unread @mentions in channels
     slack: List[ScoredItem] = field(default_factory=list)   # the top items — the only ones ever named
+    mail_flagged: int = 0                    # unread emails filtered as unsafe (counted, never named or quoted)
     slack_flagged: int = 0                   # unread Slack messages filtered as unsafe (counted, never named or quoted)
     all_scored: List[ScoredItem] = field(default_factory=list)
 
@@ -129,6 +130,7 @@ def build_briefing(
         slack_dms=(sum(1 for s in chat if (s.item.signals or {}).get("kind") in ("dm", "group_dm")) if slack_on else None),
         slack_mentions=(sum(1 for s in chat if (s.item.signals or {}).get("kind") == "mention") if slack_on else 0),
         slack=slack_top,
+        mail_flagged=sum(1 for s in mail if s.suspicious),
         slack_flagged=(sum(1 for s in chat if s.suspicious) if slack_on else 0),
         bulk_count=sum(1 for s in rest if s.bulk), total_unread=len(mail),
         sources=[source_status(cache, n, ok, cfg, now) for n, ok in names.items()],
@@ -214,9 +216,9 @@ def _slack_counts(b: Briefing) -> str:
     return f"Slack: {dms} unread DM{'s' if dms != 1 else ''}, {men} mention{'s' if men != 1 else ''}"
 
 
-def _flagged_clause(n: int) -> str:
-    """Neutral and text-free: how many unread Slack messages were held back as unsafe. Empty when there are none."""
-    return f"{n} message{'s' if n != 1 else ''} filtered as unsafe (text withheld)" if n else ""
+def _flagged_clause(n: int, noun: str = "message") -> str:
+    """Neutral and text-free: how many unread items were held back as unsafe. Empty when there are none."""
+    return f"{n} {noun}{'s' if n != 1 else ''} filtered as unsafe (text withheld)" if n else ""
 
 
 def _render(b: Briefing, cfg: BriefingConfig, n_meet: int, n_mail: int, previews: bool, why: bool,
@@ -248,6 +250,8 @@ def _render(b: Briefing, cfg: BriefingConfig, n_meet: int, n_mail: int, previews
             if w:
                 parts.append(f"why {w}")
         lines.append(" | ".join(parts))
+    if b.mail_flagged:
+        lines.append("Mail: " + _flagged_clause(b.mail_flagged, "email"))
 
     if b.slack_dms is not None:
         shown_slack = b.slack[: len(b.slack) if n_slack is None else n_slack]
@@ -365,6 +369,9 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
             out.append(lead + ".")
         else:
             out.append("No priority mail.")
+        if b.mail_flagged:
+            n = b.mail_flagged
+            out.append(f"{n} email{'s were' if n != 1 else ' was'} filtered as unsafe.")
         if b.slack_dms is not None:
             sentence = slack_sentence(n_slack_names)
             if sentence:

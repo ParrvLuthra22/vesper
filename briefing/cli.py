@@ -91,7 +91,8 @@ def status_lines(b: Briefing, red: Optional[Redactor] = None) -> List[str]:
         replace(s, error="(details withheld)" if s.error else None) for s in b.sources]
     lines = ["sources: " + "; ".join(s.describe() + ("" if s.available else " [tools unavailable]") for s in sources),
              f"unread mail: {b.total_unread} | priority: {len(b.priority)} | other: {b.other_count} "
-             f"({b.bulk_count} bulk) | meetings shown: {len(b.meetings)}"]
+             f"({b.bulk_count} bulk) | meetings shown: {len(b.meetings)}"
+             + (f" | filtered as unsafe: {b.mail_flagged}" if b.mail_flagged else "")]
     if b.slack_dms is not None:
         lines.append(f"{_slack_counts(b)} | named: {len(b.slack)}"
                      + (f" | filtered as unsafe: {b.slack_flagged}" if b.slack_flagged else ""))
@@ -220,6 +221,8 @@ def register_static(red: Redactor, cfg: BriefingConfig) -> None:
         "# ID SCORE SOURCE WHEN FROM / TITLE WHY",
         "(cache is empty — try --refresh)",
         "unread mail: {int} | priority: {int} | other: {int} ({int} bulk) | meetings shown: {int}",
+        "unread mail: {int} | priority: {int} | other: {int} ({int} bulk) | meetings shown: {int} "
+        "| filtered as unsafe: {int}",
         "Slack: {int} unread {DMs}, {int} {mentions} | named: {int}",
         "Slack: {int} unread {DMs}, {int} {mentions} | named: {int} | filtered as unsafe: {int}",
         "Known correspondents — derived from {int} sent message(s) in the last {int} days (header addresses only; "
