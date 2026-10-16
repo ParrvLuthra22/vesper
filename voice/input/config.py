@@ -76,6 +76,9 @@ class VoiceInputConfig:
     #: has as default. Or an exact device name, a sounddevice index, or "default" (the system default, only by asking).
     device: Any = "builtin"
     mic_device: Optional[Any] = None  # LEGACY alias of `device` (used only when `device` is not set)
+    #: Optional input gain, applied before the wake word / VAD / Whisper. OFF by default (see voice/input/gain.py).
+    gain_db: float = 0.0
+    auto_gain: bool = False
 
     # Where to inject the transcript (the gateway — "just another client").
     gateway_host: str = "127.0.0.1"
@@ -131,6 +134,8 @@ class VoiceInputConfig:
             sample_rate=int(g("sample_rate", cls.sample_rate)),
             frame_ms=int(g("frame_ms", cls.frame_ms)),
             device=device,
+            gain_db=float(g("gain_db", cls.gain_db)),
+            auto_gain=bool(g("auto_gain", cls.auto_gain)),
             mic_device=legacy_mic,
             gateway_host=str(gw.get("host", cls.gateway_host)),
             gateway_port=int(gw.get("port", cls.gateway_port)),

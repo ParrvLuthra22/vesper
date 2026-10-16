@@ -14,6 +14,7 @@ import threading
 from pathlib import Path
 
 from voice.input.audio import FileSource, MicSource
+from voice.input.gain import wrap_with_gain
 from voice.input.config import VoiceInputConfig, VoiceTransition
 from voice.input.devices import (
     DeviceResolutionError, default_input_index, list_input_devices, read_transport_types, resolve_input_device)
@@ -157,6 +158,9 @@ def main() -> int:
         config.sample_rate, config.frame_samples, device.index,
         first_frame_timeout=config.first_frame_timeout_seconds,
     )
+    if config.gain_db or config.auto_gain:
+        logger.info("input gain on | %s %+.1f dB (voice.input.gain_db / auto_gain)", "auto +" if config.auto_gain else "fixed", config.gain_db)
+        source = wrap_with_gain(source, config.gain_db, config.auto_gain)
     try:
         # Load the wake model NOW (not lazily on the first frame) so a missing
         # package/model fails immediately and loudly, and "ready" below means

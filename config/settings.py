@@ -91,6 +91,8 @@ class VoiceInputSettings(BaseModel):
     listen_timeout_ms: int = 6000
     first_frame_timeout_seconds: float = 15.0
     device: Any = "builtin"  # "builtin" | an input device name | a sounddevice index | "default"
+    gain_db: float = 0.0     # optional input boost in dB (default 0 = off)
+    auto_gain: bool = False  # keep the recent peak near -12 dBFS (default off)
     mic_device: Optional[Any] = None  # legacy alias of `device`
 
 

@@ -118,6 +118,11 @@ voice:
     # or "default" (the system default, only if you ask for it). If the chosen mic is missing, voice input exits with
     # status 69 and lists the input devices it found; it never falls back silently. `vesper mic-test` shows what it hears.
     device: "builtin"
+    # Optional input gain for a quiet microphone. BOTH ARE OFF by default; the audio path is then unchanged. Prefer raising
+    # System Settings > Sound > Input volume — it improves the signal before the converter. `vesper mic-test` applies the
+    # same gain, so you can see its effect on the wake score.
+    gain_db: 0                  # fixed boost in dB (e.g. 6 = twice the amplitude); 0 = off
+    auto_gain: false            # true = keep the recent peak near -12 dBFS (max +30 dB, never on near-silence)
     mic_device: null            # LEGACY alias of `device`; only read when `device` is not set
 
   # Wake-word sensitivity for voice input (openWakeWord). The wake model scores every 80 ms window 0..1 and the word
