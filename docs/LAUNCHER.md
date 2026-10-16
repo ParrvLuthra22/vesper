@@ -59,6 +59,15 @@ mono the wake word and Whisper need (an unconverted stream would be slowed 3x wi
   sends nothing. Exit 3 = no signal, 69 = device unavailable.
 * `vesper doctor` — shows which input device voice input would use (name only), **WARN** if the system default input is not
   the built-in mic (voice input is unaffected, other apps are), **FAIL** if the built-in mic is not found.
+* `vesper mic-test --selftest [--rate 48000]` — **no microphone**: synthesizes "Hey Jarvis" with the local Kokoro TTS (three
+  voices), converts it to the device rate and feeds it through the *same* resample → 480-sample frames → 1280-sample window →
+  openWakeWord path as live frames, at full / 0.3x / 0.1x level, next to a direct-16 kHz control and negative controls
+  (silence, noise, another sentence). Verdict `pipeline OK (synthetic phrase detected)` or `pipeline suspect (synthetic phrase
+  not detected)` with a one-line diagnosis (resampler vs model vs voice). It plays, records and sends nothing.
+* Low level: `mic-test` prints the peak in dBFS on every line and, when it is below about −20 dBFS, `input level is low: raise
+  the Input volume in System Settings > Sound`.
+* Optional gain for a quiet mic: `voice.input.gain_db` (fixed dB) and `voice.input.auto_gain` (keeps the recent peak near
+  −12 dBFS, max +30 dB, never on near-silence). **Both off by default**; `mic-test` applies them too, so you can see the effect.
 * Sensitivity: `voice.wake.threshold` (default 0.5, unchanged). Lower = hears you more easily and mis-fires more. Voice
   input logs the max wake score per 10 s window at DEBUG (scores only, no audio) so you can tune it from real use.
 * `vesper logs voice_input --tail 40 --redact-transcripts` — the log with what you said replaced by `<text:N>` (the
