@@ -64,6 +64,7 @@ class Briefing:
     slack_dms: Optional[int] = None          # unread DMs + group DMs
     slack_mentions: int = 0                  # unread @mentions in channels
     slack: List[ScoredItem] = field(default_factory=list)   # the top items — the only ones ever named
+    slack_flagged: int = 0                   # unread Slack messages filtered as unsafe (counted, never named or quoted)
     all_scored: List[ScoredItem] = field(default_factory=list)
 
 
@@ -128,6 +129,7 @@ def build_briefing(
         slack_dms=(sum(1 for s in chat if (s.item.signals or {}).get("kind") in ("dm", "group_dm")) if slack_on else None),
         slack_mentions=(sum(1 for s in chat if (s.item.signals or {}).get("kind") == "mention") if slack_on else 0),
         slack=slack_top,
+        slack_flagged=(sum(1 for s in chat if s.suspicious) if slack_on else 0),
         bulk_count=sum(1 for s in rest if s.bulk), total_unread=len(mail),
         sources=[source_status(cache, n, ok, cfg, now) for n, ok in names.items()],
         all_scored=sorted(scored, key=lambda s: -s.score),
@@ -212,6 +214,11 @@ def _slack_counts(b: Briefing) -> str:
     return f"Slack: {dms} unread DM{'s' if dms != 1 else ''}, {men} mention{'s' if men != 1 else ''}"
 
 
+def _flagged_clause(n: int) -> str:
+    """Neutral and text-free: how many unread Slack messages were held back as unsafe. Empty when there are none."""
+    return f"{n} message{'s' if n != 1 else ''} filtered as unsafe (text withheld)" if n else ""
+
+
 def _render(b: Briefing, cfg: BriefingConfig, n_meet: int, n_mail: int, previews: bool, why: bool,
             n_slack: Optional[int] = None) -> str:
     stamp = datetime.fromtimestamp(b.as_of).strftime("%a %d %b %H:%M")
@@ -245,6 +252,8 @@ def _render(b: Briefing, cfg: BriefingConfig, n_meet: int, n_mail: int, previews
     if b.slack_dms is not None:
         shown_slack = b.slack[: len(b.slack) if n_slack is None else n_slack]
         lines.append(_slack_counts(b) + (" — top:" if shown_slack else ""))
+        if b.slack_flagged:
+            lines.append("Slack: " + _flagged_clause(b.slack_flagged))
         for i, s in enumerate(shown_slack, 1):
             sender = "[withheld]" if s.suspicious else clean_text(s.item.sender, cfg.sender_chars)
             where = {"dm": "DM", "group_dm": "group DM", "mention": "mention"}.get((s.item.signals or {}).get("kind"), "DM")
@@ -309,6 +318,8 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
         dms, men = b.slack_dms or 0, b.slack_mentions
         if not (dms or men):
             return ""
+        flagged = (f" {b.slack_flagged} Slack message{'s were' if b.slack_flagged != 1 else ' was'} filtered as unsafe."
+                   if b.slack_flagged else "")
         bits = []
         if dms:
             bits.append(f"{dms} unread DM{'s' if dms != 1 else ''}")
@@ -322,7 +333,7 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
                 names.append(nm)
         if names:
             text += ", the top " + ("one" if len(names) == 1 else "ones") + " from " + " and ".join(names)
-        return text + "."
+        return text + "." + flagged
 
     def build(n_named: int, second_meeting: bool, other: bool, stale_note: bool, n_slack_names: int = 2) -> str:
         out = [f"Good {_tod(b.as_of)}, {who}."]

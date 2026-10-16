@@ -191,7 +191,7 @@ def test_new_slack_reason_labels_are_allowlisted_and_anything_else_is_a_placehol
 def test_the_status_line_for_slack_carries_counts_only(env, capsys):
     code, text = run(capsys, "--explain", "--cache-only", "--redact")
     line = next(l for l in text.splitlines() if l.startswith("Slack:"))
-    assert re.fullmatch(r"Slack: \d+ unread DMs?, \d+ mentions? \| named: \d+", line)
+    assert re.fullmatch(r"Slack: \d+ unread DMs?, \d+ mentions? \| named: \d+( \| filtered as unsafe: \d+)?", line)
 
 
 # ----------------------------------------------- items produced by the real collector

@@ -26,6 +26,22 @@ from typing import Dict, Iterable, List, Optional, Set
 __all__ = ["Redactor", "RedactionLeak", "SAFE_WORDS", "safe_reason", "scan_fields"]
 
 
+#: A placeholder this module hands out. It carries no information, so it is removed before the leak scan; nothing
+#: else inside angle brackets is (a stray "<providers:1>" is not a placeholder).
+_PLACEHOLDER = re.compile(r"<(?:sender|subject|domain|snippet|reason):\d+>")
+
+#: What a variable part of a STATIC line may be: numbers, dates, a placeholder, a rule action. Never free text.
+_SLOTS = {
+    "int": r"\d+",
+    "num": r"[+-]?\d+(?:\.\d+)?",
+    "ph": _PLACEHOLDER.pattern,
+    "when": r"(?:\d{4}-\d\d-\d\d \d\d:\d\d|unknown)",
+    "ACTION": r"(?:PRIORITY|IGNORE)",
+    "DMs": r"DMs?",
+    "mentions": r"mentions?",
+}
+
+
 class RedactionLeak(Exception):
     """Raised by Redactor.guard; the message never contains the leaked text."""
 
@@ -131,6 +147,7 @@ class Redactor:
         self._full: Set[str] = set()      # normalised complete values
         self._tokens: Set[str] = set()    # name/address/domain parts (3+ chars)
         self._ngrams: Set[str] = set()    # word 3-grams of free text (subjects/snippets/titles)
+        self._static: List["re.Pattern[str]"] = []   # whole-line shapes of the command's OWN fixed text
 
     # ----------------------------------------------------------- placeholders
     def _ph(self, kind: str, key: str) -> str:
@@ -237,6 +254,31 @@ class Redactor:
     def rule_value(self, scope: str, value: object) -> str:
         return self.domain(value) if scope == "domain" else self.sender(value)
 
+    # ----------------------------------------------------------- static text
+    def add_static(self, template: str, literals: Optional[Dict[str, str]] = None) -> None:
+        """Declare one line of the command's own fixed output, e.g. "Addresses ({int}) — mail from these gets +{num}:".
+        `{int}`/`{num}`/`{ph}`/`{when}`/`{ACTION}` are the only variable parts (numbers, a date, a placeholder, a rule
+        action — never free text); `literals` fills in fixed config values such as a file path. A line is exempt from
+        the leak scan only if it matches a declared shape IN FULL, so a stored value that equals one of its words
+        cannot block it, while the same word in a dynamic position (or any extra text) makes the line not match."""
+        literals = literals or {}
+        rx = ""
+        for i, part in enumerate(re.split(r"\{(\w+)\}", template)):
+            if i % 2 == 0:
+                rx += re.escape(_SPACE.sub(" ", part))
+            elif part in literals:
+                rx += re.escape(_SPACE.sub(" ", literals[part]))
+            else:
+                rx += _SLOTS[part]
+        self._static.append(re.compile(rx))
+
+    def strip_static(self, text: str) -> str:
+        """`text` without the lines that are entirely the command's own static text, and without placeholder tokens:
+        what is left is the dynamic part, which is the only part the guard needs to scan."""
+        kept = [ln for ln in text.split("\n")
+                if not any(rx.fullmatch(_SPACE.sub(" ", ln.strip())) for rx in self._static)]
+        return _PLACEHOLDER.sub(" ", "\n".join(kept))
+
     # ----------------------------------------------------------- the guard
     def findings(self, text: str) -> int:
         """How many distinct sensitive values appear in `text`."""
@@ -257,7 +299,7 @@ class Redactor:
         return hits
 
     def guard(self, text: str) -> str:
-        n = self.findings(text)
+        n = self.findings(self.strip_static(text))
         if n:
             raise RedactionLeak(n)
         return text

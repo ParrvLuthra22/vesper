@@ -93,7 +93,8 @@ def status_lines(b: Briefing, red: Optional[Redactor] = None) -> List[str]:
              f"unread mail: {b.total_unread} | priority: {len(b.priority)} | other: {b.other_count} "
              f"({b.bulk_count} bulk) | meetings shown: {len(b.meetings)}"]
     if b.slack_dms is not None:
-        lines.append(f"{_slack_counts(b)} | named: {len(b.slack)}")
+        lines.append(f"{_slack_counts(b)} | named: {len(b.slack)}"
+                     + (f" | filtered as unsafe: {b.slack_flagged}" if b.slack_flagged else ""))
     return lines
 
 
@@ -210,6 +211,52 @@ def seed_guard(red: Redactor, cfg: BriefingConfig, cache) -> None:
         red.seed_identity(r.value)
 
 
+def register_static(red: Redactor, cfg: BriefingConfig) -> None:
+    """The fixed lines each redacted command prints, as whole-line shapes (see Redactor.add_static). They must
+    mirror the print() calls above; a line that drifts from its shape is simply scanned like any other, so a
+    layout change can only ever over-block (fail closed), never leak."""
+    path = {"path": cfg.rules_path}
+    for t in (
+        "# ID SCORE SOURCE WHEN FROM / TITLE WHY",
+        "(cache is empty — try --refresh)",
+        "unread mail: {int} | priority: {int} | other: {int} ({int} bulk) | meetings shown: {int}",
+        "Slack: {int} unread {DMs}, {int} {mentions} | named: {int}",
+        "Slack: {int} unread {DMs}, {int} {mentions} | named: {int} | filtered as unsafe: {int}",
+        "Known correspondents — derived from {int} sent message(s) in the last {int} days (header addresses only; "
+        "no message text is read or stored). Updated {when}.",
+        "Addresses ({int}) — mail from these gets +{num}:",
+        "Domains ({int}) — mail from these gets +{num} (public mailbox providers such as gmail.com are never listed):",
+        "{int}× {ph}",
+        "No known correspondents yet: nothing found in the last {int} days of sent mail (or the sent summary has not "
+        "been collected: run `vesper briefing --refresh --known`).",
+        "Rules in {path} (plain JSON; applied by briefing/scorer.py; nothing is learned):",
+        "No rules yet ({path}). Create one with: vesper briefing --mark <ID> priority|ignore",
+        "#{int}: mail from {ph} -> {ACTION}",
+        "#{int}: all mail from @{ph} (and its subdomains) -> {ACTION}",
+        "Remove one with: vesper briefing --rules --remove <N>",
+        "No rule #{int}. List them with: vesper briefing --rules",
+        "Removed rule #{int}: mail from {ph} -> {ACTION}. Future briefings no longer apply it.",
+        "Removed rule #{int}: all mail from @{ph} (and its subdomains) -> {ACTION}. Future briefings no longer apply it.",
+        "Recorded rule #{int}: mail from {ph} -> {ACTION}",
+        "Recorded rule #{int}: all mail from @{ph} (and its subdomains) -> {ACTION}",
+        "What it does: mail from the address {ph} now gets +{num} points, and the newsletter/promo/noreply/"
+        "mailing-list penalties are waived.",
+        "What it does: mail from every sender at @{ph} (and its subdomains) now gets +{num} points, and the "
+        "newsletter/promo/noreply/mailing-list penalties are waived.",
+        "What it does: mail from the address {ph} now gets {num} points, so it never reaches the priority list.",
+        "What it does: mail from every sender at @{ph} (and its subdomains) now gets {num} points, so it never "
+        "reaches the priority list.",
+        "What was stored: only the sender ('{ph}') and the action — no subject, no text. File: {path} "
+        "(plain JSON; edit or delete it any time).",
+        "What was stored: only the domain ('{ph}') and the action — no subject, no text. File: {path} "
+        "(plain JSON; edit or delete it any time).",
+        "What it is not: there is no learning model; the rule is applied by briefing/scorer.py and nothing else.",
+        "(Use --domain to apply it to everyone at @{ph} instead.)",
+        "Undo: vesper briefing --rules --remove {int}",
+    ):
+        red.add_static(t, path)
+
+
 #: Views that interleave real text into sentences / a token budget; there is no safe way to
 #: placeholder them after the fact, so --redact refuses them instead of guessing.
 REDACT_UNSUPPORTED = "--redact supports --explain, --json, --known, --mark and --rules (not the spoken script or the planner block)."
@@ -218,6 +265,8 @@ REDACT_UNSUPPORTED = "--redact supports --explain, --json, --known, --mark and -
 async def _run(args: argparse.Namespace) -> int:
     cfg = load_briefing_config()
     red: Optional[Redactor] = getattr(args, "redactor", None)
+    if red is not None:
+        register_static(red, cfg)
     if red is not None and (args.spoken or not (args.explain or args.json or args.known or args.mark or args.rules)):
         print(REDACT_UNSUPPORTED, file=sys.stderr)
         return 2
