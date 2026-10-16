@@ -22,7 +22,8 @@ The model's only job is to say the script (or, on the fast path, nothing — the
 |---|---|
 | `briefing/items.py` | the `Item` schema |
 | `briefing/collectors.py` | `Collector` base class, `GmailCollector`, `CalendarCollector` |
-| `briefing/readonly.py` | the only way collectors reach tools — an allow-list of safe reads |
+| `briefing/readonly.py` | the only way the Gmail/Calendar collectors reach tools — an allow-list of safe reads |
+| `briefing/slack.py`, `briefing/slack_api.py` | the Slack collector and its read-only client (six allow-listed Slack methods) — see [SLACK.md](SLACK.md) |
 | `briefing/scorer.py` | the deterministic 0–100 scorer; every point has a reason |
 | `briefing/cache.py` | SQLite cache (`data/briefing.db`): items + scores, per-source cursor/health |
 | `briefing/builder.py` | selection, the ≤600-token context block, the spoken script |
@@ -48,10 +49,16 @@ one**. They use batch requests (one round trip per 50 messages). Calendar uses t
 
 ## Item schema (`briefing/items.py`)
 
-`id` · `source` (gmail|calendar) · `sender` · `title` (subject / event title) · `snippet` (truncated at collection,
+`id` · `source` (gmail|calendar|slack) · `sender` · `title` (subject / event title) · `snippet` (truncated at collection,
 200 chars; calendar notes are **never** collected) · `timestamp` · `thread_id` · `is_reply` · `start_at` / `end_at`
 / `all_day` (events) · `unread` · `signals` (labels, list-id, list-unsubscribe, precedence, auto-submitted) ·
 `raw_trust = "third_party"`.
+
+**Slack** (optional, off without a token — [SLACK.md](SLACK.md)): `SlackCollector` is a `Collector` with `optional = True`
+and its own guard, `SlackReadOnlyClient`, which refuses every Slack method outside `SLACK_READ_METHODS`
+(`auth.test`, `users.conversations`, `conversations.info`, `conversations.history`, `users.info`, `search.messages`).
+Items: `slack:<channel>:<ts>`, `sender` = display name, `title` = "direct message" / "group message" / "mention in <channel>",
+`signals` = kind, mention, bot, allowlisted, reply_to_me, hostile.
 
 ## Collection
 
@@ -60,6 +67,11 @@ one**. They use batch requests (one round trip per 50 messages). Calendar uses t
   minus a 2-minute overlap; first run looks back `gmail_lookback_days`, default 3), so each run fetches only what
   is new. Read-state is reconciled with one cheap `unread_ids` call: mail read elsewhere drops out. The calendar is
   state, not a stream: each run re-reads today + tomorrow and vanished events (cancelled/moved) drop out.
+* **Slack:** the cursor is the start time of the last successful run (minus the same 2-minute overlap); each DM is asked
+  only for messages newer than `max(cursor, Slack's own read marker)`, and read state is reconciled every run
+  (read in Slack => drops out). With **no token the collector is "not configured"**: skipped without recording a
+  failure, no source line, no staleness note — the briefing is byte-for-byte unchanged. With a token, failures,
+  timeouts and staleness behave exactly like the other collectors (`slack STALE (47m old; last error: ratelimited)`).
 * The sent-mail summary (who I've written to, which threads I'm in) is refreshed at most every 24 h.
 * **Failure isolation:** each collector runs concurrently under its own timeout (45 s). One that raises or hangs is
   recorded as a failure and never blocks the others; the cursor only advances on success. The briefing shows
@@ -91,6 +103,12 @@ one**. They use batch requests (one round trip per 50 messages). Calendar uses t
 | **strong urgency** (deadline, evaluation, shortlisted, submission, interview, payment failed, action required, expires) | caps the *combined* bulk penalties at −10 | not for Gmail-Promotions mail; `expires` is ignored when the text also reads like a promo |
 | **important-automated allowlist** (domains / patterns you configure) | all bulk penalties waived | off by default; optional `important_automated` boost (default 0) |
 | text reads like instructions to an AI | −40 | and the snippet is withheld |
+| **Slack** DM / group DM from a person | +25 | `slack_dm_human`; not for bots/apps |
+| Slack @mention of me (channel, or in a group DM) | +20 | `slack_mention` |
+| Slack thread reply to something I wrote | +10 | `slack_reply_to_mine` |
+| Slack unread longer than `fresh_hours` (24 h) | −5 per further day, floor −30 | `slack_decay_per_day`, `slack_decay_floor` (instead of the +10 fresh bonus) |
+| Slack bot/app message | −30 | `slack_bot_penalty`; waived for `slack.allowlisted_senders`; a bot's urgency words earn nothing |
+| Slack urgency words / fresh / injection | as mail | the same `urgency_keywords`, `fresh_bonus`, `injection_suspected` |
 | **mail cap** | 94 | mail can never outrank an imminent meeting |
 | meeting starts within 3 h, or in progress | **100** | always top |
 | meeting later today | 60 | |
@@ -149,7 +167,8 @@ over, or beyond tomorrow are marked `[excluded]`.
 ## The briefing (`builder.py`)
 
 Selection: **next meetings** (up to 3, time order) · **priority mail** (unread, score ≥ 35, top 5) · **everything
-else** as a count (with how many are newsletters/promos/automated).
+else** as a count (with how many are newsletters/promos/automated) · **Slack** (only when configured): a count line,
+`Slack: N unread DMs, M mentions`, plus the top `max_slack_items` (2) scoring ≥ `min_priority_score` — only those are named.
 
 `get_daily_briefing` returns one text block under a **hard 600-token cap** (`estimate_tokens`; degraded in steps:
 previews → reasons → lowest-ranked mail → meetings):
@@ -180,6 +199,7 @@ answered **straight from the cache with no LLM call and no tool call** (`fast_pa
 
 An email subject or snippet is attacker-controlled. Layers, outermost first:
 
+0. Slack text takes the same path: `slack_plain` turns mrkdwn into plain text (mentions become "@user", links keep their label, `$(`/`${` are defused) before `clean_text`; hostile Slack text (instruction phrases **or** shell payloads) stores no snippet, is demoted and withheld, and its sender is not named. Tests: `tests/test_slack_briefing.py`, `tests/test_slack_collector.py`.
 1. **`clean_text`** — drops control/zero-width/bidi characters, strips markup and markdown structure (`<>{}[]\`|#**---`),
    replaces URLs and addresses with `[link]`/`[address]`, collapses to one line, and **truncates hard** (subject 70,
    sender 32, preview 90 chars).
@@ -206,8 +226,8 @@ vesper briefing --cache-only    # never touch the network
 ```
 ### `--redact` — sharing output without sharing your mail
 
-`--explain`, `--json`, `--known`, `--mark` and `--rules` accept `--redact`: every sender, subject, snippet and
-domain becomes a stable placeholder (`<sender:3>`, `<subject:7>`, `<domain:2>`), numbered by first appearance. Use it
+`--explain`, `--json`, `--known`, `--mark` and `--rules` accept `--redact`: every sender (Slack display names included),
+subject, snippet, channel name and domain becomes a stable placeholder (`<sender:3>`, `<subject:7>`, `<domain:2>`), numbered by first appearance. Use it
 for anything you paste into a report, issue or chat. It **fails closed**, in two layers:
 
 1. The row builder never produces a real value in redacted mode (scorer reasons must match an allowlist of static
@@ -232,7 +252,7 @@ Start by filling in `vips:` — with it empty, only reply/thread/urgency signals
   capped at 5, so the ranking among them is then flat.
 * Read-state/replies made on another device appear at the next refresh (≤10 min).
 * Calendar notes and attendee lists are not read. Reminders are not part of the briefing yet.
-* Slack/iMessage are not collected (no read-only tools for them exist yet): a collector is ~60 lines
-  (`Collector` subclass + an allow-listed read tool).
+* iMessage is not collected. Slack is (read-only, optional): see [SLACK.md](SLACK.md) for its limits — Slack's own
+  mute flag isn't in the API (you list muted channels), and quiet in-thread replies to your messages are often invisible.
 * Scheduled morning briefing (`BriefingRequestedEvent`) uses the same compact block, plus the existing day-plan/Slack/dev
   sections.

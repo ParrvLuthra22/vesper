@@ -427,7 +427,7 @@ async def test_unconfigured_slack_is_skipped_silently_and_the_briefing_is_unaffe
     assert [s.name for s in svc.briefing(NOW).sources] == ["gmail"]       # no source line, no staleness note
     assert svc.is_stale() is False
     text = svc.tool_result(NOW)
-    assert "slack" not in text.lower()
+    assert "slack" not in text.lower()                                   # not even in the provenance header
 
 
 @pytest.mark.asyncio
