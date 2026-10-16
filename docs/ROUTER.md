@@ -38,8 +38,10 @@ you say ─► Brain.handle_user_text
 5. **It never closes its own host or sweeps**: Terminal, iTerm, Ghostty, Finder, VS Code and Xcode are never closed by the
    router (checked on the *resolved* app name, so aliases like "vscode" cannot slip past), and "everything", "all",
    "it", "that" are not app names.
-6. **Every skill goes through the Guardian** at `max(skill tier, tool tier)`. `close_app` is raised to *confirm* even
-   though the tool itself is *safe*. A denial is reported, not retried.
+6. **Every skill goes through the Guardian** at `max(skill tier, tool tier)`. `close_app` is *confirm* in the tool
+   registry already; the skill repeats that as its own floor, so lowering the tool's tier by mistake would not make the
+   router quietly stop asking (a test registers `close_app` as *safe* and checks the router still asks). A denial is
+   reported, not retried.
 7. **Failure policy**: a read-only skill that fails (calendar permission, unreadable data) falls through to the planner;
    a skill that changes something and fails says so honestly instead.
 8. Turns that carry third-party text (a forwarded Telegram message) never take the shortcut. Skill replies that quote
@@ -82,5 +84,5 @@ modelled; the eval is text).
 
 `tests/test_router.py` (matching, ambiguity, eval thresholds, runner + Guardian gating, Brain integration) and
 `tests/eval_router.py` (the metrics). The security-relevant checks were mutation-tested: removing the full-phrase
-anchor, the ambiguity rule, the `close_app` tier floor, the never-close list (including its alias check), the Guardian
+anchor, the ambiguity rule, the `close_app` tier floor (against a tool registered as *safe*), the never-close list (including its alias check), the Guardian
 call, the volume range check or the greeting-hour check each makes tests fail.

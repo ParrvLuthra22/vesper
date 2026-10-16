@@ -1,4 +1,7 @@
-# Recording the reel
+# Recording the reel — machine pre-flight
+
+> The 3-minute walkthrough you can record with synthetic data is [DEMO.md](DEMO.md); this page is only the pre-flight for
+> the voice + HUD reel.
 
 The signature clip: **say the wake phrase → the star flares → the panel wakes →
 Vesper speaks and types the greeting → give a spoken command → trace lines

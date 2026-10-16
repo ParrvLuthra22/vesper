@@ -3,14 +3,14 @@
 A shot-by-shot script for the signature reel: **wake word → a multi-tool task → a
 Guardian confirmation → the proactive call-out → HUD traces → idle.** For
 machine pre-flight (freeing memory, checking Groq's rate-limit window, warming
-models), run [`docs/DEMO.md`](DEMO.md) first — this document is only the shot
+models), run [`docs/DEMO_PREFLIGHT.md`](DEMO_PREFLIGHT.md) first — this document is only the shot
 list and what to say.
 
 ---
 
 ## Before you hit record
 
-1. Run the [`docs/DEMO.md`](DEMO.md) pre-flight checklist in full (`doctor.py`,
+1. Run the [`docs/DEMO_PREFLIGHT.md`](DEMO_PREFLIGHT.md) pre-flight checklist in full (`doctor.py`,
    `smoke_rate_limit.py`, model warm-up).
 2. **Restart `python -m gateway.server` fresh.** The proactive engine's
    per-rule cooldowns live only in memory (`proactive/engine.py`,
@@ -82,7 +82,7 @@ list and what to say.
   second, distinct input, not a rushed spoken word in the same breath as the
   request.
 - **If the star cools to dim gold at any point**, the turn fell to the local
-  Ollama rescue — cut, wait 60s per `docs/DEMO.md`, and retake. A cold local
+  Ollama rescue — cut, wait 60s per `docs/DEMO_PREFLIGHT.md`, and retake. A cold local
   load runs ~38s and will visibly stall the shot.
 - **The call-out only fires once.** If it doesn't land in the 0:53–1:08
   window, the pre-roll switch sequence didn't register as 3 distinct apps
