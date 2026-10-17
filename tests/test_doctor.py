@@ -324,3 +324,36 @@ def test_doctor_says_so_when_the_system_default_input_cannot_be_determined():
     gone = _by_label(doctor.check_input_device(
         "builtin", FAKE_LIST(_dev(2, "MacBook Pro Microphone")), default_index=99, transports={}, use_real_default=False))
     assert gone["System default input"].detail.startswith("could not be determined")      # a default that isn't an input device
+
+
+# ---- calendar permission (names the exact app) and the custom wake model
+
+@pytest.mark.parametrize("term,app", [("Apple_Terminal", "Terminal"), ("iTerm.app", "iTerm"), ("vscode", "Visual Studio Code"),
+                                      ("ghostty", "Ghostty")])
+def test_calendar_denied_names_the_terminal_app_and_the_settings_path(term, app):
+    [c] = doctor.check_calendar_access({"TERM_PROGRAM": term}, status=lambda: 2)
+    assert c.status == FAIL and app in c.detail
+    assert "System Settings > Privacy & Security > Calendars" in c.fix and app in c.fix
+
+
+def test_calendar_granted_not_asked_and_unknown():
+    assert doctor.check_calendar_access({}, status=lambda: 3)[0].status == PASS
+    c = doctor.check_calendar_access({"TERM_PROGRAM": "Apple_Terminal"}, status=lambda: 0)[0]
+    assert c.status == WARN and "Terminal" in c.fix
+    assert doctor.check_calendar_access({}, status=lambda: None)[0].status == WARN
+
+
+def test_calendar_check_never_requests_access():
+    import inspect
+    src = inspect.getsource(doctor.calendar_authorization)
+    assert "authorizationStatusForEntityType" in src and "requestAccess" not in src and "requestFullAccess" not in src
+
+
+def test_wake_model_check(tmp_path):
+    assert doctor.check_wake_model({}, tmp_path)[0].status == PASS
+    cfg = {"voice": {"wake": {"model_path": "voice/models/hey_vesper.onnx"}}}
+    c = doctor.check_wake_model(cfg, tmp_path)[0]
+    assert c.status == WARN and "hey_vesper.onnx" in c.detail and "docs/WAKEWORD.md" in c.fix
+    (tmp_path / "voice" / "models").mkdir(parents=True)
+    (tmp_path / "voice" / "models" / "hey_vesper.onnx").write_bytes(b"x" * 4096)
+    assert doctor.check_wake_model(cfg, tmp_path)[0].status == PASS

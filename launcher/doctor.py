@@ -341,13 +341,70 @@ def check_audit(path: Path, now: Optional[float] = None) -> List[Check]:
                   "expected until the next Guardian decision; every new entry records one")]
 
 
+# ------------------------------------------------------------------ calendar permission, wake model
+
+#: TERM_PROGRAM -> the name shown in System Settings.
+_TERMINALS = {"Apple_Terminal": "Terminal", "iTerm.app": "iTerm", "ghostty": "Ghostty", "vscode": "Visual Studio Code",
+              "WarpTerminal": "Warp", "Hyper": "Hyper", "WezTerm": "WezTerm", "kitty": "kitty", "Alacritty": "Alacritty"}
+
+
+def terminal_app(env: Dict[str, str]) -> str:
+    return _TERMINALS.get(env.get("TERM_PROGRAM", ""), env.get("TERM_PROGRAM") or "the terminal app you start Vesper from")
+
+
+def calendar_authorization() -> Optional[int]:
+    """EventKit authorization status for events WITHOUT asking (no prompt): 0 not determined, 1 restricted, 2 denied,
+    3 full access, 4 write-only. None = cannot be determined (not macOS / pyobjc missing)."""
+    try:
+        import EventKit
+
+        return int(EventKit.EKEventStore.authorizationStatusForEntityType_(EventKit.EKEntityTypeEvent))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def check_calendar_access(env: Optional[Dict[str, str]] = None, status: Optional[Callable[[], Optional[int]]] = None) -> List[Check]:
+    """Voice/`what's on my calendar` reads Calendar through EventKit inside the apple_pim MCP server. That python process is
+    started by `vesper up`, so macOS attributes the request to the TERMINAL APP that ran it — that is the app that must be
+    allowed, not "python" and not the launcher."""
+    env = dict(os.environ) if env is None else env
+    st = (status or calendar_authorization)()
+    app = terminal_app(env)
+    where = f"System Settings > Privacy & Security > Calendars > turn on {app} (macOS 14+: set it to Full Calendar Access)"
+    if st == 3:
+        return [Check(PASS, "Calendar access", f"granted ({app}); the calendar skill and briefing can read events")]
+    if st is None:
+        return [Check(WARN, "Calendar access", "could not be determined (EventKit unavailable)",
+                      "pip install pyobjc-framework-EventKit; then re-run `vesper doctor`")]
+    names = {0: "not asked yet", 1: "restricted by a profile", 2: "denied", 4: "write-only"}
+    if st == 0:
+        return [Check(WARN, "Calendar access", f"{names[0]} for {app}: the first calendar question will show a prompt",
+                      f"run `vesper briefing --refresh` once from {app} and click Allow, or enable it in {where}")]
+    return [Check(FAIL, "Calendar access", f"{names.get(st, f'status {st}')} for {app}: 'what's on my calendar' cannot work",
+                  f"{where}; then restart `vesper up`. (The permission belongs to {app}, the app that launches Vesper.)")]
+
+
+def check_wake_model(cfg: Dict[str, Any], root: Path = PROJECT_ROOT) -> List[Check]:
+    path = str(_get(cfg, "voice.wake.model_path", "") or "").strip()
+    if not path:
+        return [Check(PASS, "Wake model", f"{_get(cfg, 'voice.input.wake_model', 'hey_jarvis')} (bundled)")]
+    p = Path(path)
+    for cand in (p, root / p, root / "voice" / "models" / p.name):
+        if cand.is_file() and cand.stat().st_size > 0:
+            return [Check(PASS, "Wake model", f"custom model {cand.name} ({cand.stat().st_size // 1024} KB)")]
+    return [Check(WARN, "Wake model", f"voice.wake.model_path is set but the file does not exist ({p.name}); voice input falls back "
+                  f"to {_get(cfg, 'voice.input.wake_model_fallback', 'hey_jarvis')}",
+                  "train it with scripts/train_hey_vesper/ and copy it to voice/models/ (docs/WAKEWORD.md), or clear voice.wake.model_path")]
+
+
 # ------------------------------------------------------------------ run
 
 def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, probe_mic: bool = False,
                root: Path = PROJECT_ROOT, supervisor_pid: Optional[int] = None,
                audit_path: Optional[Path] = None, briefing_db: Optional[str] = None,
                briefing_interval: float = 10.0, messages: Optional[tuple] = None,
-               voice_input_device: Optional[tuple] = None) -> List[Check]:
+               voice_input_device: Optional[tuple] = None, calendar: Optional[Callable[[], Optional[int]]] = None,
+               check_calendar: bool = False) -> List[Check]:
     env = dict(os.environ) if env is None else env
     audit = audit_path or Path(env.get("VESPER_AUDIT_LOG") or root / "data" / "audit.jsonl")
     db = env.get("VESPER_BRIEFING_DB") or briefing_db or str(root / "data" / "briefing.db")
@@ -355,7 +412,8 @@ def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, pro
     return [*check_microphone(probe_mic, device=pinned),
             *(check_input_device(voice_input_device[0]) if voice_input_device else []), *check_telegram(cfg, env), *check_models(cfg, root),
             *check_ports(cfg, supervisor_pid), *check_briefing(db, briefing_interval),
-            *(check_messages(*messages) if messages else []), *check_audit(audit)]
+            *(check_messages(*messages) if messages else []), *check_wake_model(cfg, root),
+            *(check_calendar_access(env, calendar) if (check_calendar or calendar) else []), *check_audit(audit)]
 
 
 def render(checks: List[Check], color: bool = False) -> str:
@@ -391,7 +449,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     checks = run_checks(cfg, probe_mic=args.probe_mic, supervisor_pid=pid, briefing_db=bcfg.cache_path,
                         briefing_interval=float(bcfg.interval_minutes),
                         messages=(bcfg.messages_enabled, bcfg.messages_db_path),
-                        voice_input_device=(VoiceInputConfig.from_app_config(cfg).device,))
+                        voice_input_device=(VoiceInputConfig.from_app_config(cfg).device,), check_calendar=True)
     print(render(checks, color=sys.stdout.isatty()))
     return 1 if any(c.status == FAIL for c in checks) else 0
 

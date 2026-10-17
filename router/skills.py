@@ -157,6 +157,13 @@ CALENDAR_TODAY = Skill("calendar_today", "what is left on today's calendar", (
                  r"any (?:meetings?|events?|appointments?) today|am i free today"),
     R("cal.todays", rf"{ASK}(?:my |the )?(?:todays|today) (?:schedule|agenda|calendar|meetings|events)"),
     R("cal.check", r"check my calendar(?: for)? today|check my schedule(?: for)? today"),
+    # what the speech recogniser actually produced: no "today", "calender", "what is on", "on my plate"
+    R("cal.bare", rf"{ASK}{WHAT}(?: on)? (?:my|the) (?:calend[ae]r|schedule|agenda)"),
+    R("cal.bare_on", rf"{ASK}{WHAT} on (?:today|for today)"),
+    R("cal.bare_my_day", r"(?:what do i have|whats my day|what is my day)(?: on| like| looking like)?(?: my (?:calend[ae]r|schedule))?"),
+    R("cal.anything", r"(?:do i have )?anything (?:on|in) my (?:calend[ae]r|schedule|agenda)(?: today)?"),
+    R("cal.any_bare", r"(?:do i have|have i got) any (?:meetings?|events?|appointments?)"),
+    R("cal.typo", rf"{ASK}{WHAT}(?: on)? my calend[ae]r(?: for)? today"),
     R("cal.hinglish_a", r"(?:mera )?aaj ka (?:schedule|agenda|calendar|program) (?:batao|bataiye|dikhao|bata do|dikha do|kya hai)"),
     R("cal.hinglish_b", r"aaj (?:kya|kaun sa) (?:schedule|meeting|meetings|program) hai"),
     R("cal.hinglish_c", r"aaj (?:meri )?(?:meetings?|schedule|appointments?) (?:kya|kaun si|kaun kaun si) (?:hain|hai)"),
@@ -311,12 +318,33 @@ class AppResolver:
             if key:
                 self._names.setdefault(key, name)
 
-    def __call__(self, spoken: str) -> Optional[str]:
+    def strict(self, spoken: str) -> Optional[str]:
+        """Exact name only (after normalisation). Used for anything destructive (closing an app)."""
         key = normalize(spoken)[0]
         key = re.sub(r"\s+app$", "", key)
         if not key or key in _NOT_AN_APP:
             return None
         return self._names.get(key)
+
+    def __call__(self, spoken: str) -> Optional[str]:
+        """Exact name, else the speech recogniser's near-misses: a plural/singular slip ("message" for Messages) or ONE clear
+        best match at similarity >= 0.8 ("sofari", "safarri"). Ambiguous near-misses resolve to nothing."""
+        exact = self.strict(spoken)
+        if exact is not None:
+            return exact
+        key = re.sub(r"\s+app$", "", normalize(spoken)[0])
+        if len(key) < 4 or key in _NOT_AN_APP:
+            return None
+        for alt in (key + "s", key[:-1] if key.endswith("s") else None):
+            if alt and alt in self._names:
+                return self._names[alt]
+        import difflib
+
+        scored = sorted(((difflib.SequenceMatcher(None, key, k).ratio(), k) for k in self._names if len(k) >= 4), reverse=True)
+        if scored and scored[0][0] >= 0.8 and (len(scored) < 2 or scored[1][0] < scored[0][0] - 0.05
+                                                or self._names[scored[1][1]] == self._names[scored[0][1]]):
+            return self._names[scored[0][1]]
+        return None
 
 
 def _app_validator(closing: bool = False):
@@ -324,7 +352,8 @@ def _app_validator(closing: bool = False):
         spoken = groups.get("app", "")
         if closing and re.sub(r"\s+app$", "", spoken) in _NEVER_CLOSE:
             return None
-        name = ctx.resolve_app(spoken)
+        resolve = getattr(ctx.resolve_app, "strict", ctx.resolve_app) if closing else ctx.resolve_app   # never close on a guess
+        name = resolve(spoken)
         if closing and name and name.lower() in _NEVER_CLOSE_CANON:
             return None
         return {"app_name": name} if name else None
