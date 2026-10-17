@@ -8,6 +8,7 @@ The component logs are written for debugging, and several line shapes carry what
     Observation: kind=meeting_soon detail='<calendar text>'
     [VoiceAgent] Received VoiceOutputEvent: '<text>' from Brain
     heard: <transcript>  /  transcript=<...>  /  user_text=<...>
+    User spoke: '<transcript>'                          (the Brain's own line for every voice/typed turn)
     voice transcribing -> injected (<transcript>)        (the voice pipeline's own state-change line)
 
 Rules (fail closed, mirroring `--redact` for the briefing):
@@ -49,6 +50,9 @@ _AFTER_VERB = re.compile(
     r"(?i)(?P<pre>\b(?:heard|transcript|transcription|transcribed|said|speaking|saying|utterance|you said|user said)\s*[:\-]\s*)(?P<val>.+)$")
 #: The voice pipeline logs what it heard as the detail of its "injected" transition: "voice transcribing -> injected (<text>)".
 _TRANSITION = re.compile(r"(?P<pre>\bvoice \w+ -> injected \()(?P<val>.*)\)\s*$")
+#: The Brain logs the whole transcript: "User spoke: '<text>'". Also the legacy voice agent's "Transcribed: '<text>' (confidence ...)"
+#: and "Processing: '<text>'". The rest of the line is replaced (fail closed: the closing quote may be inside the text).
+_SPOKE = re.compile(r"(?P<pre>\b(?:User spoke|Transcribed|Processing):\s*)(?P<val>.+)$")
 _RECEIVED = re.compile(r"(?P<pre>Received \w*Event:\s*)(?P<val>" + _QUOTED + r")")
 
 
@@ -94,6 +98,7 @@ def redact_line(line: str, ph: Placeholders) -> Tuple[str, bool]:
     line = _TRANSITION.sub(lambda m: m.group("pre") + ph(m.group("val")) + ")", line)
     line = _RECEIVED.sub(lambda m: m.group("pre") + ph(m.group("val")), line)
     line = _FIELD.sub(lambda m: f"{m.group('k')}{m.group('sep')}{ph(m.group('val'))}", line)
+    line = _SPOKE.sub(lambda m: m.group("pre") + ph(m.group("val")), line)
     line = _AFTER_VERB.sub(lambda m: m.group("pre") + ph(m.group("val")), line)
     return line, line != original
 

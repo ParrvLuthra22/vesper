@@ -37,6 +37,8 @@ LEAKY_LINES = [
     "2026-10-17 02:41:02 INFO x: user_text=glockenspiel rehearsal at 4155550142",
     "2026-10-17 02:41:03,200 | INFO | vesper.voice | voice transcribing -> injected (call my dentist about the tangerine)",
     "2026-10-17 02:41:03,201 | INFO | vesper.voice | voice transcribing -> injected (hunter2 and (4155550142) quokka)",
+    "[02:40:42] INFO brain: User spoke: 'play the glockenspiel rehearsal, it's for Wilhelmina Fizzlewick'",
+    "[02:40:43] INFO voice_agent: Transcribed: 'call my dentist about the tangerine' (confidence: 0.91)",
     # a payload cut off mid-string by the logger
     emit("VoiceInputEvent", "{'text': 'play the glockenspiel rehea"),
     # an UNKNOWN key must be treated as text (fail closed)
