@@ -5,7 +5,7 @@ the CLI and any other client use — so there is no special voice planner path.
 from __future__ import annotations
 
 import json
-from typing import Callable
+from typing import Callable, Optional
 
 from voice.input.config import VoiceInputConfig
 
@@ -36,7 +36,8 @@ class GatewayRestSink(TranscriptSink):
         self._url = f"http://{config.gateway_host}:{config.gateway_port}/message"
         self._token = config.gateway_token
 
-    def __post(self, path: str, payload: dict, timeout: float) -> bool:
+    def _request(self, method: str, path: str, payload: Optional[dict], timeout: float):
+        """(ok, parsed JSON body or None). Never raises: the gateway being down is an ordinary condition."""
         import urllib.error
         import urllib.request
 
@@ -44,19 +45,33 @@ class GatewayRestSink(TranscriptSink):
         headers = {"Content-Type": "application/json"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
-        req = urllib.request.Request(
-            base + path, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
-        )
+        data = json.dumps(payload).encode("utf-8") if payload is not None else None
+        req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return 200 <= resp.status < 300
-        except urllib.error.URLError:
-            return False
+                ok = 200 <= resp.status < 300
+                try:
+                    body = json.loads(resp.read().decode("utf-8") or "null")
+                except ValueError:
+                    body = None
+                return ok, body
+        except (urllib.error.URLError, OSError):
+            return False, None
+
+    def __post(self, path: str, payload: dict, timeout: float) -> bool:
+        return self._request("POST", path, payload, timeout)[0]
 
     def inject(self, text: str) -> bool:
         return self.__post("/message", {"text": text}, timeout=10)
 
-    def signal_wake(self) -> bool:
-        """Tell the gateway the wake word fired — triggers the HUD flare, the
-        spoken greeting, and voice-output barge-in (the cinematic reveal)."""
-        return self.__post("/wake", {}, timeout=3)
+    def signal_wake(self, greet: bool = True, animate: bool = True) -> bool:
+        """Tell the gateway the wake word fired — the HUD flare and voice-output barge-in. `greet` asks for the spoken
+        persona greeting too; voice input only sets it after a long idle period (voice.session.greet_after_idle_min)."""
+        return self.__post("/wake", {"greet": bool(greet), "animate": bool(animate)}, timeout=3)
+
+    def reply_busy(self) -> Optional[bool]:
+        """Is a reply still being worked out or spoken? None = the gateway could not be asked (do not wait for it)."""
+        ok, body = self._request("GET", "/speech", None, timeout=2)
+        if not ok or not isinstance(body, dict):
+            return None
+        return bool(body.get("busy"))

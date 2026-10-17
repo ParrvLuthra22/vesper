@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections import deque
 from pathlib import Path
 from typing import List, Optional
 
@@ -53,6 +54,8 @@ class WakeDetector:
         #: highest wake score seen in the current 10 s window (logged at DEBUG: scores only, never audio)
         self._win_max = 0.0
         self._win_start: Optional[float] = None
+        #: Patience guard: which of the last `wake_patience_window` windows scored at/above the threshold.
+        self._recent: "deque[bool]" = deque(maxlen=max(1, int(config.wake_patience_window)))
         #: Set once a load has permanently failed, so the next frame re-raises
         #: from memory instead of retrying the same import.
         self._load_error: Optional[VoiceInputUnavailable] = None
@@ -154,6 +157,7 @@ class WakeDetector:
 
     def reset(self) -> None:
         self._buf = np.zeros(0, dtype=np.int16)
+        self._recent.clear()
         if self._model is not None and hasattr(self._model, "reset"):
             try:
                 self._model.reset()
@@ -185,12 +189,18 @@ class WakeDetector:
         if scores:
             self._win_max = max(self._win_max, max(scores))
         if now - self._win_start >= 10.0:
-            logger.debug("wake: max score %.3f over the last %.0fs (threshold %.2f)", self._win_max,
-                         now - self._win_start, self._config.wake_threshold)
+            # INFO when something wake-like was heard (so a near miss is visible in the log), DEBUG for plain silence.
+            level = logging.INFO if self._win_max >= 0.05 else logging.DEBUG
+            logger.log(level, "wake: max score %.3f over the last %.0fs (threshold %.2f, %d of %d windows)", self._win_max,
+                       now - self._win_start, self._config.wake_threshold, self._hits_needed(), self._recent.maxlen)
             self._win_max, self._win_start = 0.0, now
 
+    def _hits_needed(self) -> int:
+        return max(1, min(int(self._config.wake_patience_hits), self._recent.maxlen or 1))
+
     def process(self, frame: np.ndarray) -> bool:
-        """Feed one frame. Returns True when the wake word is detected."""
+        """Feed one frame. Returns True when the wake word is detected: at least `wake_patience_hits` of the last
+        `wake_patience_window` 80 ms windows scored at or above the threshold."""
         self.load()
         self._buf = np.concatenate([self._buf, frame.astype(np.int16)])
         detected = False
@@ -201,7 +211,8 @@ class WakeDetector:
             predictions = self._model.predict(window)
             s = self.score(predictions)
             seen.append(s)
-            if s >= self._config.wake_threshold:
+            self._recent.append(s >= self._config.wake_threshold)
+            if sum(self._recent) >= self._hits_needed():
                 detected = True
                 self.reset()
                 break
@@ -241,27 +252,42 @@ def make_vad(config: VoiceInputConfig):
 
 
 class SpeechSegmenter:
-    """After wake, captures audio until end-of-speech. Frame-driven so it is
-    trivially testable: push frames, get one of CONTINUE / DONE / TIMEOUT."""
+    """After wake (or inside a follow-up window), captures audio until the speaker has really finished.
+    Frame-driven so it is trivially testable: push frames, get one of CONTINUE / DONE / TIMEOUT.
+
+      * Onset: speech counts as started only after `vad_onset_ms` of CONSECUTIVE voiced frames (a click is not speech).
+      * A short pre-roll (`vad_preroll_ms`) is kept from before the onset so the first word is not clipped.
+      * End: `vad_silence_ms` of continuous silence after speech (default 1200 ms) — a brief pause inside a sentence never
+        cuts it, because any voiced frame resets the silence counter.
+      * Blips: if the utterance ends having had less than `vad_min_speech_ms` of voiced audio (the tail of the wake word, the
+        chime, a cough), it is discarded and the segmenter keeps waiting — the listen timeout still applies.
+      * Hard cap: `max_utterance_ms` of captured audio (default 30 s) -> DONE.
+      * `timeout_ms`: no speech at all for this long -> TIMEOUT (default listen_timeout_ms; the follow-up window passes its own)."""
 
     CONTINUE = "continue"
     DONE = "done"
     TIMEOUT = "timeout"
 
-    def __init__(self, config: VoiceInputConfig, vad=None):
+    def __init__(self, config: VoiceInputConfig, vad=None, timeout_ms: Optional[int] = None):
         self._config = config
         self._vad = vad if vad is not None else make_vad(config)
         self._frame_ms = config.frame_ms
         self._silence_frames_needed = max(1, config.vad_silence_ms // config.frame_ms)
-        self._timeout_frames = max(1, config.listen_timeout_ms // config.frame_ms)
+        self._timeout_frames = max(1, int(timeout_ms if timeout_ms is not None else config.listen_timeout_ms) // config.frame_ms)
         self._max_frames = max(1, config.max_utterance_ms // config.frame_ms)
-        self._preroll_frames = max(1, 300 // config.frame_ms)
+        self._preroll_frames = max(1, config.vad_preroll_ms // config.frame_ms)
+        self._onset_frames = max(1, config.vad_onset_ms // config.frame_ms)
+        self._min_speech_frames = max(1, config.vad_min_speech_ms // config.frame_ms)
 
         self._preroll: List[np.ndarray] = []
         self._captured: List[np.ndarray] = []
         self._started = False
         self._elapsed = 0
+        self._run = 0                 # consecutive voiced frames before the onset
         self._trailing_silence = 0
+        self._speech_frames = 0
+        #: Voiced bursts thrown away as too short (wake-word tail, chime, click). For tests and logs.
+        self.discarded_blips = 0
 
     @property
     def audio(self) -> np.ndarray:
@@ -269,32 +295,44 @@ class SpeechSegmenter:
             return np.zeros(0, dtype=np.int16)
         return np.concatenate(self._captured)
 
+    @property
+    def speech_ms(self) -> int:
+        return self._speech_frames * self._frame_ms
+
+    def _restart(self) -> None:
+        self._started, self._run, self._trailing_silence, self._speech_frames = False, 0, 0, 0
+        self._captured, self._preroll = [], []
+
     def push(self, frame: np.ndarray) -> str:
         self._elapsed += 1
         speech = self._vad.is_speech(frame)
 
         if not self._started:
-            # Keep a short pre-roll so we don't clip the utterance's start.
             self._preroll.append(frame)
-            if len(self._preroll) > self._preroll_frames:
+            if len(self._preroll) > self._preroll_frames + self._onset_frames:
                 self._preroll.pop(0)
-            if speech:
+            self._run = self._run + 1 if speech else 0
+            if self._run >= self._onset_frames:
                 self._started = True
-                self._captured.extend(self._preroll)
-                self._captured.append(frame)
+                self._captured.extend(self._preroll)        # includes the onset frames themselves
+                self._speech_frames = self._run
                 self._trailing_silence = 0
                 return self.CONTINUE
             if self._elapsed >= self._timeout_frames:
                 return self.TIMEOUT
             return self.CONTINUE
 
-        # Speech has started: accumulate until trailing silence ends it.
         self._captured.append(frame)
         if speech:
             self._trailing_silence = 0
+            self._speech_frames += 1
         else:
             self._trailing_silence += 1
             if self._trailing_silence >= self._silence_frames_needed:
+                if self._speech_frames < self._min_speech_frames:
+                    self.discarded_blips += 1                # too short to be a command: keep waiting
+                    self._restart()
+                    return self.TIMEOUT if self._elapsed >= self._timeout_frames else self.CONTINUE
                 return self.DONE
         if len(self._captured) >= self._max_frames:
             return self.DONE

@@ -36,6 +36,7 @@ from pydantic import BaseModel
 
 from channels.message import InboundMessage, InvalidMessage
 from gateway.channels import ChannelForbidden, ChannelTurnService
+from gateway.speech_state import SpeechState
 from gateway.wire import FORWARDED_EVENT_TYPES, to_wire
 from schemas.events import (
     ConfirmationResponseEvent,
@@ -60,6 +61,10 @@ def _now_iso() -> str:
 
 class MessageIn(BaseModel):
     text: str
+
+
+class SpeechIn(BaseModel):
+    speaking: bool
 
 
 class ConfirmIn(BaseModel):
@@ -126,6 +131,7 @@ class Gateway:
 
         self._manager = ConnectionManager()
         self._greeting: Optional[str] = None
+        self._speech = SpeechState()
         self._subscriptions: List[Any] = []
         self._attached = False
         self._remote_task: Optional["asyncio.Task[None]"] = None
@@ -200,8 +206,10 @@ class Gateway:
     async def _forward(self, event: Any) -> None:
         """One handler for every forwarded type — remembers the boot greeting,
         serializes via the shared mapping, and broadcasts."""
-        if isinstance(event, VoiceOutputEvent) and self._greeting is None:
-            self._greeting = event.text
+        if isinstance(event, VoiceOutputEvent):
+            self._speech.reply_queued()
+            if self._greeting is None:
+                self._greeting = event.text
         wire = to_wire(event)
         if wire is not None:
             await self._manager.broadcast(wire)
@@ -213,7 +221,14 @@ class Gateway:
         """Enqueue a user turn. Emitting VoiceInputEvent awaits the whole turn
         (LLM + tools), so it MUST be fire-and-forget — never block the WS loop
         or the HTTP response on it."""
-        asyncio.create_task(self._bus.emit(VoiceInputEvent(text=text, source="gateway")))
+        asyncio.create_task(self._run_turn(text))
+
+    async def _run_turn(self, text: str) -> None:
+        self._speech.turn_started()
+        try:
+            await self._bus.emit(VoiceInputEvent(text=text, source="gateway"))
+        finally:
+            self._speech.turn_finished()
 
     def inject_confirm(self, request_id: str, approved: bool) -> None:
         asyncio.create_task(
@@ -336,15 +351,31 @@ class Gateway:
             return {"status": "recorded"}
 
         @app.post("/wake")
-        async def post_wake(_: None = Depends(require_token)) -> Dict[str, Any]:
-            # The wake word fired (from the voice-input client). Broadcast the
-            # WakeEvent (HUD flare + voice-output barge-in) and speak the
-            # time-appropriate greeting — the cinematic reveal.
-            animate = bool((self._config.get("wake_flow", {}) or {}).get("animation", True))
+        async def post_wake(body: Optional[Dict[str, Any]] = Body(default=None),
+                            _: None = Depends(require_token)) -> Dict[str, Any]:
+            # The wake word fired (from the voice-input client). Broadcast the WakeEvent (HUD flare + voice-output
+            # barge-in). The spoken persona greeting is a full LLM completion, so it only plays when the client asks for
+            # it ("greet": true) — voice input asks at most once per voice.session.greet_after_idle_min, never per wake.
+            # A body-less POST keeps the old behaviour (greet) for other clients.
+            body = body or {}
+            greet = bool(body.get("greet", True))
+            animate = bool(body.get("animate", True)) and bool(
+                (self._config.get("wake_flow", {}) or {}).get("animation", True))
             await self._bus.emit(WakeEvent(animate=animate, source="voice"))
-            if self._brain is not None:
+            if greet and self._brain is not None:
                 asyncio.create_task(self._brain.greet())
-            return {"status": "waking"}
+            return {"status": "waking", "greeting": greet}
+
+        @app.get("/speech")
+        async def get_speech(_: None = Depends(require_token)) -> Dict[str, Any]:
+            """Is a reply still being worked out or spoken? (voice input holds its follow-up window on this)"""
+            return self._speech.snapshot()
+
+        @app.post("/speech")
+        async def post_speech(body: SpeechIn, _: None = Depends(require_token)) -> Dict[str, Any]:
+            """Voice output reports that it started / finished speaking a line."""
+            self._speech.set_speaking(body.speaking)
+            return {"status": "ok"}
 
         @app.websocket("/ws")
         async def ws_endpoint(ws: WebSocket) -> None:

@@ -82,12 +82,12 @@ class VoiceInputSettings(BaseModel):
 
     enabled: bool = False
     wake_model: str = "hey_jarvis"  # bundled name or a path to a custom .onnx
-    wake_threshold: float = 0.5
+    wake_threshold: float = 0.35
     whisper_model: str = "base.en"
     whisper_compute_type: str = "int8"
     vad_backend: str = "webrtcvad"  # "webrtcvad" | "silero"
     vad_aggressiveness: int = 2
-    vad_silence_ms: int = 800
+    vad_silence_ms: int = 1200
     listen_timeout_ms: int = 6000
     first_frame_timeout_seconds: float = 15.0
     device: Any = "builtin"  # "builtin" | an input device name | a sounddevice index | "default"
@@ -97,9 +97,36 @@ class VoiceInputSettings(BaseModel):
 
 
 class VoiceWakeSettings(BaseModel):
-    """The wake-word sensitivity knob (voice.wake.threshold). None = use voice.input.wake_threshold (default 0.5)."""
+    """The wake-word knobs. threshold None = use voice.input.wake_threshold (default 0.35 with the patience guard)."""
 
     threshold: Optional[float] = None
+    #: Patience guard: the wake fires only when at least `patience_hits` of the last `patience_window` 80 ms windows score at
+    #: or above the threshold. (1, 1) = the old single-window behaviour.
+    patience_hits: int = 2
+    patience_window: int = 3
+    #: A custom wake-word model (.onnx), e.g. voice/models/hey_vesper.onnx. "" = use voice.input.wake_model (hey_jarvis).
+    model_path: str = ""
+
+
+class VoiceVadSettings(BaseModel):
+    """End-of-utterance detection (voice/input/stages.py SpeechSegmenter)."""
+
+    silence_ms: int = 1200          # trailing silence that ends an utterance (pauses shorter than this never cut a sentence)
+    max_utterance_s: float = 30.0   # hard cap on a single utterance
+    preroll_ms: int = 300           # audio kept from BEFORE speech is detected, so the first word is not clipped
+    min_speech_ms: int = 250        # a voiced burst shorter than this (wake-word tail, chime, click) is not an utterance
+    onset_ms: int = 90              # speech must persist this long before an utterance is considered started
+
+
+class VoiceSessionSettings(BaseModel):
+    """A conversation after one wake (voice/input/session.py)."""
+
+    followup_s: float = 8.0               # after a reply, the next utterance needs no wake word for this long (0 = off)
+    greet_after_idle_min: float = 60.0    # the persona greeting plays at most once per this much idle time, never per wake
+    chime: bool = True                    # short sound on wake instead of a spoken greeting
+    end_phrases: List[str] = Field(default_factory=lambda: [
+        "thanks", "thank you", "thats all", "that is all", "stop", "nevermind", "never mind", "cancel", "goodbye"])
+    reply_wait_s: float = 25.0            # how long to wait for a reply to start/finish before opening the follow-up window
 
 
 class VoiceOutputSettings(BaseModel):
@@ -127,6 +154,8 @@ class VoiceSettings(BaseModel):
     address_user_as_sir: bool = True
     input: VoiceInputSettings = Field(default_factory=VoiceInputSettings)
     wake: VoiceWakeSettings = Field(default_factory=VoiceWakeSettings)
+    vad: VoiceVadSettings = Field(default_factory=VoiceVadSettings)
+    session: VoiceSessionSettings = Field(default_factory=VoiceSessionSettings)
     output: VoiceOutputSettings = Field(default_factory=VoiceOutputSettings)
 
 

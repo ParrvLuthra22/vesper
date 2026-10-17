@@ -25,6 +25,9 @@ def cfg() -> VoiceInputConfig:
         vad_silence_ms=60,       # 2 trailing-silence frames end an utterance
         listen_timeout_ms=150,   # 5 frames of no speech after wake -> idle
         max_utterance_ms=600,
+        vad_onset_ms=30, vad_min_speech_ms=30, vad_preroll_ms=30,     # one voiced frame is speech in these tiny timings
+        followup_s=0,                                                 # these tests are about a single wake; sessions: test_voice_session.py
+        chime=False,
     )
 
 

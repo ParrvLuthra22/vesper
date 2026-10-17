@@ -11,7 +11,7 @@ import logging
 import re
 import threading
 import time
-from typing import Iterable, List, Optional
+from typing import Callable, Iterable, List, Optional
 
 from voice.output.config import VoiceOutputConfig
 from voice.output.tts import AudioPlayer, KokoroTTS
@@ -86,9 +86,12 @@ class VoiceOutputService:
     queue drains as soon as the local model goes idle.
     """
 
-    def __init__(self, config: VoiceOutputConfig, speaker: Optional[Speaker] = None):
+    def __init__(self, config: VoiceOutputConfig, speaker: Optional[Speaker] = None,
+                 on_speaking: Optional[Callable[[bool], None]] = None):
         self._config = config
         self._speaker = speaker if speaker is not None else Speaker(config)
+        #: Told when a line starts / finishes being spoken, so the gateway can tell voice input when the reply is over.
+        self._on_speaking = on_speaking
         self._worker: Optional[threading.Thread] = None
         #: Set while a local LLM call is in flight (memory pressure).
         self._local_model_active = threading.Event()
@@ -99,6 +102,25 @@ class VoiceOutputService:
 
     def preload(self) -> None:
         self._speaker.preload()
+
+    def set_speaking_reporter(self, on_speaking: Optional[Callable[[bool], None]]) -> None:
+        self._on_speaking = on_speaking
+
+    def _speak_reported(self, text: str) -> bool:
+        """speak(), bracketed by the speaking-state report. A failing report never affects speech."""
+        if self._on_speaking is not None:
+            try:
+                self._on_speaking(True)
+            except Exception:
+                pass
+        try:
+            return self._speaker.speak(text)
+        finally:
+            if self._on_speaking is not None:
+                try:
+                    self._on_speaking(False)
+                except Exception:
+                    pass
 
     def handle(self, msg: dict) -> None:
         mtype = msg.get("type")
@@ -151,7 +173,7 @@ class VoiceOutputService:
             for text in backlog:
                 self._speaker.stop()
                 threading.Thread(
-                    target=self._speaker.speak, args=(text,), daemon=True
+                    target=self._speak_reported, args=(text,), daemon=True
                 ).start()
 
     def _set_local_model_active(self, active: bool) -> None:
@@ -194,7 +216,7 @@ class VoiceOutputService:
         """
         if self._config.defer_while_local_llm:
             self._wait_for_local_model_idle()
-        self._speaker.speak(text)
+        self._speak_reported(text)
 
     def _wait_for_local_model_idle(self) -> None:
         """

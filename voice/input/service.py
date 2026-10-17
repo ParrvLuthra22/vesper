@@ -13,12 +13,13 @@ import sys
 import threading
 from pathlib import Path
 
-from voice.input.audio import FileSource, MicSource
+from voice.input.audio import BufferedSource, FileSource, MicSource
 from voice.input.gain import wrap_with_gain
 from voice.input.config import VoiceInputConfig, VoiceTransition
 from voice.input.devices import (
     DeviceResolutionError, default_input_index, list_input_devices, read_transport_types, resolve_input_device)
 from voice.input.pipeline import VoiceInputPipeline
+from voice.input.session import Chime, SessionClock
 from voice.input.sink import GatewayRestSink
 from voice.input.stages import Transcriber, VoiceInputUnavailable, WakeDetector
 
@@ -39,9 +40,9 @@ def _log_emitter(t: VoiceTransition) -> None:
     logger.debug("transition: %s <- %s %s", t.state.value, t.previous.value, t.detail)
 
 
-def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None) -> VoiceInputPipeline:
+def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None, drain=None) -> VoiceInputPipeline:
     sink = sink if sink is not None else GatewayRestSink(config)
-    on_wake = getattr(sink, "signal_wake", None)  # POST /wake -> cinematic reveal
+    on_wake = getattr(sink, "signal_wake", None)  # POST /wake -> HUD flare, barge-in, and (rarely) the greeting
     return VoiceInputPipeline(
         config=config,
         wake=WakeDetector(config),
@@ -49,6 +50,9 @@ def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None) -> VoiceIn
         sink=sink,
         emitter=emitter if emitter is not None else _log_emitter,
         on_wake=on_wake,
+        chime=Chime(enabled=config.chime),
+        session_clock=SessionClock(config.greet_after_idle_min),
+        drain=drain,
     )
 
 
@@ -153,7 +157,6 @@ def main() -> int:
         config.wake_model, config.whisper_model, config.whisper_compute_type,
         config.vad_backend, device.name, device.index, int(device.default_samplerate),
     )
-    pipeline = build_pipeline(config)
     source = _AnnouncingMicSource(
         config.sample_rate, config.frame_samples, device.index,
         first_frame_timeout=config.first_frame_timeout_seconds,
@@ -161,6 +164,13 @@ def main() -> int:
     if config.gain_db or config.auto_gain:
         logger.info("input gain on | %s %+.1f dB (voice.input.gain_db / auto_gain)", "auto +" if config.auto_gain else "fixed", config.gain_db)
         source = wrap_with_gain(source, config.gain_db, config.auto_gain)
+    # The mic is read on its own thread: speech-to-text and the HTTP calls no longer make PortAudio drop audio.
+    source = BufferedSource(source, frame_ms=config.frame_ms)
+    pipeline = build_pipeline(config, drain=source.flush)
+    logger.info("voice session | follow-up %.0fs | greeting after %.0f min idle | chime %s | wake %.2f (%d of %d windows) | "
+                "silence %d ms | max utterance %d s", config.followup_s, config.greet_after_idle_min,
+                "on" if config.chime else "off", config.wake_threshold, config.wake_patience_hits,
+                config.wake_patience_window, config.vad_silence_ms, config.max_utterance_ms // 1000)
     try:
         # Load the wake model NOW (not lazily on the first frame) so a missing
         # package/model fails immediately and loudly, and "ready" below means

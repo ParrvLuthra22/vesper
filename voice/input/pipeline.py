@@ -1,6 +1,11 @@
 """The voice-input state machine.
 
-    idle → wake_detected → listening → transcribing → injected → idle
+    idle → wake_detected → listening → transcribing → injected → followup → listening → … → idle
+
+One wake word opens a CONVERSATION (voice/input/session.py): a chime (no spoken greeting), you speak, the reply is spoken,
+then a follow-up window (voice.session.followup_s, default 8 s) in which the next utterance needs no wake word. The window
+ends on silence, or when you say "thanks" / "that's all" / "stop". With followup_s = 0 it is the old single-shot machine:
+… injected → idle.
 
 Each transition is emitted so a UI (the HUD, PV4) can reflect what the ears are
 doing.
@@ -21,12 +26,14 @@ fakes and no ML deps.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Callable, Iterable, Optional
 
 import numpy as np
 
 from voice.input.audio import AudioSource
 from voice.input.config import VoiceInputConfig, VoiceState, VoiceTransition
+from voice.input.session import Chime, SessionClock, clean_transcript, is_end_phrase
 from voice.input.sink import TranscriptSink
 from voice.input.stages import (
     SpeechSegmenter,
@@ -54,7 +61,13 @@ class VoiceInputPipeline:
         sink: TranscriptSink,
         emitter: Optional[Emitter] = None,
         vad_factory: Optional[Callable[[], object]] = None,
-        on_wake: Optional[Callable[[], None]] = None,
+        on_wake: Optional[Callable[..., object]] = None,
+        chime: Optional[Chime] = None,
+        session_clock: Optional[SessionClock] = None,
+        reply_busy: Optional[Callable[[], Optional[bool]]] = None,
+        drain: Optional[Callable[[], object]] = None,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self._config = config
         self._wake = wake
@@ -62,6 +75,13 @@ class VoiceInputPipeline:
         self._sink = sink
         self._emitter = emitter
         self._on_wake = on_wake
+        self._chime = chime if chime is not None else Chime(enabled=False)
+        self._session_clock = session_clock if session_clock is not None else SessionClock(config.greet_after_idle_min)
+        #: Asks the gateway whether a reply is still being worked out / spoken. None = never wait for replies.
+        self._reply_busy = reply_busy if reply_busy is not None else getattr(sink, "reply_busy", None)
+        #: Drops audio queued while we were busy (BufferedSource.flush), so Vesper's own voice is not heard as the user.
+        self._drain = drain
+        self._mono, self._sleep = monotonic, sleep
         self._vad_factory = vad_factory or (lambda: make_vad(config))
         self._state = VoiceState.IDLE
         self._stop = False
@@ -109,23 +129,77 @@ class VoiceInputPipeline:
             if not self._await_wake(it):
                 break  # source exhausted
             self._transition(VoiceState.WAKE_DETECTED)
-            self._flare_hint()
+            self._flare_hint(greet=self._session_clock.should_greet())
+            self._chime.play()
+            self._conversation(it)
+            self._reset_wake()
 
-            self._transition(VoiceState.LISTENING)
-            audio = self._listen(it)
+    def _conversation(self, it) -> None:
+        """One wake = one conversation: listen, answer, then keep listening for `followup_s` without the wake word."""
+        cfg = self._config
+        first = True
+        while not self._stop:
+            timeout_ms = None if first else int(cfg.followup_s * 1000)
+            self._transition(VoiceState.LISTENING, "" if first else "follow-up")
+            audio = self._listen(it, timeout_ms)
             if audio is None:
-                self._transition(VoiceState.IDLE, "no speech")
-                continue
+                self._transition(VoiceState.IDLE, "no speech" if first else "follow-up window closed")
+                return
 
             self._transition(VoiceState.TRANSCRIBING)
-            text = self._transcribe(audio).strip()
+            text = clean_transcript(self._transcribe(audio))
             if not text:
                 self._transition(VoiceState.IDLE, "empty transcript")
-                continue
+                return
+
+            if is_end_phrase(text, cfg.end_phrases):
+                if "stop" in text.lower().split():
+                    self._flare_hint(greet=False, animate=False)          # barge-in: Vesper stops talking
+                self._transition(VoiceState.IDLE, "conversation ended")
+                return
 
             self._sink.inject(text)
+            self._session_clock.touch()
             self._transition(VoiceState.INJECTED, text)
-            self._transition(VoiceState.IDLE)
+            first = False
+            if cfg.followup_s <= 0:
+                self._transition(VoiceState.IDLE)
+                return
+            self._transition(VoiceState.FOLLOWUP, "waiting for the reply")
+            self._wait_for_reply()
+
+    def _wait_for_reply(self) -> None:
+        """Hold the follow-up window until the reply has been spoken (or `reply_wait_s` passes), then discard the audio that
+        piled up meanwhile — it is mostly Vesper's own voice."""
+        if self._reply_busy is not None:
+            deadline = self._mono() + self._config.reply_wait_s
+            self._sleep(0.4)                                   # let the gateway start the turn
+            quiet = 0
+            while self._mono() < deadline and not self._stop:
+                try:
+                    busy = self._reply_busy()
+                except Exception:
+                    busy = None
+                if busy is None:                               # gateway not answering: do not wait for it
+                    break
+                quiet = 0 if busy else quiet + 1
+                if quiet >= 2:
+                    break
+                self._sleep(0.2)
+            self._sleep(0.3)                                   # room tail of the last syllable
+        if self._drain is not None:
+            try:
+                self._drain()
+            except Exception:
+                logger.debug("drain failed", exc_info=True)
+
+    def _reset_wake(self) -> None:
+        reset = getattr(self._wake, "reset", None)
+        if callable(reset):
+            try:
+                reset()
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------ #
     def _await_wake(self, it) -> bool:
@@ -170,8 +244,8 @@ class VoiceInputPipeline:
                     "(suppressing repeat tracebacks)"
                 )
 
-    def _listen(self, it) -> Optional[np.ndarray]:
-        segmenter = SpeechSegmenter(self._config, self._vad_factory())
+    def _listen(self, it, timeout_ms: Optional[int] = None) -> Optional[np.ndarray]:
+        segmenter = SpeechSegmenter(self._config, self._vad_factory(), timeout_ms=timeout_ms)
         for frame in it:
             if self._stop:
                 return None
@@ -196,11 +270,14 @@ class VoiceInputPipeline:
             logger.error("STT failed, returning to idle: %s", exc)
             return ""
 
-    def _flare_hint(self) -> None:
-        """Wake → fire the cinematic reveal: signal the gateway (HUD star flare,
-        spoken greeting, voice-output barge-in). PV4."""
+    def _flare_hint(self, greet: bool = False, animate: bool = True) -> None:
+        """Wake → signal the gateway: HUD star flare and voice-output barge-in always; the spoken persona greeting only when
+        `greet` (after a long idle period, never on every wake)."""
         if self._on_wake is not None:
             try:
-                self._on_wake()
+                try:
+                    self._on_wake(greet=greet, animate=animate)
+                except TypeError:                              # a plain zero-argument hook
+                    self._on_wake()
             except Exception:
                 logger.exception("on_wake hook failed")

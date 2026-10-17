@@ -32,6 +32,37 @@ def load_config() -> VoiceOutputConfig:
     return VoiceOutputConfig.from_app_config(load_config_dict())
 
 
+class GatewaySpeechReporter:
+    """POST /speech {"speaking": bool} to the gateway, in order, on a background thread (speech never waits for HTTP)."""
+
+    def __init__(self, config: VoiceOutputConfig):
+        import queue
+        import threading
+
+        self._url = f"http://{config.gateway_host}:{config.gateway_port}/speech"
+        self._token = config.gateway_token
+        self._q: "queue.Queue[bool]" = queue.Queue()
+        threading.Thread(target=self._run, daemon=True, name="speech-reporter").start()
+
+    def __call__(self, speaking: bool) -> None:
+        self._q.put(bool(speaking))
+
+    def _run(self) -> None:
+        import urllib.request
+
+        while True:
+            speaking = self._q.get()
+            headers = {"Content-Type": "application/json"}
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+            req = urllib.request.Request(self._url, data=json.dumps({"speaking": speaking}).encode(), headers=headers,
+                                         method="POST")
+            try:
+                urllib.request.urlopen(req, timeout=2).close()
+            except Exception:                  # the gateway being briefly away must not matter
+                pass
+
+
 async def _run(config: VoiceOutputConfig, service: VoiceOutputService) -> None:
     import websockets
 
@@ -72,6 +103,7 @@ def main() -> int:
     logger.info("Voice output starting | voice=%s | streaming=%s | preload=%s",
                 config.tts_voice, config.streaming, config.preload)
     service = VoiceOutputService(config)
+    service.set_speaking_reporter(GatewaySpeechReporter(config))
     if config.preload:
         # Pay Kokoro's first-use cost NOW, before connecting to the gateway: if it
         # fails (missing files, or a native abort under memory pressure) the

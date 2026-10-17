@@ -5,6 +5,8 @@ imports (sounddevice) are lazy so the rest of the module imports without them.
 """
 from __future__ import annotations
 
+import queue
+import threading
 import wave
 from typing import Iterator, Optional
 
@@ -103,6 +105,81 @@ class MicSource(AudioSource):
                 self._stream.close()
             finally:
                 self._stream = None
+
+
+class BufferedSource(AudioSource):
+    """Reads the wrapped source on its own thread, so the microphone keeps being drained while the pipeline is busy
+    (speech-to-text, the HTTP calls to the gateway, waiting for a reply to be spoken).
+
+    Without this the pipeline thread was also the audio reader: during every transcription (0.3-5 s) and every POST the stream
+    was not read, PortAudio overflowed and dropped audio, and a wake word said right after a reply was simply lost.
+    The backlog is BOUNDED (`backlog_s`, default 2 s): when the consumer falls further behind the oldest frames are dropped, so
+    it never replays minutes-old audio. `flush()` discards the backlog (used after a reply, so Vesper's own voice is not
+    heard as the user)."""
+
+    _END = object()
+
+    def __init__(self, inner: AudioSource, frame_ms: int = 30, backlog_s: float = 2.0):
+        self._inner = inner
+        self._queue: "queue.Queue[object]" = queue.Queue(maxsize=max(2, int(backlog_s * 1000 / frame_ms)))
+        self._thread: Optional[threading.Thread] = None
+        self._stop = threading.Event()
+        self._error: Optional[BaseException] = None
+        self.dropped = 0
+
+    def __getattr__(self, name):                      # open_rate / resampled / ... of the wrapped source
+        return getattr(self._inner, name)
+
+    def _put(self, item: object) -> None:
+        while True:
+            try:
+                self._queue.put_nowait(item)
+                return
+            except queue.Full:
+                try:
+                    self._queue.get_nowait()          # drop the OLDEST frame
+                    self.dropped += 1
+                except queue.Empty:
+                    pass
+
+    def _reader(self) -> None:
+        try:
+            for frame in self._inner.frames():
+                if self._stop.is_set():
+                    break
+                self._put(frame)
+        except BaseException as exc:                  # noqa: BLE001 — handed to the consumer thread
+            self._error = exc
+        finally:
+            self._put(self._END)
+
+    def flush(self) -> int:
+        """Drop everything queued so far; returns how many frames were discarded."""
+        n = 0
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                return n
+            if item is self._END:                     # keep the end marker: the source really is finished
+                self._queue.put_nowait(item)
+                return n
+            n += 1
+
+    def frames(self) -> Iterator[np.ndarray]:
+        self._thread = threading.Thread(target=self._reader, daemon=True, name="mic-reader")
+        self._thread.start()
+        while True:
+            item = self._queue.get()
+            if item is self._END:
+                if self._error is not None:
+                    raise self._error
+                return
+            yield item                                # type: ignore[misc]
+
+    def close(self) -> None:
+        self._stop.set()
+        self._inner.close()
 
 
 class FileSource(AudioSource):

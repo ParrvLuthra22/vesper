@@ -108,7 +108,8 @@ voice:
     # End-of-speech detection.
     vad_backend: "webrtcvad"   # "webrtcvad" | "silero"
     vad_aggressiveness: 2       # webrtcvad 0..3
-    vad_silence_ms: 800
+    # (the end-of-utterance timings now live under voice.vad below; voice.input.vad_silence_ms is still read if voice.vad
+    # does not set it)
     listen_timeout_ms: 6000     # no speech after wake -> back to idle
     first_frame_timeout_seconds: 15   # mic must deliver audio within this or voice input exits "unavailable"
                                       # (a silent/blocked mic otherwise hangs forever); 0 disables
@@ -125,13 +126,38 @@ voice:
     auto_gain: false            # true = keep the recent peak near -12 dBFS (max +30 dB, never on near-silence)
     mic_device: null            # LEGACY alias of `device`; only read when `device` is not set
 
-  # Wake-word sensitivity for voice input (openWakeWord). The wake model scores every 80 ms window 0..1 and the word
-  # "fires" at or above this threshold. LOWER = more sensitive (hears you more easily, more false wakes from TV and
-  # chatter); HIGHER = stricter. 0.5 is the openWakeWord default and has NOT been tuned on this machine: run
-  # `vesper mic-test` to see the scores you actually produce, and run voice input with debug logging to see the max
-  # score per 10 s window (scores only, no audio) before changing it. Replaces voice.input.wake_threshold (still read).
+  # Wake-word sensitivity for voice input (openWakeWord). The wake model scores every 80 ms window 0..1. LOWER threshold =
+  # more sensitive (hears you at a normal speaking pace, more false wakes from TV and chatter); HIGHER = stricter.
+  # 0.35 + the patience guard below replaced the openWakeWord default of 0.5, which needed the phrase said slowly and
+  # clearly in the live test (2026-10-17) although synthetic "Hey Jarvis" scored 0.99 at every speed.
+  # Voice input logs the max score per 10 s window (scores only, no audio) so this can be tuned from real use.
+  # Replaces voice.input.wake_threshold (still read).
   wake:
-    threshold: 0.5
+    threshold: 0.35
+    # Patience guard: fire only if at least `patience_hits` of the last `patience_window` windows (80 ms each) are at or
+    # above the threshold. One stray loud window (a door, a cough) can no longer wake it. 1 / 1 = the old behaviour.
+    patience_hits: 2
+    patience_window: 3
+    # A custom wake model (see docs/WAKEWORD.md), e.g. "voice/models/hey_vesper.onnx". Empty = voice.input.wake_model.
+    # `vesper doctor` checks the file exists. Do NOT switch the default until the false-accept test in WAKEWORD.md passes.
+    model_path: ""
+
+  # End-of-utterance detection (what ends a command after you stop talking).
+  vad:
+    silence_ms: 1200            # trailing silence that ends an utterance; brief pauses inside a sentence never cut it
+    max_utterance_s: 30         # hard cap on one utterance
+    preroll_ms: 300             # audio kept from before speech was detected, so the first word is not clipped
+    min_speech_ms: 250          # a voiced burst shorter than this (wake-word tail, chime, click) is ignored, not sent to STT
+    onset_ms: 90                # speech must persist this long before an utterance counts as started
+
+  # A conversation after ONE wake: chime (no greeting) -> you speak -> Vesper answers -> a follow-up window in which the
+  # next utterance needs no wake word. The window ends on silence, or when you say "thanks" / "that's all" / "stop".
+  session:
+    followup_s: 8               # 0 = no follow-up (every command needs the wake word)
+    greet_after_idle_min: 60    # the persona greeting plays at most once per this much idle time — never on every wake
+    chime: true                 # a short sound on wake (voice input plays it; nothing is spoken)
+    reply_wait_s: 25            # how long to wait for the reply to be spoken before the follow-up window opens anyway
+    end_phrases: ["thanks", "thank you", "thats all", "that is all", "stop", "nevermind", "never mind", "cancel", "goodbye"]
 
   # ---------------------------------------------------------------------------
   # Voice OUTPUT (PV4) — Kokoro-82M TTS. Speaks Vesper's serif voice lines

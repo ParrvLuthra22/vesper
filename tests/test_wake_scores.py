@@ -1,5 +1,7 @@
-"""Wake-word sensitivity: the threshold is a documented config knob, and the max score per 10 s window is logged at DEBUG
-(scores only — never audio) so it can be tuned from real use. Fake model; nothing is loaded or opened."""
+"""Wake-word sensitivity: the threshold is a documented config knob, and the max score per 10 s window is logged (scores only
+— never audio) so it can be tuned from real use: at INFO when something wake-like (>= 0.05) was heard, at DEBUG when the
+window was quiet. Fake model; nothing is loaded or opened. The patience guard has its own tests in test_wake_patience.py;
+these use hits=1 / window=1, which is the single-window behaviour."""
 
 from __future__ import annotations
 
@@ -37,8 +39,9 @@ class Clock:
         return self.t
 
 
-def detector(scores, threshold=0.5, clock=None):
-    d = WakeDetector(VoiceInputConfig(wake_threshold=threshold), clock=clock or Clock())
+def detector(scores, threshold=0.5, clock=None, hits=1, window=1):
+    d = WakeDetector(VoiceInputConfig(wake_threshold=threshold, wake_patience_hits=hits, wake_patience_window=window),
+                     clock=clock or Clock())
     d._model, d._model_key = FakeModel(scores), "hey_jarvis"
     return d
 
@@ -60,11 +63,12 @@ def test_process_still_fires_at_the_threshold_exactly_as_before():
     assert detector([0.3], threshold=0.25).process(chunk()) is True       # the configured threshold, not a constant
 
 
-def test_the_default_threshold_is_unchanged():
-    assert VoiceInputConfig().wake_threshold == 0.5
+def test_the_default_threshold_is_035_with_a_two_of_three_patience_guard():
+    c = VoiceInputConfig()
+    assert (c.wake_threshold, c.wake_patience_hits, c.wake_patience_window) == (0.35, 2, 3)
 
 
-def test_max_score_per_10s_window_is_logged_at_debug_with_no_audio(caplog):
+def test_max_score_per_10s_window_is_logged_at_info_when_wake_like_with_no_audio(caplog):
     caplog.set_level(logging.DEBUG, logger="vesper.voice")
     clock = Clock()
     d = detector([0.05, 0.31, 0.12, 0.2], clock=clock)
@@ -72,7 +76,7 @@ def test_max_score_per_10s_window_is_logged_at_debug_with_no_audio(caplog):
     d.process(chunk(2)); clock.t += 7                      # 11 s since the window started -> one line
     d.process(chunk(1))
     lines = [r for r in caplog.records if "wake: max score" in r.getMessage()]
-    assert len(lines) == 1 and lines[0].levelno == logging.DEBUG
+    assert len(lines) == 1 and lines[0].levelno == logging.INFO
     msg = lines[0].getMessage()
     assert "0.310" in msg and "threshold 0.50" in msg and "over the last 11s" in msg
     assert not any(isinstance(a, (bytes, np.ndarray)) for r in caplog.records for a in (r.args or ()))     # scores only, never audio
@@ -97,10 +101,10 @@ def test_each_window_reports_its_own_max_then_resets():
     assert "0.400" in maxes[0] and "0.100" in maxes[1]
 
 
-def test_nothing_is_logged_below_debug(caplog):
+def test_a_quiet_window_is_only_logged_at_debug(caplog):
     caplog.set_level(logging.INFO, logger="vesper.voice")
     clock = Clock()
-    d = detector([0.3])
+    d = detector([0.01])
     d._clock = clock
     d.process(chunk()); clock.t += 30; d.process(chunk())
     assert not [r for r in caplog.records if "wake: max score" in r.getMessage()]
