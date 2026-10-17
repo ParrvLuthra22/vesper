@@ -86,3 +86,12 @@ modelled; the eval is text).
 `tests/eval_router.py` (the metrics). The security-relevant checks were mutation-tested: removing the full-phrase
 anchor, the ambiguity rule, the `close_app` tier floor (against a tool registered as *safe*), the never-close list (including its alias check), the Guardian
 call, the volume range check or the greeting-hour check each makes tests fail.
+
+## Updates (2026-10-17)
+
+* "good morning / afternoon / evening / night", "brief me", "what's new" trigger the **briefing at any hour**; the spoken greeting
+  follows the real time of day in `briefing.speech.timezone` (Asia/Kolkata), not the phrase. "anything new" is the inbox skill.
+* `web_search` skill: "search for / google / look up X" hands off to the planner with **only** the `web_search` tool
+  (DuckDuckGo, Tavily if `TAVILY_API_KEY` is set; 5 results, ~600 tokens, site names only, hostile results dropped, tainted).
+* App names tolerate recogniser near-misses ("Sofari", "Message"); closing an app still needs the exact name.
+* Calendar: "what's on my calendar" without "today", and "calender", are claimed.

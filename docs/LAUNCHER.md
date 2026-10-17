@@ -110,3 +110,13 @@ It sends nothing and exits 1 only on FAIL. The full end-to-end checklist is [LIV
 11. `python main.py` → prints the redirect notice and starts the launcher; **no** microphone indicator before the stack is up.
 12. Privacy: with `tracing.langsmith_enabled` unchanged (false), confirm nothing appears in your LangSmith project after a turn.
 13. Memory pressure: with Chrome etc. open, run 5 turns in a row; note any crash/restart in `vesper status` (RESTARTS column).
+
+## Voice conversation (voice.session.*, voice.vad.*)
+
+One wake word opens a conversation: a short **chime** (no spoken greeting), you speak, Vesper answers, and for
+`voice.session.followup_s` (8 s) afterwards the next utterance needs **no wake word**. The window starts after the reply has
+been spoken (the gateway's `GET /speech` says when) and ends on silence or when you say "thanks" / "that's all" / "stop".
+The persona greeting plays at most once per `greet_after_idle_min` (60) minutes idle, never per wake. An utterance ends after
+`voice.vad.silence_ms` (1200) of silence, capped at `max_utterance_s` (30); a short blip (the wake word's tail, the chime) is
+ignored. Wake: `voice.wake.threshold` 0.35 with 2-of-3 patience; custom model and false-accept test: `docs/WAKEWORD.md`.
+`vesper doctor` also checks the Calendar permission (it belongs to the terminal app that runs `vesper up`) and the wake model file.
