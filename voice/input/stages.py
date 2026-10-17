@@ -342,10 +342,27 @@ class SpeechSegmenter:
 class Transcriber:
     """Wraps faster-whisper. int16 audio -> text."""
 
-    def __init__(self, config: VoiceInputConfig):
+    def __init__(self, config: VoiceInputConfig, vocab_provider=None):
         self._config = config
         self._model = None
         self._load_error: Optional[VoiceInputUnavailable] = None
+        #: () -> List[str] of first names; called once, lazily. The names are only ever used to build `_prompt`.
+        self._vocab_provider = vocab_provider
+        self._prompt: Optional[str] = None
+
+    def prompt(self) -> str:
+        """The decoder prompt built from the name vocabulary ("" if disabled/empty). Built once; NEVER logged — only the count is."""
+        if self._prompt is None:
+            from voice.input.vocab import load_vocab, prompt_from
+
+            try:
+                names = (self._vocab_provider() if self._vocab_provider is not None else
+                         load_vocab(self._config.stt_vocab, self._config.briefing_db, self._config.stt_max_names))
+            except Exception:  # noqa: BLE001 — a vocabulary problem must never stop transcription
+                names = []
+            self._prompt = prompt_from(names) if self._config.stt_vocab else ""
+            logger.info("stt vocabulary: %d name(s)%s", len(names), "" if names else " (none — recogniser runs unprimed)")
+        return self._prompt
 
     def load(self) -> None:
         if self._model is not None:
@@ -378,10 +395,12 @@ class Transcriber:
     def transcribe(self, audio_int16: np.ndarray) -> str:
         self.load()
         audio = audio_int16.astype(np.float32) / 32768.0
+        extra = {"initial_prompt": self.prompt()} if self.prompt() else {}
         segments, _info = self._model.transcribe(
             audio,
             language=self._config.whisper_language,
             beam_size=self._config.whisper_beam_size,
             vad_filter=False,
+            **extra,
         )
         return " ".join(seg.text.strip() for seg in segments).strip()

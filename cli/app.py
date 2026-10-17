@@ -446,6 +446,7 @@ USAGE = """usage: vesper [command] [options]
   route "<utterance>"     which deterministic skill would answer it (runs nothing)
   dnd on|off|status       proactive do-not-disturb
   mic-test [--selftest]   what the microphone hears / wake-word pipeline self-test
+  stt-test "<phrase>" [--names A,B]   Kokoro phrase transcribed with and without a name vocabulary (no mic)
   help, -h, --help        this text (touches nothing)
 """
 
@@ -481,6 +482,12 @@ def run() -> None:
 
         sys.exit(mic_test_main(sys.argv[2:]))
 
+    # `vesper stt-test "<phrase>" [--names A,B]` — Kokoro-synthesized phrase, transcribed with and without a name vocabulary (no mic).
+    if len(sys.argv) > 1 and sys.argv[1] == "stt-test":
+        from voice.input.stt_test import main as stt_test_main
+
+        sys.exit(stt_test_main(sys.argv[2:]))
+
     # `vesper route "<utterance>"` — which deterministic skill would answer it, and why (runs nothing).
     if len(sys.argv) > 1 and sys.argv[1] == "route":
         from router.cli import main as route_main
@@ -496,7 +503,7 @@ def run() -> None:
     # Anything else that is not a flag is a typo or a mis-split argument (`vesper "doctor --help"`, `vesper doctr`).
     # Starting the whole stack (real MCP servers, memory, a briefing refresh) because of that is a surprise nobody wants.
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-        print(f"vesper: unknown command {sys.argv[1]!r}. Commands: up, down, status, logs, doctor, briefing, route, dnd, mic-test. "
+        print(f"vesper: unknown command {sys.argv[1]!r}. Commands: up, down, status, logs, doctor, briefing, route, dnd, mic-test, stt-test. "
               "Run `vesper` with no arguments for the text REPL (or --remote to drive a running gateway).", file=sys.stderr)
         sys.exit(2)
 

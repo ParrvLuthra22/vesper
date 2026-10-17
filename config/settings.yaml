@@ -150,6 +150,14 @@ voice:
     min_speech_ms: 250          # a voiced burst shorter than this (wake-word tail, chime, click) is ignored, not sent to STT
     onset_ms: 90                # speech must persist this long before an utterance counts as started
 
+  # Speech-to-text. `vocab` hands faster-whisper a list of first names (people you write to, from your sent-mail headers, plus your
+  # Contacts if the permission is already granted) so "message Rahul" is not heard as "Rahool". It stays in memory, is never
+  # logged (the log shows a count), never leaves the machine. `vesper stt-test "<phrase>" --names A,B` compares with/without.
+  stt:
+    vocab: true
+    max_names: 60
+    model: ""                   # empty = voice.input.whisper_model ("base.en"); e.g. "small.en" for better names, slower
+
   # A conversation after ONE wake: chime (no greeting) -> you speak -> Vesper answers -> a follow-up window in which the
   # next utterance needs no wake word. The window ends on silence, or when you say "thanks" / "that's all" / "stop".
   session:

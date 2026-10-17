@@ -118,6 +118,14 @@ class VoiceVadSettings(BaseModel):
     onset_ms: int = 90              # speech must persist this long before an utterance is considered started
 
 
+class VoiceSttSettings(BaseModel):
+    """Speech-to-text details (voice/input/stages.py Transcriber, voice/input/vocab.py)."""
+
+    vocab: bool = True        # bias the recogniser toward first names of people you write to / your contacts (local only, never logged)
+    max_names: int = 60
+    model: str = ""           # faster-whisper model; empty = voice.input.whisper_model (base.en)
+
+
 class VoiceSessionSettings(BaseModel):
     """A conversation after one wake (voice/input/session.py)."""
 
@@ -156,6 +164,7 @@ class VoiceSettings(BaseModel):
     wake: VoiceWakeSettings = Field(default_factory=VoiceWakeSettings)
     vad: VoiceVadSettings = Field(default_factory=VoiceVadSettings)
     session: VoiceSessionSettings = Field(default_factory=VoiceSessionSettings)
+    stt: VoiceSttSettings = Field(default_factory=VoiceSttSettings)
     output: VoiceOutputSettings = Field(default_factory=VoiceOutputSettings)
 
 

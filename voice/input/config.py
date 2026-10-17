@@ -71,6 +71,11 @@ class VoiceInputConfig:
     vad_min_speech_ms: int = 250  # a voiced burst shorter than this (wake-word tail, chime, click) is not an utterance
     vad_onset_ms: int = 90  # speech must persist this long before an utterance counts as started
 
+    # Speech-to-text name vocabulary (voice.stt.*)
+    stt_vocab: bool = True
+    stt_max_names: int = 60
+    briefing_db: str = "data/briefing.db"
+
     # Conversation session (voice.session.*): see voice/input/session.py.
     followup_s: float = 8.0
     greet_after_idle_min: float = 60.0
@@ -128,6 +133,7 @@ class VoiceInputConfig:
         wake = (voice.get("wake", {}) or {})
         vad = (voice.get("vad", {}) or {})
         session = (voice.get("session", {}) or {})
+        stt = (voice.get("stt", {}) or {})
 
         def pick(section: Dict[str, Any], key: str, legacy: Any) -> Any:
             val = section.get(key)
@@ -162,7 +168,11 @@ class VoiceInputConfig:
             first_frame_timeout_seconds=float(g("first_frame_timeout_seconds", cls.first_frame_timeout_seconds)),
             max_utterance_ms=int(float(vad["max_utterance_s"]) * 1000) if vad.get("max_utterance_s") is not None
             else int(g("max_utterance_ms", cls.max_utterance_ms)),
-            whisper_model=str(g("whisper_model", cls.whisper_model)),
+            whisper_model=str(stt.get("model") or g("whisper_model", cls.whisper_model)),
+            stt_vocab=bool(pick(stt, "vocab", cls.stt_vocab)),
+            stt_max_names=int(pick(stt, "max_names", cls.stt_max_names)),
+            briefing_db=str(os.getenv("VESPER_BRIEFING_DB") or ((config.get("briefing", {}) or {}).get("collect", {}) or {}).get("cache_path")
+                            or cls.briefing_db),
             whisper_compute_type=str(g("whisper_compute_type", cls.whisper_compute_type)),
             whisper_device=str(g("whisper_device", cls.whisper_device)),
             whisper_beam_size=int(g("whisper_beam_size", cls.whisper_beam_size)),
