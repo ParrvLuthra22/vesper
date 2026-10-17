@@ -165,9 +165,9 @@ def test_default_input_index_is_read_only_and_tolerant():
 
 # ------------------------------------------------------------------ configuration
 
-def test_default_device_is_builtin_and_the_threshold_is_unchanged():
+def test_default_device_is_builtin_and_the_threshold_is_035_with_patience():
     cfg = VoiceInputConfig.from_app_config({})
-    assert cfg.device == "builtin" and cfg.wake_threshold == 0.5
+    assert cfg.device == "builtin" and cfg.wake_threshold == 0.35
 
 
 def test_device_override_and_legacy_alias():
@@ -185,11 +185,11 @@ def test_voice_wake_threshold_is_the_knob_and_the_old_key_still_works():
     assert both.wake_threshold == 0.35
 
 
-def test_shipped_settings_pin_the_builtin_mic_and_keep_the_default_threshold():
+def test_shipped_settings_pin_the_builtin_mic_and_use_035_with_patience():
     from config.settings import load_config_dict
 
     raw = load_config_dict()
     cfg = VoiceInputConfig.from_app_config(raw)
     assert cfg.device == "builtin" and cfg.mic_device is None
-    assert cfg.wake_threshold == 0.5                                   # not changed without a measured reason
-    assert raw["voice"]["wake"]["threshold"] == 0.5 and raw["voice"]["input"]["device"] == "builtin"
+    assert cfg.wake_threshold == 0.35 and (cfg.wake_patience_hits, cfg.wake_patience_window) == (2, 3)    # see DIAGNOSIS (d), docs/WAKEWORD.md
+    assert raw["voice"]["wake"]["threshold"] == 0.35 and raw["voice"]["input"]["device"] == "builtin"

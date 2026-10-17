@@ -158,4 +158,4 @@ def test_voice_input_wraps_its_source_only_when_a_gain_is_configured(monkeypatch
         monkeypatch.setattr(service, "_AnnouncingMicSource", FakeMic)
         calls.clear()
         assert service.main() == 0
-        assert isinstance(calls[0], GainSource) is wrapped, (gain, auto)
+        assert isinstance(calls[0]._inner, GainSource) is wrapped, (gain, auto)       # service adds a BufferedSource around it

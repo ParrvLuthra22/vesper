@@ -202,8 +202,9 @@ builder:
 speech:
   address_as: "Sir"
   max_words: 85                 # ~25-30 seconds spoken
-  morning_until_hour: 12        # "good morning" only triggers the fast path before this local hour
+  morning_until_hour: 12        # legacy: no longer gates anything. Greeting phrases trigger the briefing at ANY hour.
+  timezone: "Asia/Kolkata"      # the spoken "Good morning/afternoon/evening" follows the real time of day in this zone
 
 fast_path:
-  enabled: true                 # "good morning" / "brief me" answered straight from the cache, no LLM call
-  phrases: ["good morning", "morning", "morning briefing", "daily briefing", "brief me", "give me my briefing", "give me my morning briefing", "whats my day look like", "what is my day look like", "what does my day look like"]
+  enabled: true                 # "good morning" / "brief me" / "what's new" answered straight from the cache, no LLM call
+  phrases: ["good morning", "good afternoon", "good evening", "good night", "morning", "afternoon", "evening", "morning briefing", "daily briefing", "brief me", "give me my briefing", "give me my morning briefing", "whats new", "what is new", "whats new today", "whats my day look like", "what is my day look like", "what does my day look like"]

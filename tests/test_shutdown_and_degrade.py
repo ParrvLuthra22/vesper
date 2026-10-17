@@ -227,7 +227,7 @@ def test_missing_transcriber_disables_rather_than_looping(caplog):
     pipeline = _pipeline(OkWake(), transcriber=MissingTranscriber())
     # Give the segmenter a real VAD-free path: a permanent transcriber failure
     # must disable regardless of how listening resolved.
-    pipeline._listen = lambda it: np.zeros(160, dtype=np.int16)
+    pipeline._listen = lambda it, timeout_ms=None: np.zeros(160, dtype=np.int16)
 
     with caplog.at_level(logging.WARNING, logger="vesper.voice"):
         pipeline.run_stream(iter(_frames(50)))
