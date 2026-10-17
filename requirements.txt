@@ -135,3 +135,6 @@ certifi>=2024.8.30       # Reliable CA bundle for TLS API calls (Gemini REST fal
 # CLI (cli/) - rich REPL, Vesper's terminal presence until the HUD ships
 # ------------------------------------------------------------------------------
 rich>=13.7.0             # Styled terminal output, tables, live REPL rendering
+
+# web_search (tools/web_search.py): optional; without it DuckDuckGo's plain-HTML endpoint is used. Tavily is used only if TAVILY_API_KEY is set.
+ddgs>=9.0

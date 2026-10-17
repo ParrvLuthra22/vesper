@@ -41,7 +41,7 @@ def registry() -> ToolRegistry:
         ("git_commit", "dev"),
         ("git_status", "dev"),
         ("run_tests", "dev"),
-        ("search_web", "web"),
+        ("web_search", "web"),
         ("open_url", "web"),
         ("current_weather", "general"),
     ]:

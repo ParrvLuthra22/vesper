@@ -39,7 +39,7 @@ from tools.registry import ToolRegistry, ToolSpec
 #: these are the tools a model reaches for without the user naming them:
 #: the current time/date for anything scheduling-shaped, and web search as
 #: the general "I don't know this" escape hatch.
-CORE_TOOL_NAMES: frozenset = frozenset({"get_time", "get_date", "search_web"})
+CORE_TOOL_NAMES: frozenset = frozenset({"get_time", "get_date", "web_search"})
 
 #: Name fragments too generic to identify a tool on their own — they appear
 #: across many tools and never disambiguate. Dropped from the index.
@@ -118,6 +118,7 @@ TOOL_SYNONYMS: Dict[str, Tuple[str, ...]] = {
     "get_battery": ("percent", "percentage", "juice"),
     "system_info": ("hardware", "how much memory", "free space"),
     "search_web": ("find out", "who is", "what is", "latest"),
+    "web_search": ("find out", "who is", "what is", "latest", "google", "look up"),
     "open_url": ("go to", "visit"),
     "current_weather": ("jacket", "coat"),
     "git_commit": ("save changes", "check in"),

@@ -1261,10 +1261,14 @@ class Brain:
             return await self._answer_briefing_from_cache(text, correlation_id, on_token, speak=speak)
 
         # Deterministic skills (docs/ROUTER.md): never for turns that carry third-party text (a forwarded message).
+        restrict_tools: Optional[tuple] = None
         if self._skill_runner is not None and not input_taint:
-            routed = await self._answer_with_skill(text, correlation_id, on_token, speak)
+            handoff: List[Any] = []
+            routed = await self._answer_with_skill(text, correlation_id, on_token, speak, handoff_out=handoff)
             if routed is not None:
                 return routed
+            if handoff:                                    # e.g. web_search: the planner answers, with only that tool on offer
+                restrict_tools = tuple(handoff[0].tools)
 
         recent_context = self._context.get_recent_context(num_turns=self._brain_config.max_context_turns)
         pending_observations = self._context.get_pending_observations()
@@ -1293,6 +1297,7 @@ class Brain:
                 on_status=on_status,
                 input_taint=input_taint,
                 trusted_text=trusted_text,
+                restrict_tools=restrict_tools,
             )
         finally:
             self._active_turns -= 1
@@ -1328,8 +1333,10 @@ class Brain:
             logger.warning(f"Proactive watcher not started: {exc}")
 
     async def _answer_with_skill(self, text: str, correlation_id: Optional[UUID],
-                                 on_token: Optional[Callable[[str], None]], speak: bool) -> Optional[PlannerResult]:
-        """Try the deterministic skill router. Same bookkeeping as a planner turn, minus the LLM. None = not handled."""
+                                 on_token: Optional[Callable[[str], None]], speak: bool,
+                                 handoff_out: Optional[List[Any]] = None) -> Optional[PlannerResult]:
+        """Try the deterministic skill router. Same bookkeeping as a planner turn, minus the LLM. None = not handled.
+        A skill that wants the PLANNER to answer (web search) appends its Handoff to `handoff_out` and returns None."""
         assert self._skill_runner is not None
         self._skill_runner._briefing = self._briefing
         try:
@@ -1338,6 +1345,10 @@ class Brain:
             logger.warning(f"Skill router error; falling through to the planner: {exc}")
             return None
         if outcome is None:
+            return None
+        if outcome.handoff is not None:
+            if handoff_out is not None:
+                handoff_out.append(outcome.handoff)
             return None
         self._context.add_turn(user_input=text)
         await self._event_bus.emit(ContextUpdatedEvent(

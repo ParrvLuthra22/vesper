@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from briefing.sanitize import clean_text, display_name, looks_like_instructions
 from router.core import (
-    Match, Rule, RouterContext, Skill, SkillResult, SkillRouter, SkillRuntime, SkillUnavailable, normalize)
+    Handoff, Match, Rule, RouterContext, Skill, SkillResult, SkillRouter, SkillRuntime, SkillUnavailable, normalize)
 
 WHAT = r"(?:what is|whats)"
 ASK = r"(?:(?:tell me|show me|give me|let me know|let me see|check)\s+)?"      # optional lead-in that carries no meaning
@@ -416,11 +416,42 @@ VOLUME_STEP = Skill("volume_step", "volume up / down by a step", (
 ), _volume_step, mutates=True)
 
 
+# ----------------------------------------------------------------------------- web search
+
+#: Queries that are about the user's own stuff, not the web: these are NOT claimed (the planner picks the right tool).
+_NOT_WEB = re.compile(
+    r"^(?:my|our)\b|\b(?:in|on|from|through) (?:my|our|the) (?:inbox|mail|emails?|calendar|messages?|files?|notes|slack|drive|"
+    r"computer|mac|laptop|desktop|repo|codebase)\b|\b(?:inbox|gmail|slack|imessage|my emails?|my files?|my notes)\b")
+
+
+def _search_query(groups: Dict[str, str], ctx: RouterContext) -> Optional[Dict[str, Any]]:
+    q = re.sub(r"^(?:for|up|about)\s+", "", groups.get("q", "").strip())
+    q = re.sub(r"\s+(?:on the (?:web|internet)|online)$", "", q).strip()
+    if not (2 <= len(q) <= 120) or _NOT_WEB.search(q):
+        return None
+    return {"query": q}
+
+
+async def _web_search(match: Match, rt: SkillRuntime) -> SkillResult:
+    """No answer of its own: the planner runs with ONLY web_search on offer (about 150 tokens of schema instead of the whole
+    catalog, which is what exhausted Groq's per-minute budget), then summarises the results in the persona's voice."""
+    return SkillResult("", tainted=True, handoff=Handoff(tools=("web_search",)))
+
+
+WEB_SEARCH = Skill("web_search", "search the web for something (hands off to the planner with the web_search tool)", (
+    R("web.search_for", r"(?:search|google|bing|duckduckgo)(?: the web| the internet| online)?(?: for| up| about)? (?P<q>.+)", _search_query),
+    R("web.look_up", r"look ?up (?P<q>.+)", _search_query),
+    R("web.look_x_up", r"look (?P<q>.+) up", _search_query),
+    R("web.find_out", r"(?:find out|find information|find info)(?: about| on)? (?P<q>.+)", _search_query),
+    R("web.hinglish", r"(?P<q>.+) (?:ke baare mein |ke bare mein )?(?:google karo|search karo|dhundo|dhoondo|google kar do|search kar do)", _search_query),
+), _web_search, untrusted=True)
+
+
 # ----------------------------------------------------------------------------- assembly
 
 def build_skills(briefing_phrases: Iterable[str] = ()) -> List[Skill]:
     return [briefing_skill(briefing_phrases), TIME, DATE, CALENDAR_TODAY, NEXT_MEETING, UNREAD, IMPORTANT,
-            OPEN_APP, FOCUS_APP, CLOSE_APP, VOLUME_SET, VOLUME_STEP]
+            WEB_SEARCH, OPEN_APP, FOCUS_APP, CLOSE_APP, VOLUME_SET, VOLUME_STEP]
 
 
 def build_router(*, briefing_cfg: Any = None, installed: Optional[Iterable[str]] = None,

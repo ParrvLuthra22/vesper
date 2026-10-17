@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from uuid import UUID, uuid4
 
 from bus.event_bus import EventBus, get_event_bus
@@ -153,9 +153,13 @@ class Planner:
         memories_untrusted: bool = False,
         input_taint: Optional[str] = None,
         trusted_text: Optional[str] = None,
+        restrict_tools: Optional[Sequence[str]] = None,
     ) -> PlannerResult:
         """
         Run the tool-calling loop for one piece of user text.
+
+        `restrict_tools`, if given (a router skill's hand-off, e.g. web_search), offers the model ONLY those tools for the whole
+        turn: no keyword filtering, no widening to the full catalog. Unknown or disabled names are ignored.
 
         `input_taint`, if given, says part of `user_text` was written by someone else (a
         forwarded message, a quoted reply, a caption — see channels/): the turn starts
@@ -197,8 +201,15 @@ class Planner:
         messages.extend(self._context_to_messages(recent_context or []))
         messages.append({"role": "user", "content": user_text})
 
-        tools_schema, sent_tool_names = self._select_tools_for(user_text)
-        widened = False
+        if restrict_tools:
+            specs = [self._registry.get(n) for n in restrict_tools]
+            tools_schema = [sp.to_openai_function() for sp in specs if sp is not None and sp.enabled]
+            sent_tool_names = {t["function"]["name"] for t in tools_schema}
+            widened = True                                   # a hand-off stays inside its tools: never widen
+            logger.info(f"[Planner] hand-off: {len(tools_schema)} tool(s) offered ({', '.join(sorted(sent_tool_names))})")
+        else:
+            tools_schema, sent_tool_names = self._select_tools_for(user_text)
+            widened = False
         trace: List[str] = []
         #: Labels of untrusted content (email, web, calendar...) read so far
         #: this turn — drives the Guardian's tainted-input rule.

@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Dict, Optional
 
 from guardian.gate import Guardian, VerdictType
-from router.core import Match, SkillResult, SkillRouter, SkillRuntime, SkillUnavailable, max_tier
+from router.core import Handoff, Match, SkillResult, SkillRouter, SkillRuntime, SkillUnavailable, max_tier
 from tools.registry import ToolRegistry, ToolSpec
 from utils.logger import get_logger
 
@@ -25,6 +25,8 @@ class SkillOutcome:
     text: str
     skill: str
     tainted: bool = False
+    #: When set, `text` is empty: the planner answers, restricted to these tools (router/core.py Handoff).
+    handoff: Optional[Handoff] = None
 
 
 class SkillRunner:
@@ -68,4 +70,5 @@ class SkillRunner:
                 return SkillOutcome(f"That didn't work, {self._address}: {str(exc)[:120] or type(exc).__name__}.",
                                     match.skill.name)
             return None
-        return SkillOutcome(result.text, match.skill.name, tainted=result.tainted or match.skill.untrusted)
+        return SkillOutcome(result.text, match.skill.name, tainted=result.tainted or match.skill.untrusted,
+                            handoff=result.handoff)

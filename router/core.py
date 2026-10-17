@@ -82,11 +82,21 @@ class SkillRuntime:
     address_as: str = "Sir"
 
 
+@dataclass(frozen=True)
+class Handoff:
+    """The skill recognised the request but the ANSWER needs the planner. The planner then runs on `text` with only `tools`
+    on offer (a few hundred tokens of schema instead of the whole catalog) and every other rule — Guardian tiers, taint — as usual."""
+
+    tools: Tuple[str, ...]
+
+
 @dataclass
 class SkillResult:
     text: str
     #: True if the text quotes third-party content (event titles, senders): the turn is then marked tainted.
     tainted: bool = False
+    #: Set instead of `text` when the planner must answer (a web search): see Handoff.
+    handoff: Optional[Handoff] = None
 
 
 class SkillUnavailable(RuntimeError):

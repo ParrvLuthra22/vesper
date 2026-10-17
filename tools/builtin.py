@@ -248,6 +248,10 @@ def _register_builtin_tools() -> None:
             action="search_web",
             category="web",
             untrusted_output=True,  # returns summarized third-party web content
+            # Superseded by `web_search` (tools/web_search.py): DuckDuckGo with no key, Tavily if keyed. This one needs
+            # TAVILY_API_KEY + an OpenRouter key and failed on every call without them (2026-10-17 live test). Kept registered
+            # (it is still the bus route WebSearchAgent serves) but not offered to the planner, so the model has ONE search tool.
+            enabled=False,
         ),
         ToolSpec(
             name="lock_screen",
