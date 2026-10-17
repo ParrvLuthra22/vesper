@@ -407,6 +407,8 @@ class LLMRateLimitSettings(BaseModel):
 
     tokens_per_minute: int = 8000
     max_wait_seconds: float = 4.0
+    #: A provider's own Retry-After is honoured up to this long (ONE retry) before falling back / giving up.
+    retry_after_max_seconds: float = 20.0
 
 
 class LLMToolSelectionSettings(BaseModel):

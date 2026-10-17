@@ -152,6 +152,13 @@ class VesperCLI:
         streamed = {"tokens": 0}
 
         def on_token(token: str) -> None:
+            from llm.router import STREAM_RESET
+
+            if token == STREAM_RESET:                      # the attempt failed mid-reply: do not leave half a sentence standing
+                if streamed["tokens"] > 0:
+                    self._console.print("  [reply interrupted — discarded]", style="dim", markup=False, highlight=False)
+                streamed["tokens"] = 0
+                return
             if streamed["tokens"] == 0:
                 self._console.print(
                     "Vesper: ", style=self._vesper_style, markup=False, highlight=False, end=""

@@ -45,6 +45,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = ap.parse_args(list(argv) if argv is not None else sys.argv[1:])
 
     import dataclasses
+    import os
+
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")      # the model is on disk (like launcher.offline_models); no Hub request
 
     from config.settings import load_config_dict
     from voice.input.config import VoiceInputConfig

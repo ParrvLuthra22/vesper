@@ -14,7 +14,14 @@ from typing import Optional
 
 
 class ProviderError(Exception):
-    """Generic provider failure: network error, bad response, misconfiguration."""
+    """Generic provider failure: network error, bad response, misconfiguration.
+
+    `kind` says WHICH, so the user is told the class of failure in one sentence (llm/router.py explain_failure):
+    "rate_limit" | "timeout" | "network" | "auth" | "server" | "other"."""
+
+    def __init__(self, message: str = "", kind: str = "other"):
+        super().__init__(message)
+        self.kind = kind
 
 
 class RateLimitError(ProviderError):
@@ -30,5 +37,5 @@ class RateLimitError(ProviderError):
     """
 
     def __init__(self, message: str, retry_after: Optional[float] = None):
-        super().__init__(message)
+        super().__init__(message, kind="rate_limit")
         self.retry_after = retry_after

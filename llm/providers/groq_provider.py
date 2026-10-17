@@ -72,9 +72,9 @@ class GroqProvider(LLMProvider):
 
     def _get_client(self) -> "AsyncGroq":
         if not GROQ_SDK_AVAILABLE:
-            raise ProviderError("groq package is not installed (pip install groq)")
+            raise ProviderError("groq package is not installed (pip install groq)", kind="other")
         if not self._api_key:
-            raise ProviderError("GROQ_API_KEY is not configured")
+            raise ProviderError("GROQ_API_KEY is not configured", kind="auth")
         if self._client is None:
             # max_retries=0: ModelRouter owns retry/backoff decisions, so the
             # SDK's own transparent retries would double up and hide latency.
@@ -116,9 +116,12 @@ class GroqProvider(LLMProvider):
                 raise RateLimitError(
                     f"Groq rate limit ({status}): {exc}", retry_after=_retry_after_seconds(exc)
                 ) from exc
-            raise ProviderError(f"Groq API error ({status}): {exc}") from exc
-        except (_GroqAPIConnectionError, _GroqAPITimeoutError) as exc:
-            raise ProviderError(f"Groq network error: {exc}") from exc
+            kind = "auth" if status in (401, 403) else "server" if isinstance(status, int) and status >= 500 else "other"
+            raise ProviderError(f"Groq API error ({status}): {exc}", kind=kind) from exc
+        except _GroqAPITimeoutError as exc:
+            raise ProviderError(f"Groq timeout: {exc}", kind="timeout") from exc
+        except _GroqAPIConnectionError as exc:
+            raise ProviderError(f"Groq network error: {exc}", kind="network") from exc
         except Exception as exc:  # pragma: no cover - defensive catch-all
             raise ProviderError(f"Groq request failed: {exc}") from exc
         latency_ms = (time.monotonic() - start) * 1000

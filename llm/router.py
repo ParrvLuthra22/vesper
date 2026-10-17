@@ -27,6 +27,38 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from llm.errors import ProviderError, RateLimitError
+
+#: Sent through `on_token` when a streamed attempt FAILED after text was already shown: the consumer must throw that partial reply away
+#: (the CLI erases it) — a half-streamed reply is never left standing. See ModelRouter._attempt_tier.
+STREAM_RESET = "\x00stream-reset\x00"
+
+
+class TierFailure(str):
+    """The error summary of a failed tier, carrying WHICH kind of failure it was (llm/errors.py ProviderError.kind)."""
+
+    kind: str = "other"
+    retry_after: Optional[float] = None
+
+    def __new__(cls, text: str, kind: str = "other", retry_after: Optional[float] = None):
+        obj = super().__new__(cls, text)
+        obj.kind, obj.retry_after = kind, retry_after
+        return obj
+
+
+def explain_failure(kind: str, retry_after: Optional[float] = None) -> str:
+    """One short sentence naming the class of LLM failure — never a vague 'trouble thinking'."""
+    if kind == "rate_limit":
+        wait = f" Try again in about {int(round(retry_after))} seconds." if retry_after else " Try again in a minute."
+        return "I've hit the language model's rate limit, Sir." + wait
+    if kind == "timeout":
+        return "The language model took too long to answer, Sir."
+    if kind == "network":
+        return "I can't reach the language model, Sir — the network seems to be down."
+    if kind == "auth":
+        return "The language model rejected my API key, Sir. It needs checking."
+    if kind == "server":
+        return "The language model's service reported a server error, Sir."
+    return "Sir, I'm having trouble thinking right now."
 from llm.providers import get_provider_class
 from llm.providers.base import LLMProvider
 from llm.token_meter import TokenBudget, estimate_request_tokens
@@ -55,6 +87,9 @@ class ModelRouter:
     #: Never wait longer than this for a rate limit to clear before giving
     #: up on the primary — past it, the local fallback is the faster path.
     DEFAULT_MAX_RATE_LIMIT_WAIT_SECONDS = 4.0
+    #: A provider's own Retry-After is honoured up to this long (one retry) before falling back: a 429 on tokens-per-minute often asks
+    #: for 10-19 s, and waiting beats answering from a weaker model or not at all.
+    DEFAULT_RETRY_AFTER_CEILING_SECONDS = 20.0
     #: Groq's free tier. Used for client-side pacing only; the provider
     #: remains the authority on whether a call is actually over the line.
     DEFAULT_TOKENS_PER_MINUTE = 8000
@@ -74,6 +109,8 @@ class ModelRouter:
                 "llm.rate_limit.max_wait_seconds", self.DEFAULT_MAX_RATE_LIMIT_WAIT_SECONDS
             )
         )
+        self._retry_after_ceiling = float(
+            self._get_config("llm.rate_limit.retry_after_max_seconds", self.DEFAULT_RETRY_AFTER_CEILING_SECONDS))
         #: One budget per provider name — only the primary's ceiling matters
         #: in practice, but keying by provider keeps a local fallback (no
         #: meaningful limit) from being paced against a cloud tier's numbers.
@@ -259,6 +296,7 @@ class ModelRouter:
                 "using a weaker model for a routing-quality-sensitive purpose"
             )
             return RouterError(
+                user_message=explain_failure(getattr(primary_result, "kind", "other"), getattr(primary_result, "retry_after", None)),
                 primary_error=primary_result,
                 fallback_error=(
                     f"fallback not attempted: scoped to {allowed_purposes!r}, "
@@ -303,7 +341,9 @@ class ModelRouter:
             f"[ROUTE] both primary and fallback failed for purpose={purpose!r}: "
             f"primary={primary_result!r} fallback={fallback_result!r}"
         )
+        # Name the class of failure of the PRIMARY (the model that should have answered); a dead fallback adds nothing for the user.
         return RouterError(
+            user_message=explain_failure(getattr(primary_result, "kind", "other"), getattr(primary_result, "retry_after", None)),
             primary_error=primary_result,
             fallback_error=fallback_result,
             purpose=purpose,
@@ -383,10 +423,25 @@ class ModelRouter:
         # accept it, so only pass it through when the provider actually
         # declares the parameter.
         extra_kwargs: Dict[str, Any] = {}
-        if on_token is not None and "on_token" in inspect.signature(provider.complete).parameters:
-            extra_kwargs["on_token"] = on_token
+        shown = {"n": 0}
 
-        last_error = ""
+        def counting_on_token(token: str) -> None:
+            shown["n"] += 1
+            on_token(token)  # type: ignore[misc]
+
+        def discard_partial() -> None:
+            """A streamed attempt failed after text was already shown: tell the consumer to throw it away."""
+            if shown["n"] and on_token is not None:
+                shown["n"] = 0
+                try:
+                    on_token(STREAM_RESET)
+                except Exception:  # a display callback must never break routing
+                    pass
+
+        if on_token is not None and "on_token" in inspect.signature(provider.complete).parameters:
+            extra_kwargs["on_token"] = counting_on_token
+
+        last_error: Any = ""
         for attempt in range(max_retries + 1):
             try:
                 response = await provider.complete(
@@ -404,8 +459,9 @@ class ModelRouter:
                 )
                 return response
             except RateLimitError as exc:
-                last_error = f"rate_limited: {exc}"
-                self._log_failure(tier_label, provider_name, model, purpose, last_error, attempt)
+                discard_partial()
+                last_error = TierFailure(f"rate_limited: {exc}", "rate_limit", getattr(exc, "retry_after", None))
+                self._log_failure(tier_label, provider_name, model, purpose, str(last_error), attempt)
                 if attempt < max_retries:
                     # Prefer the window the provider actually asked for; a
                     # TPM reset is typically ~1-2s, so riding it out keeps
@@ -417,10 +473,10 @@ class ModelRouter:
                         if requested
                         else self.BACKOFF_BASE_SECONDS * (2**attempt)
                     )
-                    if backoff > self._max_rate_limit_wait:
+                    if backoff > self._retry_after_ceiling:
                         logger.warning(
                             f"[ROUTE] {tier_label} ({provider_name}/{model}) rate-limited for "
-                            f"{backoff:.1f}s — longer than the {self._max_rate_limit_wait:.1f}s "
+                            f"{backoff:.1f}s — longer than the {self._retry_after_ceiling:.1f}s "
                             "ceiling; falling back instead of waiting"
                         )
                         break
@@ -435,11 +491,13 @@ class ModelRouter:
                     continue
                 break
             except ProviderError as exc:
-                last_error = str(exc)
-                self._log_failure(tier_label, provider_name, model, purpose, last_error, attempt)
+                discard_partial()
+                last_error = TierFailure(str(exc), getattr(exc, "kind", "other"))
+                self._log_failure(tier_label, provider_name, model, purpose, str(last_error), attempt)
                 break
             except Exception as exc:  # pragma: no cover - defensive catch-all
-                last_error = f"unexpected error: {exc}"
+                discard_partial()
+                last_error = TierFailure(f"unexpected error: {exc}", "other")
                 logger.error(
                     f"[ROUTE] {tier_label} ({provider_name}/{model}) raised an unexpected "
                     f"error: {exc}",

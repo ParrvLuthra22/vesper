@@ -773,6 +773,9 @@ llm:
     # retry while still bailing out on the genuinely long (8s+) stalls, where
     # a cold 3B really is the faster answer.
     max_wait_seconds: 6.0
+    # A 429 that carries Retry-After is waited out (one retry) up to this long before the turn falls back or fails. Groq's
+    # tokens-per-minute resets asked for 10-19 s in the 2026-10-17 sessions; 6 s above only bounds client-side pacing.
+    retry_after_max_seconds: 20.0
 
   # Per-turn tool-schema filtering (tools/selection.py). The full catalog is
   # the single largest fixed cost in every planning prompt, and it was re-sent
