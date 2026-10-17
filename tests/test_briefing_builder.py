@@ -231,7 +231,7 @@ def test_spoken_script_trims_to_the_word_cap():
 
 def test_spoken_script_for_an_empty_day():
     text, _ = _spoken([])
-    assert text.startswith("Good morning, Sir.") and "calendar is clear" in text and "No priority mail" in text
+    assert text.startswith("Good morning, Sir.") and "No meetings today." in text and "No priority mail" in text
     assert text.endswith("?")
 
 

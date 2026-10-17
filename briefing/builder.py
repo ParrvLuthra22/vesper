@@ -125,8 +125,11 @@ def build_briefing(
     cache.save_scores([(s.item.id, s.score, [{"label": r.label, "delta": r.delta} for r in s.reasons], s.excluded)
                        for s in scored])
 
-    meetings = sorted((s for s in scored if s.item.source == "calendar" and not s.excluded),
-                      key=lambda s: (s.item.start_at or 0.0))[: cfg.max_meetings]
+    cal = [s for s in scored if s.item.source == "calendar" and not s.excluded]
+    # Timed events first (by start), then all-day ones: an all-day event starts at midnight and used to sort ahead of — and
+    # crowd out — the real meetings, then got spoken as "a meeting at 12 AM".
+    meetings = (sorted((s for s in cal if not s.item.all_day), key=lambda s: (s.item.start_at or 0.0))[: cfg.max_meetings]
+                + sorted((s for s in cal if s.item.all_day), key=lambda s: (s.item.start_at or 0.0, s.item.title))[:3])
     mail = [s for s in scored if s.item.source == "gmail" and not s.excluded]
     priority = sorted((s for s in mail if s.score >= cfg.min_priority_score),
                       key=lambda s: (-s.score, -s.item.timestamp))[: cfg.max_priority_mail]
@@ -411,25 +414,51 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
             text += f" {k} text message{'s were' if k != 1 else ' was'} filtered as unsafe."
         return text
 
+    timed = [m for m in b.meetings if not m.item.all_day]
+    all_day = [m for m in b.meetings if m.item.all_day]
+
+    def day_word(m: ScoredItem) -> str:
+        d = (datetime.fromtimestamp(m.item.start_at or b.as_of).date() - datetime.fromtimestamp(b.as_of).date()).days
+        return "tomorrow" if d == 1 else "today"
+
+    def all_day_sentence() -> str:
+        """"All day today: Diwali." — all-day events are never meetings and never get a time."""
+        if not all_day:
+            return ""
+        parts = []
+        for day in ("today", "tomorrow"):
+            titles = [("a flagged event" if m.suspicious else (_speak(m.item.title, 40) or "an event"))
+                      for m in all_day if day_word(m) == day]
+            if titles:
+                shown = titles[:3]
+                joined = shown[0] if len(shown) == 1 else ", ".join(shown[:-1]) + " and " + shown[-1]
+                extra = f", plus {len(titles) - 3} more" if len(titles) > 3 else ""
+                parts.append(f"All day {day}: {joined}{extra}.")
+        return " ".join(parts)
+
     def build(n_named: int, second_meeting: bool, other: bool, stale_note: bool, n_slack_names: int = 2) -> str:
+        # 1. greeting  2. next timed event  3. all-day items  4. priority messages  5. other unread  6. the question
         out = [f"Good {_tod(b.as_of, cfg.timezone)}, {who}."]
-        if b.meetings:
-            m1 = b.meetings[0]
+        if timed:
+            m1 = timed[0]
             t1 = meeting_title(m1, 50)
+            start1 = m1.item.start_at or b.as_of
             when = _when_label(m1, b.as_of)
             if "in progress" in when:
                 out.append(f"You're currently in {t1}.")
-            elif when.startswith("tomorrow") or when.startswith("all day"):
-                out.append(f"Nothing more today; {when.replace('all day ', '')} you have {t1}.")
+            elif when.startswith("tomorrow"):
+                out.append(f"No more meetings today. Tomorrow, {t1} at {_fmt_clock(start1)}.")
             else:
-                out.append(f"Your next meeting is {t1} at {_fmt_clock(m1.item.start_at or b.as_of)}"
-                           + (f", in {_fmt_delta((m1.item.start_at or b.as_of) - b.as_of)}." if "(in " in when else "."))
-            if second_meeting and len(b.meetings) > 1:
-                m2 = b.meetings[1]
-                out.append(f"Then {meeting_title(m2, 45)} at "
-                           f"{_fmt_clock(m2.item.start_at or b.as_of)}.")
+                out.append(f"Your next meeting is {t1} at {_fmt_clock(start1)}"
+                           + (f", in {_fmt_delta(start1 - b.as_of)}." if "(in " in when else "."))
+            if second_meeting and len(timed) > 1:
+                m2 = timed[1]
+                out.append(f"Then {meeting_title(m2, 45)} at {_fmt_clock(m2.item.start_at or b.as_of)}.")
         else:
-            out.append("Your calendar is clear for now.")
+            out.append("No meetings today.")
+        sentence = all_day_sentence()
+        if sentence:
+            out.append(sentence)
         if b.priority:
             k = len(b.priority)
             named = [mail_phrase(s) for s in b.priority[: max(n_named, 1)]]
@@ -457,10 +486,10 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
             out.append(f"{b.other_count} other unread{mostly}.")
         if stale_note and stale:
             out.append("Note that your " + " and ".join(s.name for s in stale) + " data may be out of date.")
-        # the question
-        if b.meetings and "in progress" not in _when_label(b.meetings[0], b.as_of) \
-                and (b.meetings[0].item.start_at or 0) - b.as_of <= 3 * 3600:
-            m0 = b.meetings[0]
+        # the question: a timed meeting only if one exists (and has not started), else a priority message, else the unread items
+        upcoming = [m for m in timed if "in progress" not in _when_label(m, b.as_of)]
+        if upcoming:
+            m0 = upcoming[0]
             out.append("Want to start with your next meeting?" if m0.suspicious
                        else f"Want to start with your {_speak(m0.item.title, 40) or 'next'} meeting?")
         elif b.priority:
@@ -470,6 +499,8 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
             else:
                 name = _speak(display_name(first.item.sender, 28), 28) or "that sender"
                 out.append(f"Want to start with the email from {name}?")
+        elif b.other_count:
+            out.append("Want me to read through your unread items?")
         else:
             out.append("Anything you'd like me to look into?")
         return " ".join(out)
