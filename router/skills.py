@@ -363,14 +363,26 @@ def _app_validator(closing: bool = False):
 APP = r"(?P<app>[a-z0-9][a-z0-9 .+\-]{0,30}?)"
 
 
+def _front_note(result: object, name: str, said: str) -> str:
+    """What the router may say after open/focus: only what the tool's own check found (utils/grounding.py)."""
+    from utils.grounding import parse
+
+    g = parse(str(result))
+    if g.frontmost == "no":
+        return f"I opened {name}, but it isn't in front — another window may be covering it."
+    if g.frontmost == "unknown":
+        return f"I asked macOS to open {name}; I couldn't confirm it is in front."
+    return said
+
+
 async def _open_app(match: Match, rt: SkillRuntime) -> SkillResult:
-    await rt.call("open_app", {"app_name": match.args["app_name"]})
-    return SkillResult(f"Opening {match.args['app_name']}.")
+    name = match.args["app_name"]
+    return SkillResult(_front_note(await rt.call("open_app", {"app_name": name}), name, f"Opening {name}."))
 
 
 async def _focus_app(match: Match, rt: SkillRuntime) -> SkillResult:
-    await rt.call("focus_app", {"app_name": match.args["app_name"]})
-    return SkillResult(f"Switching to {match.args['app_name']}.")
+    name = match.args["app_name"]
+    return SkillResult(_front_note(await rt.call("focus_app", {"app_name": name}), name, f"Switching to {name}."))
 
 
 async def _close_app(match: Match, rt: SkillRuntime) -> SkillResult:

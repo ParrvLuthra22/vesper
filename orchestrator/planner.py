@@ -224,6 +224,8 @@ class Planner:
         #: Action-claim verifier: one corrective retry per turn, then an honest
         #: replacement (orchestrator/claim_verifier.py).
         claim_retried = False
+        #: (tool, result text) of every successful call this turn — the claim verifier checks specifics against them.
+        ok_results: List[tuple] = []
 
         for iteration in range(self._max_iterations):
             iteration_trace = turn_trace.start_iteration(iteration, list(messages), purpose)
@@ -245,7 +247,22 @@ class Planner:
                 claim = claim_verifier.find_unbacked_claim(
                     response.text, user_text,
                     [t.rsplit(":", 1)[0] for t in trace if t.endswith(":ok")],
+                    results=ok_results,
                 )
+                if claim is not None and claim.kind == "specific":
+                    # A detail no tool result supports (a conversation window, "ready to type"): no retry — the model would only
+                    # rephrase it. Say what the results DO support.
+                    honest = claim_verifier.honest_reply(claim, ok_results)
+                    logger.warning(f"[Planner] ungrounded claim ({claim.category}); replaced with a sentence built from the tool results")
+                    trace.append(f"claim_check:specific:{claim.category}")
+                    self._notify(on_status, claim_verifier.CORRECTION_NOTICE)
+                    if on_token is not None:
+                        try:
+                            on_token(honest)
+                        except Exception:
+                            pass
+                    await self._emit_plan_trace(user_text, trace)
+                    return self._finish_turn(turn_trace, turn_start, PlannerResult(text=honest, tool_trace=trace), taint_sources)
                 if claim is not None and not claim_retried:
                     # Don't surface the claim. Re-ask once, with the FULL tool
                     # catalog (the per-turn filter may be why the tool was
@@ -302,6 +319,8 @@ class Planner:
                 result_text = await self._execute_tool_call(
                     tool_call, trace, iteration_trace, user_text=supplied_text, taint_sources=taint_sources
                 )
+                if trace and trace[-1] == f"{tool_call.name}:ok":
+                    ok_results.append((tool_call.name, result_text))
                 messages.append(self._tool_result_message(tool_call, result_text))
 
         await self._emit_plan_trace(user_text, trace)

@@ -32,6 +32,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from agents.base_agent import AgentCapability, BaseAgent
 from utils import safe_exec
 from utils.safe_exec import UnsafeInputError
+from utils.grounding import grounded
 from bus.event_bus import EventBus
 from schemas.events import (
     ActionRequestEvent,
@@ -252,6 +253,31 @@ class AppleScriptExecutor:
         
         return False, f"Failed to open {app_name}: {stderr}"
     
+    _FRONTMOST_SCRIPT = ('on run argv\ntell application "System Events" to get name of first application process '
+                         'whose frontmost is true\nend run')
+
+    def frontmost_application(self, timeout: float = 5.0) -> Optional[str]:
+        """Name of the frontmost app per System Events, or None if it cannot be read (no Automation permission...)."""
+        success, stdout, _stderr = self.run_script_with_args(self._FRONTMOST_SCRIPT, timeout=timeout)
+        return stdout.strip() if success and stdout.strip() else None
+
+    def verify_frontmost(self, app_name: str, attempts: int = 4, delay: float = 0.35,
+                         sleep: Callable[[float], None] = time.sleep) -> str:
+        """"yes" / "no" / "unknown": did `app_name` really become the frontmost app? Polled briefly because activation is
+        asynchronous. This is what the model may say about the screen — an exit status of 0 only means the command ran."""
+        wanted = re.sub(r"\.app$", "", (app_name or "").strip(), flags=re.I).lower()
+        seen: Optional[str] = None
+        for i in range(attempts):
+            seen = self.frontmost_application()
+            if seen is None:
+                return "unknown"
+            current = seen.lower()
+            if current == wanted or wanted in current or current in wanted:
+                return "yes"
+            if i < attempts - 1:
+                sleep(delay)
+        return "no"
+
     def close_application(self, app_name: str, force: bool = False) -> Tuple[bool, str]:
         """
         Close an application by name.
@@ -1217,7 +1243,9 @@ class SystemAgent(BaseAgent):
                 app_bundle_id="",
                 success=True,
             )))
-            return f"Opening {app_name}"
+            front = self.executor.verify_frontmost(app_name)
+            return grounded(f"Opening {app_name}", can=["app_opened"] + (["app_frontmost"] if front == "yes" else []),
+                            cannot=["conversation", "window", "page"], frontmost=front)
         else:
             return f"I couldn't open {app_name}. {message}"
     
@@ -1250,7 +1278,9 @@ class SystemAgent(BaseAgent):
         success, message = self.executor.focus_application(app_name)
         
         if success:
-            return f"Focused {app_name}"
+            front = self.executor.verify_frontmost(app_name)
+            return grounded(f"Focused {app_name}", can=["app_opened"] + (["app_frontmost"] if front == "yes" else []),
+                            cannot=["conversation", "window", "page"], frontmost=front)
         else:
             return message
     

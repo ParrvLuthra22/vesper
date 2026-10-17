@@ -50,7 +50,9 @@ class Claim:
     category: str
     sentence: str
     satisfied_by: FrozenSet[str]
-    kind: str  # "explicit" | "ack"
+    kind: str  # "explicit" | "ack" | "specific"
+    #: for "specific": the `cannot_claim` tokens the honest sentence should name (utils/grounding.py)
+    cannot: Tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------- sentences
@@ -172,6 +174,52 @@ _INTENTS: Tuple[Tuple[str, "re.Pattern[str]", Tuple[str, ...]], ...] = (
 )
 
 
+# ---------------------------------------------------------------- specifics
+#
+# "I opened Messages" can be true while "a conversation window for Priya is open, ready for you to type" is made up. A SPECIFIC claim
+# is a sentence about a detail only a particular tool result can support. It is backed when some tool result of the turn lists the
+# required token in its `can_claim:` line (utils/grounding.py) — not merely because some tool succeeded.
+
+# (category, regexes, required token, cannot-token for the honest sentence)
+_SPECIFIC: Tuple[Tuple[str, Tuple["re.Pattern[str]", ...], str, Tuple[str, ...]], ...] = (
+    ("conversation", _rx(
+        r"\b(?:conversation|chat|thread)\b[^.?!]{0,40}\b(?:is\s+|now\s+|has\s+been\s+)?(?:open|opened|ready|up|started|waiting)\b",
+        r"\b(?:open|opened|opening|started|pulled\s+up)\b[^.?!]{0,30}\b(?:conversation|chat)\b",
+        r"\bconversation\s+window\b",
+        r"\bwindow\s+(?:for|with)\b",
+    ), "conversation_opened", ("conversation",)),
+    ("ready to type", _rx(
+        r"\bready\s+(?:for\s+you\s+)?to\s+(?:type|write|send)\b",
+        r"\bready\s+for\s+you\b",
+        r"\bwaiting\s+for\s+you\s+to\s+(?:type|write|send)\b",
+    ), "compose_ready", ("compose_ready", "conversation")),
+    ("text placed in a message", _rx(
+        r"\b(?:typed|pre-?filled|filled\s+in|put|placed)\b[^.?!]{0,40}\b(?:message|text)\s+(?:box|field|window)\b",
+        r"\b(?:drafted|prepared)\b[^.?!]{0,30}\b(?:in|inside)\s+(?:messages|imessage)\b",
+    ), "body_prefilled", ("draft",)),
+    ("in front", _rx(
+        r"\b(?:in\s+front|frontmost|front\s+and\s+cent(?:er|re)|brought\s+to\s+the\s+front|on\s+(?:your\s+)?screen\s+now)\b",
+    ), "app_frontmost", ()),
+)
+
+
+def _parse_results(results):
+    from utils.grounding import parse
+
+    return [parse(text) for _tool, text in (results or [])]
+
+
+def honest_reply(claim: "Claim", results) -> str:
+    """One honest sentence built ONLY from the grounded tool results of the turn."""
+    from utils.grounding import say
+
+    grounded = [g for g in _parse_results(results) if g.present]
+    if not grounded:
+        return HONEST_REPLY
+    g = next((x for x in reversed(grounded) if "app_opened" in x.can), grounded[-1])
+    return say(g, claim.cannot)
+
+
 # ---------------------------------------------------------------- matching
 
 def tool_matches(succeeded: Iterable[str], names: Iterable[str]) -> bool:
@@ -182,13 +230,23 @@ def tool_matches(succeeded: Iterable[str], names: Iterable[str]) -> bool:
 
 
 def find_unbacked_claim(
-    reply: str, user_text: str, succeeded_tools: Iterable[str]
+    reply: str, user_text: str, succeeded_tools: Iterable[str], results=None
 ) -> Optional[Claim]:
-    """Return the first claim in `reply` that no succeeded tool backs, else None."""
+    """Return the first claim in `reply` that no succeeded tool backs, else None.
+
+    `results` = [(tool, result_text)] of the turn's successful calls; when given, SPECIFIC claims (a conversation, a window for a
+    person, "ready to type", text placed in a box, "in front") must also be listed in some result's `can_claim:` line."""
     succeeded = list(succeeded_tools)
     sentences = [s for s in _split(reply) if not _NOT_A_CLAIM.search(s)]
     if not sentences:
         return None
+
+    if results is not None:
+        can = set().union(*[g.can for g in _parse_results(results)]) if results else set()
+        for sentence in sentences:
+            for category, patterns, token, cannot in _SPECIFIC:
+                if any(p.search(sentence) for p in patterns) and token not in can:
+                    return Claim(category, sentence, frozenset(), "specific", cannot)
 
     for sentence in sentences:
         for category, patterns, tools in _EXPLICIT:
