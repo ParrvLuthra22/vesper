@@ -436,6 +436,36 @@ def check_web_search(env: Optional[Dict[str, str]] = None, importer: Optional[Ca
     return out
 
 
+def contacts_authorization() -> Optional[int]:
+    """Contacts authorization WITHOUT asking (no prompt): 0 not determined, 1 restricted, 2 denied, 3 authorized."""
+    try:
+        import Contacts
+
+        return int(Contacts.CNContactStore.authorizationStatusForEntityType_(Contacts.CNEntityTypeContacts))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def check_contacts_access(env: Optional[Dict[str, str]] = None, status: Optional[Callable[[], Optional[int]]] = None) -> List[Check]:
+    """contacts_lookup / messages_compose read Contacts through the Contacts framework inside the gateway process, which `vesper up`
+    starts: macOS attributes the request to the TERMINAL APP that ran it."""
+    env = dict(os.environ) if env is None else env
+    st = (status or contacts_authorization)()
+    app = terminal_app(env)
+    where = f"System Settings > Privacy & Security > Contacts > turn on {app}"
+    if st == 3:
+        return [Check(PASS, "Contacts access", f"granted ({app}); \"message <name>\" can resolve people")]
+    if st is None:
+        return [Check(WARN, "Contacts access", "could not be determined (Contacts framework unavailable)",
+                      "pip install pyobjc-framework-Contacts; then re-run `vesper doctor`")]
+    if st == 0:
+        return [Check(WARN, "Contacts access", f"not asked yet for {app}: the first \"message <name>\" will show a prompt",
+                      f"allow it when asked, or enable it in {where}")]
+    names = {1: "restricted by a profile", 2: "denied"}
+    return [Check(FAIL, "Contacts access", f"{names.get(st, f'status {st}')} for {app}: \"message <name>\" cannot resolve anyone",
+                  f"{where}; then restart `vesper up`. (The permission belongs to {app}, the app that launches Vesper.)")]
+
+
 def check_wake_model(cfg: Dict[str, Any], root: Path = PROJECT_ROOT) -> List[Check]:
     path = str(_get(cfg, "voice.wake.model_path", "") or "").strip()
     if not path:
@@ -465,7 +495,8 @@ def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, pro
             *(check_input_device(voice_input_device[0]) if voice_input_device else []), *check_telegram(cfg, env), *check_models(cfg, root),
             *check_ports(cfg, supervisor_pid), *check_briefing(db, briefing_interval),
             *(check_messages(*messages) if messages else []), *check_wake_model(cfg, root), *check_web_search(env), *check_hud_build(cfg, root),
-            *(check_calendar_access(env, calendar) if (check_calendar or calendar) else []), *check_audit(audit)]
+            *(check_calendar_access(env, calendar) if (check_calendar or calendar) else []),
+            *(check_contacts_access(env) if check_calendar else []), *check_audit(audit)]
 
 
 def render(checks: List[Check], color: bool = False) -> str:

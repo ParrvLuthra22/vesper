@@ -74,6 +74,9 @@ class ToolSpec:
     #: Argument names that hold recipient addresses. If any value is not something the user said this turn (it came
     #: from an email, a thread, a chat message), the call is treated as tainted: the Guardian raises its tier one rung.
     recipient_args: Tuple[str, ...] = ()
+    #: Arguments and results name people (contacts_lookup, messages_compose): they go to the model and the user, but are WITHHELD from
+    #: logs, the audit log, the live tool events and the tracer — only a count is recorded.
+    private: bool = False
 
     def __post_init__(self) -> None:
         if self.tier not in VALID_TIERS:

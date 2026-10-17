@@ -412,14 +412,16 @@ class Planner:
         taint_sources: Optional[List[str]] = None,
     ) -> str:
         tool_spec = self._registry.get(tool_call.name)
-        tool_trace = iteration_trace.start_tool(tool_call.name, tool_call.arguments)
+        private = bool(tool_spec is not None and getattr(tool_spec, "private", False))
+        shown_args = {"withheld": len(tool_call.arguments)} if private else tool_call.arguments
+        tool_trace = iteration_trace.start_tool(tool_call.name, shown_args)
         start = time.monotonic()
 
         # Live signal for a terminal/HUD to render immediately — fires
         # before the Guardian check so a confirm-tier call shows up right
         # away rather than only after the user approves it.
         await self._event_bus.emit(
-            ToolCallStartedEvent(tool_name=tool_call.name, arguments=tool_call.arguments, source="Planner")
+            ToolCallStartedEvent(tool_name=tool_call.name, arguments=shown_args, source="Planner")
         )
 
         if tool_spec is None or not tool_spec.enabled:
@@ -563,6 +565,10 @@ class Planner:
         """End the tracer's tool_execution run and emit the matching live
         ToolCallFinishedEvent — the same data, one for later inspection
         (/trace), one for live display (CLI/HUD)."""
+        spec = self._registry.get(tool_name)
+        if spec is not None and getattr(spec, "private", False):        # people's names: counts only in logs/events/traces
+            result = f"<result withheld: {len(result)} chars>"
+            error = "<withheld>" if error else None
         tool_trace.end(
             guardian_verdict=guardian_verdict, result=result,
             latency_ms=latency_ms, success=success, error=error,

@@ -81,6 +81,7 @@ GROUP_TRIGGERS: Dict[str, Tuple[str, ...]] = {
         "storage", "uptime", "specs",
     ),
     "notify": ("notify", "notification", "alert", "remind", "reminder"),
+    "messaging": ("message", "text", "imessage", "sms", "contact", "contacts", "compose", "whatsapp", "ping"),
     "weather": (
         "weather", "temperature", "forecast", "rain", "raining", "umbrella",
         "sunny", "cold", "hot", "warm", "outside", "degrees",

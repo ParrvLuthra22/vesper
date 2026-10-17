@@ -78,7 +78,7 @@ def test_open_app_handler_reports_frontmost_in_the_result(front, expect_can, exp
     agent = SystemAgent.__new__(SystemAgent)
     agent._logger = type("L", (), {"info": lambda *a, **k: None})()
     agent._event_bus = type("B", (), {"emit": AsyncMock()})()
-    agent.name = "SystemAgent"
+    agent._name = "SystemAgent"
     agent.executor = type("E", (), {"open_application": lambda self, n: (True, "ok"),
                                     "verify_frontmost": lambda self, n: front})()
 

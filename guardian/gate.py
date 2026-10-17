@@ -248,6 +248,7 @@ class Guardian:
         """
         tainted = bool((context or {}).get("tainted_input"))
         tier = bump_tier(tool_spec.tier) if tainted else tool_spec.tier
+        shown_args = {"withheld": len(arguments)} if getattr(tool_spec, "private", False) else arguments   # audit/events: counts only
 
         if tier == "safe":
             return Verdict(VerdictType.ALLOW, reason="safe tier - no confirmation required")
@@ -261,7 +262,7 @@ class Guardian:
                 VerdictType.DENY,
                 reason=f"dangerous-tier tools are disabled for {policy.name} sessions",
             )
-            self._audit(tool_spec.name, arguments, verdict, who_approved=None, tainted=tainted)
+            self._audit(tool_spec.name, shown_args, verdict, who_approved=None, tainted=tainted)
             logger.warning(
                 f"[Guardian] denied dangerous tool '{tool_spec.name}' — "
                 f"disabled for {policy.name} session"
@@ -289,7 +290,7 @@ class Guardian:
         self._pending[request_id] = _PendingConfirmation(
             request_id=request_id,
             tool_name=tool_spec.name,
-            arguments=arguments,
+            arguments=shown_args,
             summary=summary,
             future=future,
             expiry_task=expiry_task,
@@ -303,7 +304,7 @@ class Guardian:
             ConfirmationRequestedEvent(
                 summary=summary,
                 tool_name=tool_spec.name,
-                arguments=arguments,
+                arguments=shown_args,
                 request_id=request_id,
                 source="Guardian",
                 channel=audit_channel_name(),
@@ -345,6 +346,8 @@ class Guardian:
         # repo + branch + the message it generated from the diff).
         if tool_spec.confirm_summary is not None:
             return await tool_spec.confirm_summary(arguments)
+        if getattr(tool_spec, "private", False):             # names / handles never go on a card or into a log
+            return f"{tool_spec.name}({len(arguments)} argument(s) withheld)"
         rendered_args = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
         return f"{tool_spec.name}({rendered_args})"
 

@@ -13,6 +13,7 @@ import tools.devtools  # noqa: F401  (side effect: registers developer tools)
 import tools.creator  # noqa: F401  (side effect: registers creator tools)
 import tools.weather  # noqa: F401  (side effect: registers the weather tool)
 import tools.web_search  # noqa: F401  (side effect: registers web_search)
+import tools.contacts_tools  # noqa: F401  (side effect: registers contacts_lookup, messages_compose)
 
 __all__ = [
     "ToolSpec",
