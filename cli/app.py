@@ -434,6 +434,22 @@ async def _run_remote(host: str, port: int, token: str) -> int:
     return 0
 
 
+USAGE = """usage: vesper [command] [options]
+
+  (no command)            text REPL: starts the assistant in this terminal (boots the Brain)
+  --remote [--host H --port P --token T]
+                          the same REPL, driven through a running gateway
+  up | down | status      start / stop / inspect the supervised stack (gateway, voice, HUD)
+  logs <component>        recent logs (--tail N, --redact-transcripts)
+  doctor [--probe-mic]    read-only environment check
+  briefing [--explain]    inspect the briefing engine (read-only)
+  route "<utterance>"     which deterministic skill would answer it (runs nothing)
+  dnd on|off|status       proactive do-not-disturb
+  mic-test [--selftest]   what the microphone hears / wake-word pipeline self-test
+  help, -h, --help        this text (touches nothing)
+"""
+
+
 def run() -> None:
     """Entry point for `python -m vesper` / the `vesper` console script.
 
@@ -442,6 +458,11 @@ def run() -> None:
     gateway's WebSocket instead — proving the client contract — while
     in-process mode stays the default and is unchanged.
     """
+    # `vesper --help` / `-h` / `help`: usage and exit 0 BEFORE anything is built — no Brain, no MCP servers, no memory, no data file.
+    if len(sys.argv) > 1 and sys.argv[1] in ("-h", "--help", "help"):
+        print(USAGE)
+        sys.exit(0)
+
     # `vesper up|down|status|logs|doctor` — the supervised full stack (launcher/).
     if len(sys.argv) > 1 and sys.argv[1] in ("up", "down", "status", "logs", "doctor"):
         from launcher.cli import main as launcher_main
