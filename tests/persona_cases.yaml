@@ -18,6 +18,25 @@
 #   configured.
 
 cases:
+  - name: prompt_says_what_to_do_without_a_tool
+    mode: prompt
+    required_patterns:
+      - "Tasks you have no tool for"
+      - "closest real action"
+
+  - name: prompt_limits_claims_to_tool_results
+    mode: prompt
+    required_patterns:
+      - "can_claim:"
+      - "cannot_claim:"
+      - "frontmost: no"
+
+  - name: prompt_never_sends_messages
+    mode: prompt
+    required_patterns:
+      - "You never send messages"
+      - "presses send"
+
   # ===========================================================================
   # mode: prompt — structural checks on the constructed system prompt
   # ===========================================================================

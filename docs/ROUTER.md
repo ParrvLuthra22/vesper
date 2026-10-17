@@ -103,3 +103,19 @@ name a category — calendar, mail, messages, drafts, files, web — get only th
 (`tools/selection.py`, `select_by_category`): typically 5-10 tools, 400-900 tokens. `confirm`, `dangerous` and outbound tools are
 never added by a category (only by naming them, as before). Unclear requests fall back to the group logic and then to the full set.
 `restrict_tools` (router hand-off, e.g. web_search) offers exactly one tool.
+
+## Honest actions (2026-10-17 live test)
+
+* **Grounded results.** `open_app`/`focus_app` check with System Events that the app really is frontmost and return `frontmost: yes|no|unknown`
+  plus `can_claim:` / `cannot_claim:` lines (`utils/grounding.py`). The claim verifier flags reply sentences about specifics no result
+  supports — a conversation window for a person, "ready for you to type", text placed in a message box, "in front" — and replaces them
+  with a sentence built from the results ("I opened Messages, but I can't open a specific conversation.").
+* **Messaging people, read-only to send.** `contacts_lookup` (fuzzy; asks which one when several match; the model never sees a number)
+  → `messages_compose` (confirm tier; `open imessage://…`, optional pre-filled text). There is no send path — a source-scan test proves
+  it; the user presses send. Both tools are `private`: logs, audit, live events and the confirmation card carry counts, never names.
+  `vesper doctor` reports the Contacts permission and names the terminal app that needs it.
+* **STT name vocabulary** (`voice.stt.*`): first names of people you write to (+ Contacts if already allowed), capped at 60, passed to
+  faster-whisper as `initial_prompt`; never logged. `vesper stt-test "<phrase>" --names A,B` compares with/without (Kokoro, no mic;
+  only the names you type).
+* **LLM failures** say the class (rate limit, timeout, network, auth, server); Retry-After is honoured once up to 20 s
+  (`llm.rate_limit.retry_after_max_seconds`); a reply that was half-streamed when the call failed is discarded (`STREAM_RESET`).
