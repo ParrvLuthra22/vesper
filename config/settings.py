@@ -818,6 +818,10 @@ class LauncherSettings(BaseModel):
     hud_ready_timeout_seconds: float = 20.0
     #: Path to the built HUD binary; empty = hud/src-tauri/target/release/hud.
     hud_binary: str = ""
+    #: `vesper up` rebuilds the HUD binary when it is older than hud/src (the binary embeds the frontend at compile time). False =
+    #: refuse to start a stale HUD and print the build command instead.
+    hud_autobuild: bool = True
+    hud_build_timeout_seconds: float = 900.0
     #: Set HF_HUB_OFFLINE=1 for the voice/gateway processes: the models are
     #: already on disk, so nothing should contact the Hugging Face Hub at load.
     #: Set false for the very first run if a model still has to be downloaded.

@@ -11,6 +11,12 @@ const panel = document.getElementById("panel")!;
 const star = document.getElementById("star")!;
 const clockEl = document.getElementById("clock")!;
 const streamEl = document.getElementById("stream")!;
+const buildIdEl = document.getElementById("buildid");
+if (buildIdEl) {
+  const id = typeof __BUILD_ID__ === "string" ? __BUILD_ID__ : "dev";
+  buildIdEl.textContent = id;
+  buildIdEl.title = `Vesper HUD build ${id}`;
+}
 const composer = document.getElementById("composer") as HTMLFormElement;
 const input = document.getElementById("input") as HTMLInputElement;
 

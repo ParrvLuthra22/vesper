@@ -120,3 +120,14 @@ The persona greeting plays at most once per `greet_after_idle_min` (60) minutes 
 `voice.vad.silence_ms` (1200) of silence, capped at `max_utterance_s` (30); a short blip (the wake word's tail, the chime) is
 ignored. Wake: `voice.wake.threshold` 0.35 with 2-of-3 patience; custom model and false-accept test: `docs/WAKEWORD.md`.
 `vesper doctor` also checks the Calendar permission (it belongs to the terminal app that runs `vesper up`) and the wake model file.
+
+## The HUD build (why a fixed HUD can still look broken)
+
+`vesper up` runs `hud/src-tauri/target/release/hud`, a Tauri binary with the frontend **compiled in**. Editing `hud/src` — or even
+`npm run build`, which only refreshes `hud/dist` — changes nothing on screen until that binary is rebuilt. `vesper up` now compares the
+newest file under `hud/src` (plus `index.html`, the Tauri shell and config) with the binary: if it is older or missing it rebuilds it
+(`npm run tauri build -- --no-bundle`, `launcher.hud_build_timeout_seconds`, default 900 s; `launcher.hud_autobuild: false` to only
+warn). If the rebuild fails or times out the HUD is **not started** and the exact command is printed. `vesper doctor` shows the
+same check with the build's commit and time. The launcher only ever runs the build inside this repo's `hud/`; `launcher.hud_binary`
+outside it is ignored with a warning, and older HUD copies (debug build, a bundled or installed .app) are named in a WARN. The HUD
+footer shows its build id (git short hash, `+` if uncommitted changes, build time) so a screenshot proves which version it is.

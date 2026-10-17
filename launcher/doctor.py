@@ -384,6 +384,39 @@ def check_calendar_access(env: Optional[Dict[str, str]] = None, status: Optional
                   f"{where}; then restart `vesper up`. (The permission belongs to {app}, the app that launches Vesper.)")]
 
 
+def check_hud_build(cfg: Dict[str, Any], root: Path = PROJECT_ROOT, home: Optional[Path] = None) -> List[Check]:
+    """The HUD binary embeds the frontend at compile time. Is it newer than hud/src? (`vesper up` rebuilds it if not.)"""
+    from launcher import hudbuild
+    from launcher.stack import hud_override_ignored, resolve_hud_binary
+
+    if not bool(_get(cfg, "launcher.components.hud", True)):
+        return [Check(PASS, "HUD build", "HUD disabled in config (launcher.components.hud)")]
+    binary, hud_dir = resolve_hud_binary(cfg, root), root / "hud"
+    st = hudbuild.check(binary, hud_dir)
+    stamp = lambda ts: time.strftime("%Y-%m-%d %H:%M", time.localtime(ts)) if ts else "?"   # noqa: E731
+    out: List[Check] = []
+    if st.state == hudbuild.FRESH:
+        info = st.build_info
+        detail = f"{binary.name} built {stamp(st.binary_mtime)}" + (f", commit {info.get('commit', '?')}" if info else
+                                                                      " (no build record: built outside `vesper up`)")
+        out.append(Check(PASS, "HUD build", detail + f"; newer than hud/{st.newest_source}"))
+    elif st.state == hudbuild.MISSING:
+        out.append(Check(FAIL, "HUD build", f"{binary.name} does not exist; the HUD will not start",
+                         "cd hud && npm install && npm run tauri build -- --no-bundle   (or let `vesper up` do it: launcher.hud_autobuild)"))
+    else:
+        out.append(Check(WARN, "HUD build", f"{binary.name} was built {stamp(st.binary_mtime)} but hud/{st.newest_source} changed "
+                         f"{stamp(st.newest_source_mtime)}: the running HUD would show an OLD version"
+                         + (f" (commit {st.build_info['commit']})" if st.build_info.get("commit") else ""),
+                         "`vesper up` rebuilds it automatically; by hand: cd hud && npm run tauri build -- --no-bundle"))
+    ignored = hud_override_ignored(cfg, root)
+    if ignored:
+        out.append(Check(WARN, "HUD build: config", ignored, "clear launcher.hud_binary in config/settings.yaml"))
+    for path, mtime in hudbuild.stale_copies(hudbuild.other_copies(binary, hud_dir, home), hud_dir):
+        out.append(Check(WARN, "HUD build: other copy", f"{path.name} (built {stamp(mtime)}) is older than the sources; the launcher "
+                         "never uses it, but opening it by hand would show an old HUD", f"delete it, or rebuild: {hudbuild.BUILD_COMMAND_TEXT}"))
+    return out
+
+
 def check_web_search(env: Optional[Dict[str, str]] = None, importer: Optional[Callable[[str], object]] = None) -> List[Check]:
     """web_search prefers the `ddgs` package; without it it falls back to DuckDuckGo's plain-HTML page, which breaks whenever the
     page changes. FAIL (with the command) so it is fixed before it is needed. Tavily is optional and only noted."""
@@ -431,7 +464,7 @@ def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, pro
     return [*check_microphone(probe_mic, device=pinned),
             *(check_input_device(voice_input_device[0]) if voice_input_device else []), *check_telegram(cfg, env), *check_models(cfg, root),
             *check_ports(cfg, supervisor_pid), *check_briefing(db, briefing_interval),
-            *(check_messages(*messages) if messages else []), *check_wake_model(cfg, root), *check_web_search(env),
+            *(check_messages(*messages) if messages else []), *check_wake_model(cfg, root), *check_web_search(env), *check_hud_build(cfg, root),
             *(check_calendar_access(env, calendar) if (check_calendar or calendar) else []), *check_audit(audit)]
 
 

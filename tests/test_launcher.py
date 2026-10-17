@@ -453,7 +453,8 @@ def _cfg(**over: Any) -> Dict[str, Any]:
 
 
 def test_build_specs_order_env_and_requirements(tmp_path):
-    hud = tmp_path / "hud"
+    hud = tmp_path / "hud" / "bin" / "hud"                 # the launcher only runs a HUD that lives inside the repo's hud/
+    hud.parent.mkdir(parents=True)
     hud.write_text("#!/bin/sh\n")
     cfg = _cfg(launcher={"hud_binary": str(hud), "components": {"voice_output": True, "voice_input": True, "hud": True}})
     specs = stack.build_specs(cfg, "tok123", python="/py", root=tmp_path)

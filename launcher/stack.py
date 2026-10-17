@@ -117,12 +117,59 @@ def hud_attached_probe(cfg: Dict[str, Any], token: str) -> Probe:
 
 
 def resolve_hud_binary(cfg: Dict[str, Any], root: Path = PROJECT_ROOT) -> Path:
+    """The HUD the launcher runs: ALWAYS a build inside this repo's hud/ directory. `launcher.hud_binary` may point somewhere else
+    inside hud/ (e.g. the debug build), but never at an installed copy or any other path — an old copy elsewhere is exactly how
+    a stale HUD ends up on screen. See hud_override_ignored()."""
+    default = root / DEFAULT_HUD_BINARY
     configured = str(_get(cfg, "launcher.hud_binary", "") or "")
-    path = Path(configured) if configured else DEFAULT_HUD_BINARY
-    return path if path.is_absolute() else root / path
+    if not configured:
+        return default
+    path = Path(configured)
+    path = path if path.is_absolute() else root / path
+    try:
+        path.resolve().relative_to((root / "hud").resolve())
+    except ValueError:
+        return default
+    return path
 
 
-def build_specs(cfg: Dict[str, Any], token: str, python: str = sys.executable, root: Path = PROJECT_ROOT) -> List[ComponentSpec]:
+def hud_override_ignored(cfg: Dict[str, Any], root: Path = PROJECT_ROOT) -> Optional[str]:
+    configured = str(_get(cfg, "launcher.hud_binary", "") or "")
+    if configured and resolve_hud_binary(cfg, root) == root / DEFAULT_HUD_BINARY and \
+            (Path(configured) if Path(configured).is_absolute() else root / configured) != root / DEFAULT_HUD_BINARY:
+        return f"launcher.hud_binary ({Path(configured).name}) is outside this repo's hud/ directory: ignored, using {DEFAULT_HUD_BINARY}"
+    return None
+
+
+def prepare_hud(cfg: Dict[str, Any], root: Path = PROJECT_ROOT, log: Callable[[str], None] = print,
+                runner: Any = None) -> Optional[str]:
+    """Before the HUD is spawned: make sure it is the code in the repo. Returns a skip reason (the HUD is not started, loudly) or
+    None. Also warns about other HUD copies that are older than the sources."""
+    from launcher import hudbuild
+
+    if not bool(_get(cfg, "launcher.components.hud", True)):
+        return None
+    ignored = hud_override_ignored(cfg, root)
+    if ignored:
+        log(f"[launcher] WARN: {ignored}")
+    binary, hud_dir = resolve_hud_binary(cfg, root), root / "hud"
+    outcome = hudbuild.ensure_fresh(
+        binary, hud_dir, root, autobuild=bool(_get(cfg, "launcher.hud_autobuild", True)),
+        timeout=float(_get(cfg, "launcher.hud_build_timeout_seconds", hudbuild.DEFAULT_BUILD_TIMEOUT)),
+        runner=runner or hudbuild.default_runner, log=log)
+    for path, mtime in hudbuild.stale_copies(hudbuild.other_copies(binary, hud_dir), hud_dir):
+        log(f"[launcher] WARN: another HUD copy exists ({path.name}, older than the sources); the launcher ignores it and runs "
+            f"{binary.name} from this repo. Delete or rebuild the old copy so it is not opened by mistake.")
+    if outcome.ok:
+        info = outcome.state.build_info
+        log(f"[launcher] HUD build: {outcome.message}" + (f" — built {info['built_at']}, commit {info['commit']}" if info else ""))
+        return None
+    log(f"[launcher] {outcome.message}")
+    return outcome.message
+
+
+def build_specs(cfg: Dict[str, Any], token: str, python: str = sys.executable, root: Path = PROJECT_ROOT,
+                hud_skip: Optional[str] = None) -> List[ComponentSpec]:
     host, port = gateway_address(cfg)
     env = {"VESPER_GATEWAY_TOKEN": token, "PYTHONUNBUFFERED": "1"}
     if bool(_get(cfg, "launcher.offline_models", True)):
@@ -166,8 +213,10 @@ def build_specs(cfg: Dict[str, Any], token: str, python: str = sys.executable, r
     hud_off = None
     if not comp_on("hud"):
         hud_off = "disabled in config (launcher.components.hud)"
+    elif hud_skip:
+        hud_off = hud_skip
     elif not hud_bin.exists():
-        hud_off = f"HUD is not built ({hud_bin}); build it: cd hud && npm install && npm run tauri build"
+        hud_off = f"HUD is not built ({hud_bin.name}); build it: cd hud && npm install && npm run tauri build -- --no-bundle"
     specs.append(ComponentSpec(
         name="hud",
         description="Tauri overlay",
@@ -249,6 +298,7 @@ async def run_up(
     strict: bool = False,
     log: Callable[[str], None] = lambda message: print(message, flush=True),
     install_signal_handlers: bool = True,
+    hud_runner: Any = None,
 ) -> int:
     """Start and supervise the stack until Ctrl+C / `vesper down` / a fatal failure."""
     cfg = cfg if cfg is not None else load_app_config()
@@ -269,7 +319,8 @@ async def run_up(
     token = os.environ.get("VESPER_GATEWAY_TOKEN") or str(_get(cfg, "gateway.token", "") or "") or secrets.token_hex(16)
     state.write_token(token)
 
-    specs = build_specs(cfg, token)
+    hud_skip = prepare_hud(cfg, PROJECT_ROOT, log, hud_runner)
+    specs = build_specs(cfg, token, hud_skip=hud_skip)
     supervisor = Supervisor(
         specs,
         policy_from_config(cfg),

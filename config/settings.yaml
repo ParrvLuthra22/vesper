@@ -1232,5 +1232,9 @@ launcher:
   voice_input_ready_timeout_seconds: 90.0
   telegram_ready_timeout_seconds: 20.0
   hud_ready_timeout_seconds: 20.0
-  hud_binary: ""                 # default: hud/src-tauri/target/release/hud
+  hud_binary: ""                 # default: hud/src-tauri/target/release/hud. Only a path INSIDE hud/ is honoured: the launcher
+                                 # always runs the repo build, never an installed copy (it warns when it finds one)
+  hud_autobuild: true            # the HUD binary embeds the frontend at compile time: if hud/src is newer than the binary,
+                                 # `vesper up` rebuilds it (npm run tauri build -- --no-bundle). false = refuse + print the command
+  hud_build_timeout_seconds: 900 # the first cargo build takes minutes; on timeout the HUD is NOT started (loud WARN)
   offline_models: true           # HF_HUB_OFFLINE=1 for children (models are on disk)

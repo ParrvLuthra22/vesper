@@ -519,3 +519,17 @@ body {
 .panel.local .composer-input::placeholder {
   color: var(--vsp-dim);
 }
+
+/* Build id: tiny, dim, never in the way. A screenshot of the HUD shows which build produced it. */
+.buildid {
+  flex: 0 0 auto;
+  padding: 0 var(--vsp-pad) 5px;
+  font-family: var(--vsp-mono);
+  font-size: 8.5px;
+  letter-spacing: 0.04em;
+  color: var(--vsp-dim);
+  opacity: 0.55;
+  text-align: right;
+  pointer-events: none;
+  user-select: none;
+}
