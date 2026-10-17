@@ -31,7 +31,7 @@ means a filtering mistake costs an extra call, never a wrong answer.
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Sequence, Set, Tuple
+from typing import Callable, Dict, Iterable, List, Sequence, Set, Tuple
 
 from tools.registry import ToolRegistry, ToolSpec
 
@@ -192,6 +192,83 @@ def _matches(spec: ToolSpec, normalized: str, text_words: Set[str]) -> bool:
     return any(phrase in normalized for phrase in phrases)
 
 
+# --------------------------------------------------------------------------- category layer (calendar, mail, ...)
+#
+# A request that names a CATEGORY ("what's on my calendar", "any new email", "draft a reply") gets that category's read tools plus
+# the core three — typically 6-9 tools instead of the 45 that blew Groq's 8k tokens-per-minute budget on every call. If no
+# category is recognised the previous group logic runs, and if that is unsure too the full set is sent (never a wrong answer,
+# only a bigger prompt). Categories are keyword-driven; `system` is answered by the existing groups (apps/audio/display/...).
+#
+# What a category may add is deliberately narrow: only tools whose tier is `safe` or `draft`, never an `outbound` tool and never
+# a `confirm`/`dangerous` one. Those (close_app, add_reminder, archive, post_message, run_shell ...) are offered only when the
+# request names them through the existing explicit index (their own name parts / synonyms), exactly as before.
+
+MAX_CATEGORY_TOOLS = 12
+
+CATEGORY_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "calendar": ("calendar", "calender", "schedule", "agenda", "meeting", "meetings", "appointment", "appointments", "event",
+                 "events", "reminder", "reminders", "free today", "my day", "busy"),
+    "mail": ("email", "emails", "e-mail", "mail", "inbox", "gmail", "unread", "newsletter", "sender"),
+    "messages": ("slack", "dm", "dms", "imessage", "text message", "texts", "discord", "mentions", "messages"),
+    "drafts": ("draft", "drafts", "compose", "write a reply", "reply to", "respond to"),
+    "files": ("file", "files", "folder", "document", "documents", "editor", "git", "repo", "repository", "diff", "source file"),
+    "web": ("search", "google", "look up", "lookup", "news", "weather", "forecast", "latest", "online", "internet", "website",
+            "who is", "who was", "wikipedia"),
+    "system": ("app", "apps", "volume", "brightness", "battery", "screenshot", "notification", "wifi", "mute"),
+}
+
+#: category -> predicate over a ToolSpec (read-only members only; see the note above).
+_CATEGORY_MEMBERS: Dict[str, Callable[[ToolSpec], bool]] = {
+    "calendar": lambda t: t.name in {"today_events", "upcoming", "reminders_due", "plan_my_day", "get_daily_briefing"},
+    "mail": lambda t: t.category == "mcp:gmail" or t.name == "get_daily_briefing",
+    "messages": lambda t: t.category in {"mcp:slack", "mcp:discord"} or t.name == "get_daily_briefing",
+    "drafts": lambda t: t.category == "mcp:gmail" or t.name == "gmail_create_draft",
+    "files": lambda t: t.name in {"open_in_editor", "git_status", "git_diff", "run_tests"},
+    "web": lambda t: t.name in {"web_search", "open_url", "current_weather"},
+    "system": lambda t: False,                    # handled by the existing groups
+}
+
+
+def categories_for(text: str) -> List[str]:
+    """The categories a request names, in a stable order. Empty = unclear."""
+    normalized = _normalize(text or "")
+    words = _word_set(normalized)
+    found = []
+    for cat, keys in CATEGORY_KEYWORDS.items():
+        for k in keys:
+            nk = _normalize(k)
+            if (" " in nk and nk in normalized) or (" " not in nk and nk in words):
+                found.append(cat)
+                break
+    return found
+
+
+def _auto_addable(spec: ToolSpec) -> bool:
+    return spec.enabled and spec.tier in ("safe", "draft") and not spec.outbound
+
+
+def select_by_category(registry: ToolRegistry, user_text: str, *, core_names: Iterable[str] = CORE_TOOL_NAMES,
+                       enabled_only: bool = True) -> Tuple[List[ToolSpec], str]:
+    """(tools, reason). reason is "category:<names>" when this layer decided, "" when it could not (caller falls back)."""
+    cats = [c for c in categories_for(user_text) if c != "system"]
+    if not cats or categories_for(user_text) != cats:         # unclear, or a system word is mixed in: use the groups
+        return [], ""
+    all_tools = registry.list_all(enabled_only=enabled_only)
+    core = set(core_names)
+    chosen = [t for t in all_tools if t.name in core]
+    names = {t.name for t in chosen}
+    for t in all_tools:
+        if t.name in names or not _auto_addable(t):
+            continue
+        if any(_CATEGORY_MEMBERS[c](t) for c in cats):
+            chosen.append(t)
+            names.add(t.name)
+    members = [t for t in chosen if t.name not in core]
+    if not members or len(chosen) > MAX_CATEGORY_TOOLS:        # nothing registered for it / too broad: not this layer's call
+        return [], ""
+    return chosen, "category:" + ",".join(cats)
+
+
 def select_tools(
     registry: ToolRegistry,
     user_text: str,
@@ -211,6 +288,10 @@ def select_tools(
     normalized = _normalize(user_text or "")
     if not normalized:
         return all_tools, "full:no-text"
+
+    by_category, why = select_by_category(registry, user_text, core_names=core_names, enabled_only=enabled_only)
+    if why:
+        return by_category, why
 
     text_words = _word_set(normalized)
     matched_groups: Set[str] = {

@@ -158,6 +158,6 @@ def test_mcp_tools_group_by_server_without_hand_maintained_entries(registry):
     registry.register(_spec("send_email", "mcp:gmail"))
 
     names, reason = _names(registry, "check my gmail")
-    assert reason == "filtered"
+    assert reason in ("filtered", "category:mail")          # the category layer now answers mail requests first
     assert {"list_unread", "send_email"} <= names
     assert "set_volume" not in names

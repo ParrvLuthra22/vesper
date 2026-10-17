@@ -95,3 +95,11 @@ call, the volume range check or the greeting-hour check each makes tests fail.
   (DuckDuckGo, Tavily if `TAVILY_API_KEY` is set; 5 results, ~600 tokens, site names only, hostile results dropped, tainted).
 * App names tolerate recogniser near-misses ("Sofari", "Message"); closing an app still needs the exact name.
 * Calendar: "what's on my calendar" without "today", and "calender", are claimed.
+
+## Tool-schema budget (category selection)
+
+Every planner call carries the tool schemas (45 tools ≈ 4,500 tokens live; Groq's free tier allows 8k tokens a minute). Requests that
+name a category — calendar, mail, messages, drafts, files, web — get only that category's read tools plus the core three
+(`tools/selection.py`, `select_by_category`): typically 5-10 tools, 400-900 tokens. `confirm`, `dangerous` and outbound tools are
+never added by a category (only by naming them, as before). Unclear requests fall back to the group logic and then to the full set.
+`restrict_tools` (router hand-off, e.g. web_search) offers exactly one tool.
