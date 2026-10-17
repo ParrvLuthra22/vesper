@@ -6,6 +6,8 @@
 //   • confirmations→ inline card, gold approve / hairline deny, 120s hairline
 //   • idle         → nearly empty; just the last thing Vesper said, faded
 
+import { splitSentences } from "./sentences";
+
 const TYPE_MS = 30; // typewriter per character
 const IDLE_MS = 9000; // fall idle after this much quiet
 const MAX_NODES = 40; // prune the stream beyond this
@@ -41,12 +43,6 @@ function oneLine(s: string): string {
 }
 function trunc(s: string, n: number): string {
   return s.length > n ? s.slice(0, n - 1) + "…" : s;
-}
-function splitSentences(text: string): string[] {
-  return text
-    .split(/(?<=[.!?])\s+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
 }
 
 // A briefing should render as a block regardless of who asked for it (the HUD,

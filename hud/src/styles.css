@@ -244,6 +244,14 @@ body {
   height: 0;
 }
 
+/* Every message is its own block in NORMAL FLOW and never shrinks. Without this the column's default flex-shrink:1 squeezed
+   each message to its min-height (1.5em) once the replies together outgrew the panel, while the wrapped text overflowed onto
+   its neighbours: four replies drawn on top of each other, the last cut off. Nothing in the stream is positioned. */
+.stream > * {
+  flex: 0 0 auto;
+  position: static;
+}
+
 /* Everything in the stream fades up as it arrives (film-credit staging). */
 .entry {
   opacity: 0;

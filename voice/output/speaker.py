@@ -13,6 +13,7 @@ import threading
 import time
 from typing import Callable, Iterable, List, Optional
 
+from utils.sentences import split_sentences as _split_sentences
 from voice.output.config import VoiceOutputConfig
 from voice.output.tts import AudioPlayer, KokoroTTS
 
@@ -38,7 +39,8 @@ def clean_for_speech(text: str) -> str:
 
 
 def split_sentences(text: str) -> List[str]:
-    return [s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()]
+    """TTS chunks. Abbreviation-aware (utils/sentences.py): "Gate No. 2." stays one chunk."""
+    return _split_sentences(text)
 
 
 class Speaker:
