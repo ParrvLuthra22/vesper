@@ -46,6 +46,10 @@ class SpeechState:
     def speaking(self) -> bool:
         return self._speaking_since is not None and self._clock() - self._speaking_since < self._max
 
+    def audible(self) -> bool:
+        """Is Vesper speaking, or about to (a reply was queued for voice output)? A turn that is merely thinking is not audible."""
+        return self.speaking or self._clock() < self._hold_until
+
     def busy(self) -> bool:
         return self._turns > 0 or self.speaking or self._clock() < self._hold_until
 

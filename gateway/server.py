@@ -37,6 +37,7 @@ from pydantic import BaseModel
 from channels.message import InboundMessage, InvalidMessage
 from gateway.channels import ChannelForbidden, ChannelTurnService
 from gateway.speech_state import SpeechState
+from gateway.turns import TurnManager
 from gateway.wire import FORWARDED_EVENT_TYPES, to_wire
 from schemas.events import (
     ConfirmationResponseEvent,
@@ -132,6 +133,12 @@ class Gateway:
         self._manager = ConnectionManager()
         self._greeting: Optional[str] = None
         self._speech = SpeechState()
+        self._turns = TurnManager(
+            emit=lambda ev: self._bus.emit(ev),
+            make_event=lambda text: VoiceInputEvent(text=text, source="gateway"),
+            barge_in=self._barge_in,
+            is_speaking=lambda: self._speech.audible(),
+            on_start=self._speech.turn_started, on_end=self._speech.turn_finished)
         self._subscriptions: List[Any] = []
         self._attached = False
         self._remote_task: Optional["asyncio.Task[None]"] = None
@@ -206,6 +213,8 @@ class Gateway:
     async def _forward(self, event: Any) -> None:
         """One handler for every forwarded type — remembers the boot greeting,
         serializes via the shared mapping, and broadcasts."""
+        if isinstance(event, VoiceOutputEvent) and self._turns.is_cancelled(getattr(event, "correlation_id", None)):
+            return                                  # a cancelled turn says nothing: not to the HUD, not to voice output
         if isinstance(event, VoiceOutputEvent):
             self._speech.reply_queued()
             if self._greeting is None:
@@ -221,14 +230,12 @@ class Gateway:
         """Enqueue a user turn. Emitting VoiceInputEvent awaits the whole turn
         (LLM + tools), so it MUST be fire-and-forget — never block the WS loop
         or the HTTP response on it."""
-        asyncio.create_task(self._run_turn(text))
+        self._turns.submit(text)
 
-    async def _run_turn(self, text: str) -> None:
-        self._speech.turn_started()
-        try:
-            await self._bus.emit(VoiceInputEvent(text=text, source="gateway"))
-        finally:
-            self._speech.turn_finished()
+    async def _barge_in(self) -> None:
+        """Speech is playing and the user spoke: stop it. The WakeEvent is what voice output (and the HUD) obey."""
+        self._speech.set_speaking(False)
+        await self._bus.emit(WakeEvent(animate=False, source="barge-in"))
 
     def inject_confirm(self, request_id: str, approved: bool) -> None:
         asyncio.create_task(
