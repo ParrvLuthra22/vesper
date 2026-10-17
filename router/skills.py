@@ -95,10 +95,8 @@ async def _briefing(match: Match, rt: SkillRuntime) -> SkillResult:
 
 
 def _briefing_validator(groups: Dict[str, str], ctx: RouterContext) -> Optional[Dict[str, Any]]:
-    phrase = groups.get("p", "")
-    if phrase in ("good morning", "morning") and ctx.now.hour >= ctx.morning_until_hour:
-        return None                                  # a bare greeting only counts before noon (same rule as the fast path)
-    return {"phrase": phrase}
+    # Any hour (same rule as the Brain's fast path): "good morning" at 9 pm still gets the briefing, greeted by the REAL time.
+    return {"phrase": groups.get("p", "")}
 
 
 def briefing_skill(phrases: Iterable[str]) -> Skill:
@@ -260,7 +258,7 @@ async def _important_mail(match: Match, rt: SkillRuntime) -> SkillResult:
 
 
 IMPORTANT = Skill("important_mail", "any important mail / what's new", (
-    R("imp.whats_new", rf"{WHAT} new(?: today)?|anything new|any news in my inbox"),
+    R("imp.anything_new", r"anything new|any news in my inbox"),                 # "what's new" alone is the briefing
     R("imp.any_important", r"(?:do i have |did i get |have i got )?any(?:thing)? important(?: mail| emails?| messages?)?(?: today| come in| came in)?"),
     R("imp.is_there", r"is there (?:any|anything) (?:important|urgent|new)(?: mail| emails?| in my inbox)?"),
     R("imp.any_new_mail", r"(?:do i have |did i get |have i got )?any new (?:mail|emails?)(?: today)?"),
@@ -428,8 +426,9 @@ def build_skills(briefing_phrases: Iterable[str] = ()) -> List[Skill]:
 def build_router(*, briefing_cfg: Any = None, installed: Optional[Iterable[str]] = None,
                  clock: Callable[[], datetime] = datetime.now, disabled: Sequence[str] = ()) -> SkillRouter:
     """The router with every built-in skill. `installed` = names of installed apps (default: scan /Applications)."""
-    phrases = list(getattr(briefing_cfg, "fast_path_phrases", []) or ["good morning", "morning", "morning briefing",
-                   "daily briefing", "brief me", "give me my briefing", "give me my morning briefing"])
+    from briefing.config import BriefingConfig
+
+    phrases = list(getattr(briefing_cfg, "fast_path_phrases", None) or BriefingConfig().fast_path_phrases)
     until = int(getattr(briefing_cfg, "morning_until_hour", 12))
     resolver = AppResolver(installed_apps() if installed is None else installed)
 

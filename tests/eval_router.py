@@ -18,7 +18,7 @@ Metrics:
     recall on SHOULD_MATCH     how many of the utterances that should be handled were
     median latency             median over utterances of the median match() time, microseconds
 
-The clock is pinned to 08:00 so "good morning" is deterministic (the router refuses a bare greeting after noon, like the
+The clock is pinned to 08:00; greetings trigger the briefing at ANY hour now (the old rule refused a bare greeting after noon, like the
 briefing fast path). Installed apps are not scanned: only the built-in aliases are known, so the eval is machine-independent.
 """
 
@@ -40,7 +40,8 @@ Case = Tuple[str, Optional[str]]
 
 SHOULD_MATCH: List[Case] = [
     # --- briefing
-    ("good morning", "briefing"), ("Good morning, Vesper", "briefing"), ("uh good morning", "briefing"),
+    ("good morning", "briefing"), ("good afternoon", "briefing"), ("good evening", "briefing"), ("good night", "briefing"),
+    ("what's new", "briefing"), ("Good morning, Vesper", "briefing"), ("uh good morning", "briefing"),
     ("morning briefing", "briefing"), ("brief me", "briefing"), ("can you brief me please", "briefing"),
     ("give me my briefing", "briefing"), ("so give me my morning briefing", "briefing"),
     ("what's my day look like", "briefing"), ("subah ka briefing", "briefing"), ("aaj ka briefing", "briefing"),
@@ -63,7 +64,7 @@ SHOULD_MATCH: List[Case] = [
     ("tell me my next meeting", "next_meeting"), ("agli meeting kab hai", "next_meeting"),
     ("what's next on my calendar", "next_meeting"),
     # --- mail / counts
-    ("any important mail", "important_mail"), ("what's new", "important_mail"), ("koi important mail aaya?", "important_mail"),
+    ("any important mail", "important_mail"), ("anything new", "important_mail"), ("koi important mail aaya?", "important_mail"),
     ("anything important", "important_mail"), ("is there anything important in my inbox", "important_mail"),
     ("do I have any new mail", "important_mail"), ("kuch important aaya?", "important_mail"),
     ("koi naya mail aaya hai", "important_mail"),
@@ -116,7 +117,7 @@ SHOULD_NOT: List[Case] = [
     ("next meeting with Priya", None), ("cancel my next meeting", None), ("move my next meeting to 5", None),
     ("what's new with project X", None), ("what's new in python", None), ("any important mail from Priya", None),
     ("how many unread emails from Priya", None), ("what's the date of the board meeting", None),
-    ("what day is the next meeting", None), ("good evening", None),
+    ("what day is the next meeting", None),
     # --- other things the planner owns
     ("play some music", None), ("remind me to call mom", None), ("what's the weather", None), ("tell me a joke", None),
 ]

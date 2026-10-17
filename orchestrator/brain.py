@@ -54,6 +54,7 @@ from guardian.gate import Guardian
 from llm.router import ModelRouter
 from orchestrator.planner import Planner, PlannerResult
 from briefing.service import BriefingService
+from briefing.config import from_dict as _briefing_from_config
 from briefing.tool import is_briefing_request, make_cached_briefing_handler
 from proactive.briefing import deliver_scheduled_briefing, make_get_daily_briefing_handler
 from proactive.day_planner import make_plan_my_day_handler
@@ -443,7 +444,8 @@ class Brain:
         self._skill_runner: Optional[SkillRunner] = None
         if router_cfg.get("enabled", True):
             self._skill_runner = SkillRunner(
-                build_router(disabled=router_cfg.get("disabled_skills", []) or []),
+                build_router(briefing_cfg=_briefing_from_config(self._config.get("briefing")),
+                             disabled=router_cfg.get("disabled_skills", []) or []),
                 get_registry(), self._guardian, self._planner.run_approved_tool,
                 address_as=str((self._config.get("briefing", {}) or {}).get("address_as", "Sir")))
 

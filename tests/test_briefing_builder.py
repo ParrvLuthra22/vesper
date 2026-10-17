@@ -316,8 +316,10 @@ async def test_tool_handler_survives_a_failing_refresh_and_labels_staleness():
 
 
 @pytest.mark.parametrize("text,hour,expected", [
-    ("Good morning", 8, True), ("good morning, Vesper!", 7, True), ("Good morning", 15, False),
-    ("brief me", 15, True), ("What's my day look like?", 9, True),
+    ("Good morning", 8, True), ("good morning, Vesper!", 7, True), ("Good morning", 15, True), ("Good morning", 21, True),
+    ("Good afternoon", 9, True), ("good evening, Jarvis", 8, True), ("Good night", 14, True), ("what's new", 22, True),
+    ("What is new?", 3, True), ("brief me", 15, True), ("What's my day look like?", 9, True),
+    ("what's new with project X", 9, False), ("good evening everyone, how are you doing today my friend", 9, False),
     ("Good morning, remind me to call the dentist", 8, False), ("remind me about the briefing", 8, False),
     ("morning", 9, True), ("hello", 9, False), ("", 9, False),
 ])

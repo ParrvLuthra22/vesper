@@ -151,12 +151,16 @@ class BriefingConfig:
     # speech
     address_as: str = "Sir"
     max_words: int = 85
+    #: Kept for old config files; it no longer gates anything. "good morning" (and every greeting/brief-me phrase) triggers the
+    #: briefing at ANY hour, and the spoken greeting follows the real time of day in `timezone`, not the phrase that was said.
     morning_until_hour: int = 12
+    timezone: str = "Asia/Kolkata"
     # fast path
     fast_path_enabled: bool = True
     fast_path_phrases: List[str] = field(default_factory=lambda: [
-        "good morning", "morning", "morning briefing", "daily briefing", "brief me",
-        "give me my briefing", "give me my morning briefing", "whats my day look like",
+        "good morning", "good afternoon", "good evening", "good night", "morning", "afternoon", "evening",
+        "morning briefing", "daily briefing", "brief me", "give me my briefing", "give me my morning briefing",
+        "whats new", "what is new", "whats new today", "whats my day look like",
         "what is my day look like", "what does my day look like"])
 
 
@@ -201,7 +205,8 @@ def from_dict(data: Optional[Dict[str, Any]]) -> BriefingConfig:
     put("vips", {"addresses": "vip_addresses", "domains": "vip_domains", "names": "vip_names"})
     put("builder", {k: k for k in ("max_meetings", "max_priority_mail", "max_slack_items", "max_messages_items", "min_priority_score", "token_cap",
                                    "subject_chars", "sender_chars", "preview_chars")})
-    put("speech", {"address_as": "address_as", "max_words": "max_words", "morning_until_hour": "morning_until_hour"})
+    put("speech", {"address_as": "address_as", "max_words": "max_words", "morning_until_hour": "morning_until_hour",
+                   "timezone": "timezone"})
     fp = _section(d, "fast_path")
     if "enabled" in fp:
         cfg.fast_path_enabled = bool(fp["enabled"])

@@ -338,9 +338,16 @@ def _words(text: str) -> int:
     return len(text.split())
 
 
-def _tod(now: float) -> str:
-    h = datetime.fromtimestamp(now).hour
-    return "morning" if h < 12 else "afternoon" if h < 18 else "evening"
+def _tod(now: float, tz: str = "") -> str:
+    """morning / afternoon / evening for the real local time in `tz` (an IANA name, default config: Asia/Kolkata). Falls back to
+    the machine's local time only if the zone cannot be loaded."""
+    try:
+        from zoneinfo import ZoneInfo
+
+        h = datetime.fromtimestamp(now, ZoneInfo(tz)).hour if tz else datetime.fromtimestamp(now).hour
+    except Exception:  # noqa: BLE001 — unknown zone / no tzdata
+        h = datetime.fromtimestamp(now).hour
+    return "morning" if 5 <= h < 12 else "afternoon" if 12 <= h < 17 else "evening"
 
 
 def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
@@ -405,7 +412,7 @@ def spoken_script(b: Briefing, cfg: BriefingConfig) -> str:
         return text
 
     def build(n_named: int, second_meeting: bool, other: bool, stale_note: bool, n_slack_names: int = 2) -> str:
-        out = [f"Good {_tod(b.as_of)}, {who}."]
+        out = [f"Good {_tod(b.as_of, cfg.timezone)}, {who}."]
         if b.meetings:
             m1 = b.meetings[0]
             t1 = meeting_title(m1, 50)

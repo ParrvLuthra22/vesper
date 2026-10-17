@@ -38,17 +38,14 @@ def normalize_utterance(text: str) -> str:
 
 
 def is_briefing_request(text: str, cfg: BriefingConfig, now: Optional[datetime] = None) -> bool:
-    """True for a short, unambiguous request for the briefing ("good morning", "brief me").
+    """True for a short, unambiguous request for the briefing ("good morning", "good evening", "brief me", "what's new").
     Long utterances ("good morning, remind me to ...") never match — they go to the planner.
-    A bare greeting only counts before `morning_until_hour`."""
+    Any hour: the phrase is only a trigger. The spoken greeting follows the real time of day (briefing/builder.py), so
+    "good morning" at 9 pm is answered with "Good evening", once. `now` is accepted for old callers and ignored."""
     if not cfg.fast_path_enabled:
         return False
     norm = normalize_utterance(text).replace("'", "")
     if len(norm.split()) > 8:
         return False
     phrases = {normalize_utterance(p).replace("'", "") for p in cfg.fast_path_phrases}
-    if norm not in phrases:
-        return False
-    if norm in ("good morning", "morning"):
-        return (now or datetime.now()).hour < cfg.morning_until_hour
-    return True
+    return norm in phrases

@@ -87,10 +87,12 @@ def test_the_router_never_closes_its_host_or_sweeps(text):
     assert router().match(text) is None
 
 
-def test_bare_greeting_only_counts_before_noon():
-    assert router(MORNING).match("good morning").skill.name == "briefing"
-    assert router(AFTERNOON).match("good morning") is None
-    assert router(AFTERNOON).match("brief me").skill.name == "briefing"          # explicit requests work any time
+@pytest.mark.parametrize("phrase", ["good morning", "good afternoon", "good evening", "good night", "brief me", "what's new",
+                                    "whats new today"])
+@pytest.mark.parametrize("clock", [MORNING, AFTERNOON])
+def test_greetings_and_brief_me_trigger_the_briefing_at_any_hour(phrase, clock):
+    # The phrase is only a trigger; the spoken greeting follows the real time of day (tests/test_greeting_time.py).
+    assert router(clock).match(phrase).skill.name == "briefing"
 
 
 def test_extra_words_make_it_fall_through():
@@ -402,7 +404,7 @@ async def test_important_mail_names_senders_but_never_flagged_text(tmp_path):
     out = await Fake(tmp_path).runner(briefing=FakeBriefing(b)).try_handle("any important mail")
     assert "Priya Sharma about Launch plan v2" in out.text and "a flagged message" in out.text
     assert "Mallory" not in out.text and "Ignore all" not in out.text and "1 email was filtered as unsafe" in out.text and out.tainted
-    empty = await Fake(tmp_path).runner(briefing=FakeBriefing(Briefing(as_of=0, total_unread=3))).try_handle("what's new")
+    empty = await Fake(tmp_path).runner(briefing=FakeBriefing(Briefing(as_of=0, total_unread=3))).try_handle("anything new")
     assert "Nothing important" in empty.text and "3 unread in total" in empty.text
 
 
