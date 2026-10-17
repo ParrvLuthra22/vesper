@@ -77,6 +77,23 @@ async def _geocode(place: str) -> Optional[Tuple[float, float, str]]:
     return float(r["latitude"]), float(r["longitude"]), r.get("name", place)
 
 
+def explain_weather_failure(exc: BaseException) -> str:
+    """Say WHICH service failed and why, and point the planner at web_search (the model otherwise paraphrased a raw HTTP error as a
+    generic "service unavailable")."""
+    code = getattr(exc, "code", None)
+    text = f"{type(exc).__name__} {exc}".lower()
+    if isinstance(code, int):
+        why = f"the weather service (Open-Meteo) answered HTTP {code}" + (" — it is down or overloaded" if code >= 500 else "")
+    elif isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timed out" in text:
+        why = "the weather service (Open-Meteo) did not answer in time"
+    elif any(k in text for k in ("urlerror", "name or service", "nodename", "unreachable", "connection", "gaierror")):
+        why = "I cannot reach the internet from here"
+    else:
+        why = f"the weather lookup failed ({type(exc).__name__})"
+    return (f"Weather unavailable: {why}. Say that in one short sentence. You may try the web_search tool for the forecast; "
+            f"if it also fails, say so — do not claim a generic 'service unavailable'.")
+
+
 async def current_weather(arguments: Dict[str, Any], context: Dict[str, Any]) -> str:
     location = str(arguments.get("location", "") or "").strip()
     if not location:
@@ -104,8 +121,8 @@ async def current_weather(arguments: Dict[str, Any], context: Dict[str, Any]) ->
         }
         data = await _get_json(f"{FORECAST_URL}?{urllib.parse.urlencode(params)}")
     except Exception as exc:
-        logger.warning(f"[weather] lookup failed for {location!r}: {exc}")
-        return f"Weather lookup failed, Sir: {exc}"
+        logger.warning(f"[weather] lookup failed for {location!r}: {type(exc).__name__}")
+        return explain_weather_failure(exc)
 
     current = data.get("current", {}) or {}
     daily = data.get("daily", {}) or {}

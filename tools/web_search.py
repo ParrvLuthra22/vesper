@@ -62,6 +62,7 @@ class DuckDuckGoProvider:
     name = "duckduckgo"
 
     def __init__(self, fetch: Optional[Callable[[str, str], str]] = None):
+        self._injected = fetch is not None          # tests inject a fetcher: then never go through the ddgs package
         self._fetch = fetch or self._http_post
 
     @staticmethod
@@ -72,10 +73,12 @@ class DuckDuckGoProvider:
             return resp.read(400_000).decode("utf-8", errors="replace")
 
     def search(self, query: str, limit: int) -> List[Hit]:
-        try:
-            from ddgs import DDGS  # type: ignore[import-not-found]
-        except ImportError:
-            DDGS = None  # noqa: N806
+        DDGS = None  # noqa: N806
+        if not self._injected:
+            try:
+                from ddgs import DDGS  # type: ignore[import-not-found,no-redef]
+            except ImportError:
+                DDGS = None  # noqa: N806
         if DDGS is not None:
             rows = list(DDGS().text(query, max_results=limit))
             return [Hit(str(r.get("title", "")), str(r.get("body", "")), str(r.get("href", ""))) for r in rows]
@@ -198,6 +201,25 @@ def format_results(query: str, hits: Sequence[Hit], max_tokens: int = MAX_TOKENS
 
 # --------------------------------------------------------------------------- the tool
 
+def explain_failure(exc: BaseException, provider: str = "") -> str:
+    """One short, honest reason a search could not run — never a generic 'service unavailable'."""
+    name = type(exc).__name__
+    text = f"{name} {exc}".lower()
+    if isinstance(exc, ImportError):
+        return f"the search package is not installed ({getattr(exc, 'name', None) or 'ddgs'} is missing)"
+    if "ratelimit" in text or "rate limit" in text or "429" in text or "202" in text.split() or "too many" in text:
+        return f"{provider or 'the search service'} is rate-limiting me"
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) or "timed out" in text or "timeout" in text:
+        return f"{provider or 'the search service'} did not answer in time"
+    if any(k in text for k in ("urlerror", "connectionerror", "nodename", "name or service", "network is unreachable",
+                               "connection refused", "connection reset", "offline", "ssl", "socket", "gaierror")):
+        return "I cannot reach the internet from here"
+    m = re.search(r"\b(4\d\d|5\d\d)\b", text)
+    if m:
+        return f"{provider or 'the search service'} answered with HTTP {m.group(1)}"
+    return f"{provider or 'the search'} failed ({name})"
+
+
 def default_provider(env: Optional[Dict[str, str]] = None) -> Provider:
     key = (env if env is not None else os.environ).get("TAVILY_API_KEY", "").strip()
     return TavilyProvider(key) if key else DuckDuckGoProvider()
@@ -213,15 +235,17 @@ def make_handler(provider: Optional[Provider] = None, fallback: Optional[Provide
         primary = provider or default_provider()
         backup = fallback if fallback is not None else (DuckDuckGoProvider() if primary.name != "duckduckgo" else None)
         loop = asyncio.get_running_loop()
-        errors: List[str] = []
+        reasons: List[str] = []
         for prov in [p for p in (primary, backup) if p is not None]:
             try:
                 hits = await asyncio.wait_for(loop.run_in_executor(None, prov.search, query, MAX_RESULTS + 3), timeout=12)
                 return format_results(query, hits)
             except Exception as exc:  # noqa: BLE001 — a search outage is an ordinary condition
-                errors.append(f"{prov.name}: {type(exc).__name__}")
+                reasons.append(explain_failure(exc, prov.name))
                 logger.warning(f"[web_search] {prov.name} failed: {type(exc).__name__}")
-        return f"Web search is unavailable right now ({'; '.join(errors)})."
+        why = reasons[0] if len(set(reasons)) == 1 else "; ".join(dict.fromkeys(reasons))
+        return (f"Web search could not run: {why}. Tell the user that in one short sentence; do not say 'service unavailable' "
+                f"and do not guess an answer from memory as if you had searched.")
 
     return handler
 

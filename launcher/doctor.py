@@ -384,6 +384,25 @@ def check_calendar_access(env: Optional[Dict[str, str]] = None, status: Optional
                   f"{where}; then restart `vesper up`. (The permission belongs to {app}, the app that launches Vesper.)")]
 
 
+def check_web_search(env: Optional[Dict[str, str]] = None, importer: Optional[Callable[[str], object]] = None) -> List[Check]:
+    """web_search prefers the `ddgs` package; without it it falls back to DuckDuckGo's plain-HTML page, which breaks whenever the
+    page changes. FAIL (with the command) so it is fixed before it is needed. Tavily is optional and only noted."""
+    import importlib
+
+    env = dict(os.environ) if env is None else env
+    imp = importer or importlib.import_module
+    out: List[Check] = []
+    try:
+        imp("ddgs")
+        out.append(Check(PASS, "Web search (ddgs)", "the ddgs package imports; web_search uses DuckDuckGo"))
+    except Exception as exc:  # noqa: BLE001 — ImportError, or a broken install
+        out.append(Check(FAIL, "Web search (ddgs)", f"cannot import ddgs ({type(exc).__name__}); web_search would use the fragile "
+                         "plain-HTML fallback", f"{sys.executable} -m pip install ddgs"))
+    if env.get("TAVILY_API_KEY"):
+        out.append(Check(PASS, "Web search (Tavily)", "TAVILY_API_KEY is set; Tavily is tried first, DuckDuckGo is the fallback"))
+    return out
+
+
 def check_wake_model(cfg: Dict[str, Any], root: Path = PROJECT_ROOT) -> List[Check]:
     path = str(_get(cfg, "voice.wake.model_path", "") or "").strip()
     if not path:
@@ -412,7 +431,7 @@ def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, pro
     return [*check_microphone(probe_mic, device=pinned),
             *(check_input_device(voice_input_device[0]) if voice_input_device else []), *check_telegram(cfg, env), *check_models(cfg, root),
             *check_ports(cfg, supervisor_pid), *check_briefing(db, briefing_interval),
-            *(check_messages(*messages) if messages else []), *check_wake_model(cfg, root),
+            *(check_messages(*messages) if messages else []), *check_wake_model(cfg, root), *check_web_search(env),
             *(check_calendar_access(env, calendar) if (check_calendar or calendar) else []), *check_audit(audit)]
 
 

@@ -94,7 +94,7 @@ async def test_provider_failure_is_a_message_and_falls_back():
     out = await run(Fake(boom=TimeoutError(), name="tavily"), fallback=Fake(hits(1)))
     assert "[example.com]" in out
     out = await run(Fake(boom=TimeoutError()), fallback=None)
-    assert "unavailable" in out and "TimeoutError" in out
+    assert "could not run" in out and "did not answer in time" in out
 
 
 @pytest.mark.asyncio
