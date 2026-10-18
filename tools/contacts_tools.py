@@ -226,6 +226,9 @@ def make_lookup(backend: Optional[ContactsBackend] = None, refs: ContactRefs = R
             return "contacts_lookup needs a name."
         be = backend or SystemContacts()
         auth = be.authorization()
+        if auth == 0:
+            return ("Contacts access has never been requested, so I cannot look anyone up. Tell the user to run `vesper contacts-auth` "
+                    "once in a terminal (it makes macOS ask) — `vesper doctor` shows the status.")
         if auth is not None and auth != 3:
             return ("Contacts access is not granted, so I cannot look anyone up. Tell the user to allow Contacts for the terminal app "
                     "(System Settings > Privacy & Security > Contacts) — `vesper doctor` says which.")

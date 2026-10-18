@@ -476,9 +476,9 @@ async def test_hud_delivery_when_voice_is_off_and_voice_when_it_is_on(tmp_path):
     w2, cache2, bus2, notifier2, _ = make(tmp_path / "v", [meeting(1, 29, clock2)], clock2, voice=True)
     (tmp_path / "v").mkdir(exist_ok=True)
     d2 = (await w2.tick())[0]
-    assert d2.channels == ["voice", "macos"]
-    assert isinstance(bus2.events[0], VoiceOutputEvent) and bus2.events[0].text == "Meeting in 29 minutes, Sir."
-    assert not any(isinstance(e, ProactiveNotificationEvent) for e in bus2.events)       # spoken replies already reach the HUD
+    assert d2.channels == ["hud", "voice", "macos"]                  # delivery policy: the HUD ALWAYS, speech on top, banner best-effort
+    assert isinstance(bus2.events[0], ProactiveNotificationEvent) and bus2.events[0].body == "Meeting in 29 minutes"
+    assert isinstance(bus2.events[1], VoiceOutputEvent) and bus2.events[1].text == "Meeting in 29 minutes, Sir."
 
 
 @pytest.mark.asyncio

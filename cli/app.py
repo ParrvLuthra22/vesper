@@ -453,6 +453,8 @@ USAGE = """usage: vesper [command] [options]
   route "<utterance>"     which deterministic skill would answer it (runs nothing)
   dnd on|off|status       proactive do-not-disturb
   mic-test [--selftest]   what the microphone hears / wake-word pipeline self-test
+  notify-test             post one notification and record whether you saw it
+  contacts-auth           ask macOS for Contacts access (so "message <name>" can work)
   stt-test "<phrase>" [--names A,B]   Kokoro phrase transcribed with and without a name vocabulary (no mic)
   help, -h, --help        this text (touches nothing)
 """
@@ -489,6 +491,18 @@ def run() -> None:
 
         sys.exit(mic_test_main(sys.argv[2:]))
 
+    # `vesper notify-test` — post ONE notification and ask whether you saw it (records the answer; see utils/notifications.py).
+    if len(sys.argv) > 1 and sys.argv[1] == "notify-test":
+        from utils.notify_cli import main as notify_main
+
+        sys.exit(notify_main(sys.argv[2:]))
+
+    # `vesper contacts-auth` — ask macOS for Contacts access for the app this runs from (the only thing that ever shows the prompt).
+    if len(sys.argv) > 1 and sys.argv[1] == "contacts-auth":
+        from utils.contacts_auth import main as contacts_auth_main
+
+        sys.exit(contacts_auth_main(sys.argv[2:]))
+
     # `vesper stt-test "<phrase>" [--names A,B]` — Kokoro-synthesized phrase, transcribed with and without a name vocabulary (no mic).
     if len(sys.argv) > 1 and sys.argv[1] == "stt-test":
         from voice.input.stt_test import main as stt_test_main
@@ -510,7 +524,7 @@ def run() -> None:
     # Anything else that is not a flag is a typo or a mis-split argument (`vesper "doctor --help"`, `vesper doctr`).
     # Starting the whole stack (real MCP servers, memory, a briefing refresh) because of that is a surprise nobody wants.
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
-        print(f"vesper: unknown command {sys.argv[1]!r}. Commands: up, down, status, logs, doctor, briefing, route, dnd, mic-test, stt-test. "
+        print(f"vesper: unknown command {sys.argv[1]!r}. Commands: up, down, status, logs, doctor, briefing, route, dnd, mic-test, stt-test, notify-test, contacts-auth. "
               "Run `vesper` with no arguments for the text REPL (or --remote to drive a running gateway).", file=sys.stderr)
         sys.exit(2)
 

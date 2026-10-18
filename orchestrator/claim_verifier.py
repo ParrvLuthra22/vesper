@@ -197,6 +197,17 @@ _SPECIFIC: Tuple[Tuple[str, Tuple["re.Pattern[str]", ...], str, Tuple[str, ...]]
         r"\b(?:typed|pre-?filled|filled\s+in|put|placed)\b[^.?!]{0,40}\b(?:message|text)\s+(?:box|field|window)\b",
         r"\b(?:drafted|prepared)\b[^.?!]{0,30}\b(?:in|inside)\s+(?:messages|imessage)\b",
     ), "body_prefilled", ("draft",)),
+    ("notification displayed", _rx(
+        r"\bnotification\b[^.?!]{0,30}\b(?:displayed|shown|appeared|delivered|posted|sent|is\s+(?:up|on\s+screen))\b",
+        r"\b(?:displayed|showed|shown|posted|sent|pushed)\b[^.?!]{0,25}\b(?:a\s+|the\s+|your\s+)?(?:notification|banner|alert)\b",
+        r"\byou\s+(?:should|can|will|must)\s+(?:now\s+)?(?:see|have\s+seen)\s+(?:it|the\s+(?:notification|banner))\b",
+        r"\b(?:banner|notification)\b[^.?!]{0,20}\bpopped\s+up\b",
+    ), "notification_displayed", ("notification_displayed",)),
+    ("sound audible", _rx(
+        r"\byou\s+(?:should|can|will|must)\s+(?:now\s+)?(?:hear|have\s+heard)\b",
+        r"\b(?:audible|loud\s+and\s+clear)\b",
+        r"\b(?:heard|hear)\s+(?:it|that|the\s+(?:beep|sound|ping))\b",
+    ), "sound_audible", ("sound_audible",)),
     ("in front", _rx(
         r"\b(?:in\s+front|frontmost|front\s+and\s+cent(?:er|re)|brought\s+to\s+the\s+front|on\s+(?:your\s+)?screen\s+now)\b",
     ), "app_frontmost", ()),
@@ -216,6 +227,12 @@ def honest_reply(claim: "Claim", results) -> str:
     grounded = [g for g in _parse_results(results) if g.present]
     if not grounded:
         return HONEST_REPLY
+    if claim.category == "notification displayed":
+        asked = any("notification_requested" in g.can for g in grounded)
+        return ("I asked macOS to show a notification, but I can't confirm it appeared — `vesper notify-test` will settle it."
+                if asked else "I could not even get macOS to accept the notification request.")
+    if claim.category == "sound audible":
+        return "I ran the sound player and it exited cleanly, but I can't hear it from here, so I can't say it was audible."
     g = next((x for x in reversed(grounded) if "app_opened" in x.can), grounded[-1])
     return say(g, claim.cannot)
 

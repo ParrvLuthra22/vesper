@@ -441,13 +441,15 @@ class ProactiveWatcher:
         speak = self.cfg.speak and bool(self._voice_mode())
         if self._bus is not None:
             from schemas.events import ProactiveNotificationEvent, VoiceOutputEvent
-            if speak:
-                await self._bus.emit(VoiceOutputEvent(text=p.speech, source="ProactiveWatcher"))
-                channels.append("voice")
-            elif self.cfg.hud:
+            # Delivery policy (utils/notifications.py): ALWAYS the HUD; additionally speak when voice mode is on (quiet hours are
+            # already gated before we get here); the macOS banner below is best-effort on top and never the only channel.
+            if self.cfg.hud:
                 await self._bus.emit(ProactiveNotificationEvent(title=p.title, body=p.body, kind=p.kind,
                                                                 origin=p.source, source="ProactiveWatcher"))
                 channels.append("hud")
+            if speak:
+                await self._bus.emit(VoiceOutputEvent(text=p.speech, source="ProactiveWatcher"))
+                channels.append("voice")
         if self.cfg.macos_notification and self._notifier is not None:
             try:
                 await self._notifier.notify(p.title, p.body)

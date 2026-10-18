@@ -25,6 +25,9 @@ CAN_PHRASES: Dict[str, str] = {
     "body_prefilled": "put your text in the message box (not sent)",
     "contact_matches": "found matching contacts",
     "web_results": "searched the web",
+    "notification_requested": "asked macOS to show a notification",
+    "notification_displayed": "the notification appeared (confirmed working from this app)",
+    "sound_played": "ran the sound player (exit 0)",
 }
 CANNOT_PHRASES: Dict[str, str] = {
     "conversation": "open a specific conversation",
@@ -33,6 +36,8 @@ CANNOT_PHRASES: Dict[str, str] = {
     "compose_ready": "get a message ready to type",
     "sent": "send messages",
     "draft": "write a draft there",
+    "notification_displayed": "say that it appeared on screen",
+    "sound_audible": "say that it was audible",
 }
 
 

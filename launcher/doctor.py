@@ -437,33 +437,71 @@ def check_web_search(env: Optional[Dict[str, str]] = None, importer: Optional[Ca
 
 
 def contacts_authorization() -> Optional[int]:
-    """Contacts authorization WITHOUT asking (no prompt): 0 not determined, 1 restricted, 2 denied, 3 authorized."""
-    try:
-        import Contacts
+    """Contacts authorization WITHOUT asking (no prompt): 0 not determined, 1 restricted, 2 denied, 3 authorized.
+    Deliberately the SAME call contacts_lookup makes first (SystemContacts.authorization), so doctor and the real lookup cannot disagree."""
+    from tools.contacts_tools import SystemContacts
 
-        return int(Contacts.CNContactStore.authorizationStatusForEntityType_(Contacts.CNEntityTypeContacts))
+    return SystemContacts().authorization()
+
+
+def process_term_program(pid: Optional[int]) -> Optional[str]:
+    """TERM_PROGRAM of another of your processes (`ps eww`), to tell which app launched the running stack. None if unknown."""
+    if not pid:
+        return None
+    try:
+        out = subprocess.run(["ps", "eww", "-p", str(pid)], capture_output=True, text=True, timeout=3).stdout
+        import re as _re
+
+        m = _re.search(r"TERM_PROGRAM=(\S+)", out)
+        return m.group(1) if m else None
     except Exception:  # noqa: BLE001
         return None
 
 
-def check_contacts_access(env: Optional[Dict[str, str]] = None, status: Optional[Callable[[], Optional[int]]] = None) -> List[Check]:
-    """contacts_lookup / messages_compose read Contacts through the Contacts framework inside the gateway process, which `vesper up`
-    starts: macOS attributes the request to the TERMINAL APP that ran it."""
+def check_contacts_access(env: Optional[Dict[str, str]] = None, status: Optional[Callable[[], Optional[int]]] = None,
+                          stack_term: Optional[str] = None) -> List[Check]:
+    """contacts_lookup / messages_compose read Contacts inside the gateway process that `vesper up` starts: macOS attributes the request
+    to the TERMINAL APP that ran it. `stack_term` = TERM_PROGRAM of the running supervisor (if any), to catch a stack started from a
+    different app than the one this doctor runs in."""
     env = dict(os.environ) if env is None else env
     st = (status or contacts_authorization)()
     app = terminal_app(env)
     where = f"System Settings > Privacy & Security > Contacts > turn on {app}"
+    other = ""
+    if stack_term and stack_term != env.get("TERM_PROGRAM", ""):
+        other = (f" NOTE: the running stack was started from {terminal_app({'TERM_PROGRAM': stack_term})}, not {app}: macOS attributes "
+                 f"the gateway's Contacts access to THAT app, so this status may not apply to it.")
     if st == 3:
-        return [Check(PASS, "Contacts access", f"granted ({app}); \"message <name>\" can resolve people")]
+        return [Check(PASS, "Contacts access", f"granted to {app}; \"message <name>\" can resolve people." + other)]
     if st is None:
         return [Check(WARN, "Contacts access", "could not be determined (Contacts framework unavailable)",
                       "pip install pyobjc-framework-Contacts; then re-run `vesper doctor`")]
     if st == 0:
-        return [Check(WARN, "Contacts access", f"not asked yet for {app}: the first \"message <name>\" will show a prompt",
-                      f"allow it when asked, or enable it in {where}")]
+        return [Check(WARN, "Contacts access", f"NOT DETERMINED for {app}: macOS has never been asked, so \"message <name>\" cannot "
+                      f"resolve anyone yet.{other}", "run `vesper contacts-auth` (it asks macOS once, from this app)")]
     names = {1: "restricted by a profile", 2: "denied"}
-    return [Check(FAIL, "Contacts access", f"{names.get(st, f'status {st}')} for {app}: \"message <name>\" cannot resolve anyone",
-                  f"{where}; then restart `vesper up`. (The permission belongs to {app}, the app that launches Vesper.)")]
+    return [Check(FAIL, "Contacts access", f"{names.get(st, f'status {st}')} for {app}: \"message <name>\" cannot resolve anyone.{other}",
+                  f"{where}; then restart `vesper up`. (The permission belongs to {app}, the app that launches Vesper.) "
+                  "Or run `vesper contacts-auth` for the exact steps.")]
+
+
+def check_notifications(env: Optional[Dict[str, str]] = None, state: Any = None) -> List[Check]:
+    """Banners from `display notification` can silently not appear (permission, Focus). Only `vesper notify-test` can confirm."""
+    from utils import notifications as nt
+
+    env = dict(os.environ) if env is None else env
+    app = nt.terminal_app(env)
+    st = state if state is not None else nt.NotifyState()
+    status = st.status(app)
+    rec = st.load()
+    fix = nt.fix_hint(app)
+    if status == nt.CONFIRMED:
+        return [Check(PASS, "Notifications", f"confirmed — you saw a test banner from {app} on {str(rec.get('at', '?'))[:10]}")]
+    if status == nt.FAILED:
+        return [Check(WARN, "Notifications", f"failed — the last test from {app} did not appear (Vesper will not claim banners)", fix)]
+    other = f" (the last confirmation was made from {rec.get('app')})" if rec.get("app") and rec.get("app") != app else ""
+    return [Check(WARN, "Notifications", f"unconfirmed for {app}{other}: Vesper can ask macOS for a banner but cannot say it appeared",
+                  "run `vesper notify-test`; if the banner does not appear: " + fix)]
 
 
 def check_wake_model(cfg: Dict[str, Any], root: Path = PROJECT_ROOT) -> List[Check]:
@@ -496,7 +534,8 @@ def run_checks(cfg: Dict[str, Any], *, env: Optional[Dict[str, str]] = None, pro
             *check_ports(cfg, supervisor_pid), *check_briefing(db, briefing_interval),
             *(check_messages(*messages) if messages else []), *check_wake_model(cfg, root), *check_web_search(env), *check_hud_build(cfg, root),
             *(check_calendar_access(env, calendar) if (check_calendar or calendar) else []),
-            *(check_contacts_access(env) if check_calendar else []), *check_audit(audit)]
+            *(check_contacts_access(env, stack_term=process_term_program(supervisor_pid)) if check_calendar else []),
+            *(check_notifications(env) if check_calendar else []), *check_audit(audit)]
 
 
 def render(checks: List[Check], color: bool = False) -> str:

@@ -56,6 +56,7 @@ TOOL_GROUPS: Dict[str, str] = {
     "get_battery": "sysinfo", "get_time": "sysinfo", "get_date": "sysinfo",
     "system_info": "sysinfo",
     "show_notification": "notify",
+    "play_sound": "sound",
     "current_weather": "weather",
 }
 
@@ -81,6 +82,7 @@ GROUP_TRIGGERS: Dict[str, Tuple[str, ...]] = {
         "storage", "uptime", "specs",
     ),
     "notify": ("notify", "notification", "alert", "remind", "reminder"),
+    "sound": ("beep", "ping", "sound", "chime", "ding", "noise", "boop"),
     "messaging": ("message", "text", "imessage", "sms", "contact", "contacts", "compose", "whatsapp", "ping"),
     "weather": (
         "weather", "temperature", "forecast", "rain", "raining", "umbrella",

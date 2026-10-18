@@ -40,6 +40,7 @@ from schemas.events import (
     AgentErrorEvent,
     ApplicationLaunchedEvent,
     IntentRecognizedEvent,
+    ProactiveNotificationEvent,
     ShutdownRequestedEvent,
     SystemCommandEvent,
     SystemCommandResultEvent,
@@ -1582,15 +1583,41 @@ class SystemAgent(BaseAgent):
             return f"I couldn't open that URL. {stderr}"
 
     def _handle_notify(self, entities: Dict, raw_text: str) -> str:
-        """Show a system notification."""
+        """Notify: HUD always, voice when voice mode is on and it is not quiet hours, a macOS banner best-effort. The result says only
+        what happened — `osascript` exiting 0 does NOT mean a banner appeared (permission? Focus mode?), see utils/notifications.py."""
+        from utils import notifications as nt
+
         title = entities.get("title", "Vesper")
         message = entities.get("message", "")
 
         if not message:
             return "I didn't catch what the notification should say"
 
-        success, msg = self.executor.show_notification(title=title, message=message)
-        return msg
+        plan = nt.policy_from_config(self._config)
+        app = nt.terminal_app()
+        state = nt.NotifyState().status(app)
+        channels = []
+        if plan.hud:
+            asyncio.create_task(self._event_bus.emit(ProactiveNotificationEvent(
+                title=str(title), body=str(message), kind="notify", origin="SystemAgent", source=self.name)))
+            channels.append("HUD")
+        if plan.voice:
+            asyncio.create_task(self._event_bus.emit(VoiceOutputEvent(text=str(message), source=self.name)))
+            channels.append("spoken")
+        asked, detail = (False, "")
+        if plan.macos:
+            asked, detail = self.executor.show_notification(title=title, message=message)
+        can = (["notification_requested"] if asked else []) + (["notification_displayed"] if asked and state == nt.CONFIRMED else [])
+        cannot = [] if state == nt.CONFIRMED and asked else ["notification_displayed"]
+        shown_on = " and ".join(channels) or "nowhere else"
+        if asked and state == nt.CONFIRMED:
+            line = f"Notification posted ({shown_on}); banners are confirmed working from {app}."
+        elif asked:
+            line = (f"Notification requested ({shown_on}). Banners are {state} on this Mac, so I cannot say it appeared on screen"
+                    f" — `vesper notify-test` settles it.")
+        else:
+            line = f"The macOS banner could not be requested ({(detail or 'no detail')[:60]}); delivered to: {shown_on}."
+        return grounded(line, can=can, cannot=cannot)
 
     def _handle_screenshot(self, entities: Dict, raw_text: str) -> str:
         """Capture a screenshot of the current screen via macOS's screencapture CLI."""

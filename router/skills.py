@@ -457,6 +457,30 @@ VOLUME_STEP = Skill("volume_step", "volume up / down by a step", (
 ), _volume_step, mutates=True)
 
 
+# ----------------------------------------------------------------------------- sounds
+
+async def _play_sound(match: Match, rt: SkillRuntime) -> SkillResult:
+    name = match.args["sound"]
+    await rt.call("play_sound", {"name": name})
+    return SkillResult(f"I played {name}, {rt.address_as}.")             # played, not "you should hear it": nothing here can hear
+
+
+def _sound_validator(groups: Dict[str, str], ctx: RouterContext) -> Optional[Dict[str, Any]]:
+    from tools.sounds import resolve
+
+    name = resolve(groups.get("n", "beep"))
+    return {"sound": name} if name else None
+
+
+_SOUND_WORD = r"(?:beep|ping|ding|chime|boop|buzz|pop|noise|sound|alert)"
+SOUND = Skill("play_sound", "play a system sound (beep / ping)", (
+    R("sound.make", rf"(?:make|play|give me|do|let me hear|send)(?: me)?(?: a| an| the| some)? (?P<n>{_SOUND_WORD})(?: sound| noise)?", _sound_validator),
+    R("sound.bare", r"(?:a |an |the )?(?P<n>beep|ping|ding|chime|boop)", _sound_validator),
+    R("sound.named", r"play(?: the)? (?P<n>[a-z]+)(?: system)? sound", _sound_validator),
+    R("sound.hinglish", r"(?P<n>beep|ping|ding|chime)(?: bajao| karo| maaro| baja do)", _sound_validator),
+), _play_sound, mutates=True)
+
+
 # ----------------------------------------------------------------------------- web search
 
 #: Queries that are about the user's own stuff, not the web: these are NOT claimed (the planner picks the right tool).
@@ -492,7 +516,7 @@ WEB_SEARCH = Skill("web_search", "search the web for something (hands off to the
 
 def build_skills(briefing_phrases: Iterable[str] = ()) -> List[Skill]:
     return [briefing_skill(briefing_phrases), TIME, DATE, CALENDAR_TODAY, NEXT_MEETING, UNREAD, IMPORTANT,
-            WEB_SEARCH, OPEN_APP, FOCUS_APP, CLOSE_APP, VOLUME_SET, VOLUME_STEP]
+            WEB_SEARCH, SOUND, OPEN_APP, FOCUS_APP, CLOSE_APP, VOLUME_SET, VOLUME_STEP]
 
 
 def build_router(*, briefing_cfg: Any = None, installed: Optional[Iterable[str]] = None,

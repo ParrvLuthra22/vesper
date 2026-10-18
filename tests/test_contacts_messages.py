@@ -269,8 +269,10 @@ def test_doctor_contacts_permission_names_the_app():
 
 def test_doctor_check_never_requests_access():
     import inspect
-    src = inspect.getsource(doctor.contacts_authorization)
+    src = inspect.getsource(ct.SystemContacts.authorization)
     assert "authorizationStatusForEntityType" in src and "requestAccess" not in src
+    # doctor uses exactly that call, so it and the real lookup cannot disagree
+    assert "SystemContacts().authorization()" in inspect.getsource(doctor.contacts_authorization)
 
 
 def test_message_requests_offer_the_contacts_tools():
