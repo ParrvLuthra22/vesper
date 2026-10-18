@@ -44,9 +44,24 @@ class NotifyState:
         except (OSError, ValueError):
             return {}
 
+    def save_path(self, path: str, hud_connected: bool, hud_state: str, now: Optional[datetime] = None) -> None:
+        """Remember which delivery path the running gateway was using (for `vesper doctor`, which runs in another process). Keeps the
+        confirmation record, adds/updates the `delivery` entry."""
+        rec = self.load()
+        rec["delivery"] = {"path": path, "hud_connected": bool(hud_connected), "hud_state": hud_state,
+                           "at": (now or datetime.now().astimezone()).isoformat(timespec="seconds")}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(rec))
+
+    def delivery(self) -> Dict[str, Any]:
+        d = self.load().get("delivery")
+        return d if isinstance(d, dict) else {}
+
     def save(self, status: str, app: str, now: Optional[datetime] = None) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         rec = {"status": status, "app": app, "at": (now or datetime.now().astimezone()).isoformat(timespec="seconds")}
+        if self.delivery():
+            rec["delivery"] = self.delivery()                    # a confirmation must not erase what we know about the path
         self.path.write_text(json.dumps(rec))
 
     def status(self, app: Optional[str] = None) -> str:
@@ -118,8 +133,9 @@ def policy_from_config(cfg: Any, now: Optional[datetime] = None) -> Plan:
 # --------------------------------------------------------------------------- notify-test
 
 def run_notify_test(post: Callable[[str, str], Tuple[bool, str]], ask: Callable[[str], str], state: NotifyState, app: str,
-                    out: Callable[[str], None] = print, now: Optional[datetime] = None) -> int:
-    """Post ONE notification, ask whether it was seen, record the answer. Exit 0 = confirmed."""
+                    out: Callable[[str], None] = print, now: Optional[datetime] = None, posted: bool = False) -> int:
+    """Post ONE notification, ask whether it was seen, record the answer. Exit 0 = confirmed. (`posted=True`: the caller already
+    posted it through the path it chose and `post` just returns that result.)"""
     ok, err = post("Vesper notification test", "If you can read this, notifications work. You can dismiss it.")
     if not ok:
         state.save(FAILED, app, now)

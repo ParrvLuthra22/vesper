@@ -1593,8 +1593,11 @@ class SystemAgent(BaseAgent):
         if not message:
             return "I didn't catch what the notification should say"
 
+        from utils import notify_path as np_
+
         plan = nt.policy_from_config(self._config)
-        app = nt.terminal_app()
+        path = np_.PATH.active() if plan.hud else np_.OSASCRIPT       # the HUD path needs the HUD event; without it, fall back
+        app = np_.app_for(path, nt.terminal_app())
         state = nt.NotifyState().status(app)
         channels = []
         if plan.hud:
@@ -1605,16 +1608,22 @@ class SystemAgent(BaseAgent):
             asyncio.create_task(self._event_bus.emit(VoiceOutputEvent(text=str(message), source=self.name)))
             channels.append("spoken")
         asked, detail = (False, "")
-        if plan.macos:
-            asked, detail = self.executor.show_notification(title=title, message=message)
+        if path == np_.HUD:
+            asked = True                      # the HUD turns the event above into a native banner under its own identity
+            via = f"via the HUD (app identity '{np_.HUD_APP}')"
+        elif plan.macos:
+            asked, detail = self.executor.show_notification(title=title, message=message)   # osascript: fallback only
+            via = f"via osascript (fallback; attributed to {app})"
+        else:
+            via = "no banner path enabled"
         can = (["notification_requested"] if asked else []) + (["notification_displayed"] if asked and state == nt.CONFIRMED else [])
         cannot = [] if state == nt.CONFIRMED and asked else ["notification_displayed"]
         shown_on = " and ".join(channels) or "nowhere else"
         if asked and state == nt.CONFIRMED:
-            line = f"Notification posted ({shown_on}); banners are confirmed working from {app}."
+            line = f"Notification posted {via} ({shown_on}); banners are confirmed working from {app}."
         elif asked:
-            line = (f"Notification requested ({shown_on}). Banners are {state} on this Mac, so I cannot say it appeared on screen"
-                    f" — `vesper notify-test` settles it.")
+            line = (f"Notification requested {via} ({shown_on}). Banners are {state} for {app} on this Mac, so I cannot say it appeared "
+                    f"on screen — `vesper notify-test` settles it.")
         else:
             line = f"The macOS banner could not be requested ({(detail or 'no detail')[:60]}); delivered to: {shown_on}."
         return grounded(line, can=can, cannot=cannot)

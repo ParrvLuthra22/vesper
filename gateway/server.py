@@ -38,6 +38,8 @@ from channels.message import InboundMessage, InvalidMessage
 from gateway.channels import ChannelForbidden, ChannelTurnService
 from gateway.echo import EchoFilter, LoopBreaker
 from gateway.speech_state import SpeechState
+from utils import notify_path as _np
+from utils.notifications import NotifyState
 from gateway.turns import TurnManager
 from gateway.wire import FORWARDED_EVENT_TYPES, to_wire
 from schemas.events import (
@@ -403,6 +405,17 @@ class Gateway:
                 raise HTTPException(status_code=422, detail="unknown audit event")
             return {"status": "recorded"}
 
+        @app.post("/notify")
+        async def post_notify(body: Dict[str, Any] = Body(...), _: None = Depends(require_token)) -> Dict[str, Any]:
+            """`vesper notify-test`: deliver ONE notification through the active path and say which path that was. The HUD path emits an
+            event the HUD turns into a native banner; the osascript path is the caller's job (it needs the caller's terminal identity)."""
+            title, text = str(body.get("title", "Vesper"))[:80], str(body.get("body", ""))[:200]
+            path = _np.PATH.active()
+            if path == _np.HUD:
+                await self._bus.emit(ProactiveNotificationEvent(title=title, body=text, kind="notify_test", origin="notify-test",
+                                                                source="Gateway"))
+            return {"path": path, "app": _np.app_for(path, ""), **{k: v for k, v in _np.PATH.snapshot().items() if k != "path"}}
+
         @app.post("/wake")
         async def post_wake(body: Optional[Dict[str, Any]] = Body(default=None),
                             _: None = Depends(require_token)) -> Dict[str, Any]:
@@ -439,23 +452,36 @@ class Gateway:
                 return
 
             await self._manager.connect(ws)
+            hud_client = {"on": False}
             try:
                 # Reconnection contract: every fresh connection renders from a
                 # snapshot; the Brain never held per-client state to lose.
                 await ws.send_text(json.dumps(await self._snapshot(), default=str))
                 while True:
                     raw = await ws.receive_text()
-                    await self._handle_inbound(raw)
+                    if await self._handle_inbound(raw, hud_client):
+                        pass
             except WebSocketDisconnect:
                 pass
             except Exception:
                 logger.exception("WebSocket handler error")
             finally:
                 self._manager.disconnect(ws)
+                if hud_client["on"]:
+                    _np.PATH.hud_gone()
+                    self._record_notify_path()
 
         return app
 
-    async def _handle_inbound(self, raw: str) -> None:
+    def _record_notify_path(self) -> None:
+        """Persist which notification path is live (data/notifications.json) so `vesper doctor` can say so from another process."""
+        snap = _np.PATH.snapshot()
+        try:
+            NotifyState().save_path(str(snap["path"]), bool(snap["hud_connected"]), str(snap["hud_state"]))
+        except OSError:
+            pass
+
+    async def _handle_inbound(self, raw: str, hud_client: Optional[Dict[str, bool]] = None) -> None:
         try:
             msg = json.loads(raw)
         except json.JSONDecodeError:
@@ -468,6 +494,14 @@ class Gateway:
             text = (msg.get("text") or "").strip()
             if text:
                 self.inject_message(text)
+        elif mtype == "hello":
+            if msg.get("client") == "hud" and hud_client is not None and not hud_client["on"]:
+                hud_client["on"] = True
+                _np.PATH.hud_hello()
+                self._record_notify_path()
+        elif mtype == "hud_notify":
+            _np.PATH.hud_report(str(msg.get("state", "")))
+            self._record_notify_path()
         elif mtype == "confirm":
             request_id = msg.get("request_id")
             if request_id:

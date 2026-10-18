@@ -197,7 +197,7 @@ def test_doctor_notifications_three_states(state):
     assert "System Settings > Notifications > Terminal > Allow Notifications" in c.fix
     state.save(nt.CONFIRMED, "Terminal")
     [c] = doctor.check_notifications(TERM, state)
-    assert c.status == doctor.PASS and c.detail.startswith("confirmed")
+    assert c.status == doctor.PASS and "confirmed" in c.detail and c.detail.startswith("path: osascript fallback")
     state.save(nt.FAILED, "Terminal")
     [c] = doctor.check_notifications(TERM, state)
     assert c.status == doctor.WARN and "failed" in c.detail and "Terminal" in c.fix

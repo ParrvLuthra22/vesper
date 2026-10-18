@@ -503,7 +503,10 @@ def test_the_wire_message_carries_only_the_body(tmp_path):
     ev = ProactiveNotificationEvent(title="Vesper · Slack", body="New message from Alice", kind="priority_item", origin="slack")
     wire = to_wire(ev)
     assert wire["type"] == "observation" and wire["kind"] == "proactive" and wire["detail"] == "New message from Alice"
-    assert set(wire) == {"type", "kind", "detail", "observation_id", "ts"}
+    # + what the HUD needs to post a native banner under its own identity: the SAME title/body/kind the payload builder produced
+    # (build_payload has no field for message text), nothing more.
+    assert set(wire) == {"type", "kind", "detail", "observation_id", "ts", "native", "title", "body", "notify_kind"}
+    assert wire["native"] is True and wire["title"] == "Vesper · Slack" and wire["body"] == wire["detail"] and wire["notify_kind"] == "priority_item"
 
 
 def test_payload_builder_has_no_field_for_message_text():

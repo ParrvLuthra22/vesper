@@ -486,21 +486,32 @@ def check_contacts_access(env: Optional[Dict[str, str]] = None, status: Optional
 
 
 def check_notifications(env: Optional[Dict[str, str]] = None, state: Any = None) -> List[Check]:
-    """Banners from `display notification` can silently not appear (permission, Focus). Only `vesper notify-test` can confirm."""
+    """Banners can silently not appear (permission, Focus). Two delivery paths: the HUD (native banner under its own app identity
+    "Vesper HUD") when the stack is up with its HUD connected, else `osascript` under the terminal app. Only `vesper notify-test` confirms."""
+    from utils import notify_path as np_
     from utils import notifications as nt
 
     env = dict(os.environ) if env is None else env
-    app = nt.terminal_app(env)
+    term = nt.terminal_app(env)
     st = state if state is not None else nt.NotifyState()
+    d = st.delivery()
+    path = d.get("path") if d.get("path") in (np_.HUD, np_.OSASCRIPT) else np_.OSASCRIPT
+    app = np_.app_for(path, term)
+    if path == np_.HUD:
+        via = f"HUD (native banner, app identity '{np_.HUD_APP}')"
+    else:
+        reason = ("the HUD is not connected or cannot post banners" if d else "no HUD has been seen by the gateway yet")
+        via = f"osascript fallback ({term}; {reason})"
     status = st.status(app)
     rec = st.load()
     fix = nt.fix_hint(app)
+    head = f"path: {via}. "
     if status == nt.CONFIRMED:
-        return [Check(PASS, "Notifications", f"confirmed — you saw a test banner from {app} on {str(rec.get('at', '?'))[:10]}")]
+        return [Check(PASS, "Notifications", head + f"confirmed — you saw a test banner from {app} on {str(rec.get('at', '?'))[:10]}")]
     if status == nt.FAILED:
-        return [Check(WARN, "Notifications", f"failed — the last test from {app} did not appear (Vesper will not claim banners)", fix)]
-    other = f" (the last confirmation was made from {rec.get('app')})" if rec.get("app") and rec.get("app") != app else ""
-    return [Check(WARN, "Notifications", f"unconfirmed for {app}{other}: Vesper can ask macOS for a banner but cannot say it appeared",
+        return [Check(WARN, "Notifications", head + f"failed — the last test for {app} did not appear (Vesper will not claim banners)", fix)]
+    other = f" (the last confirmation was for {rec.get('app')})" if rec.get("app") and rec.get("app") != app else ""
+    return [Check(WARN, "Notifications", head + f"unconfirmed for {app}{other}: Vesper can ask for a banner but cannot say it appeared",
                   "run `vesper notify-test`; if the banner does not appear: " + fix)]
 
 

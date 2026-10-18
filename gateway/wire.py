@@ -60,7 +60,9 @@ WIRE_SPEC: Dict[Type[BaseEvent], Tuple[str, Extractor]] = {
     # A proactive interruption reaches the HUD as an ordinary observation call-out (the client renders `detail`).
     ProactiveNotificationEvent: (
         "observation",
-        lambda e: {"kind": "proactive", "detail": e.body, "observation_id": str(e.event_id)},
+        lambda e: {"kind": "proactive", "detail": e.body, "observation_id": str(e.event_id),
+                   # the HUD also posts this as a native banner under its OWN app identity (utils/notify_path.py)
+                   "native": True, "title": e.title, "body": e.body, "notify_kind": e.kind},
     ),
     ConfirmationRequestedEvent: (
         "confirmation_requested",

@@ -40,10 +40,22 @@ export class GatewayLink {
   private backoff = BACKOFF_MIN;
   private timer: number | undefined;
 
+  /** Called after the socket opens and the hello is sent (the HUD checks notification permission then). */
+  onOpen?: () => void;
+
   constructor(
     private onWire: WireHandler,
     private onConn: ConnHandler,
   ) {}
+
+  /** Send a small control frame (e.g. the notification state). Returns false if not connected. */
+  sendControl(frame: Record<string, unknown>): boolean {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(frame));
+      return true;
+    }
+    return false;
+  }
 
   async start(): Promise<void> {
     await this.connect();
@@ -66,6 +78,9 @@ export class GatewayLink {
     ws.onopen = () => {
       this.backoff = BACKOFF_MIN;
       this.onConn("connected", target.port);
+      // Tell the gateway this client is the HUD: it can then route notifications here (native banners) instead of osascript.
+      ws.send(JSON.stringify({ type: "hello", client: "hud" }));
+      this.onOpen?.();
     };
     ws.onmessage = (ev) => {
       try {

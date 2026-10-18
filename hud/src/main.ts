@@ -6,6 +6,7 @@
 
 import { GatewayLink, type ConnState } from "./gateway";
 import { Stream } from "./render";
+import { HudNotifier, loadTauriNotifyApi } from "./notify";
 
 const panel = document.getElementById("panel")!;
 const star = document.getElementById("star")!;
@@ -81,10 +82,16 @@ const link = new GatewayLink(
       panel.classList.toggle("local", msg.active === true);
       return;
     }
+    void notifier.handle(msg);
     stream.handle(msg);
   },
   (state, port) => setConn(state, port),
 );
+
+// Native banners under the HUD's own identity; the gateway falls back to osascript if this reports denied/unavailable.
+const notifier = new HudNotifier(null, (m) => void link.sendControl(m));
+void loadTauriNotifyApi().then((api) => notifier.setApi(api));
+link.onOpen = () => void notifier.ensurePermission();
 
 const stream = new Stream(streamEl, panel, (id, approved) => {
   void link.confirm(id, approved);

@@ -450,7 +450,13 @@ class ProactiveWatcher:
             if speak:
                 await self._bus.emit(VoiceOutputEvent(text=p.speech, source="ProactiveWatcher"))
                 channels.append("voice")
-        if self.cfg.macos_notification and self._notifier is not None:
+        from utils import notify_path as np_
+
+        # osascript is the FALLBACK: when the HUD is connected (and can post banners) the HUD event above already carries the banner,
+        # posted under the HUD's own app identity.
+        if self.cfg.hud and self._bus is not None and np_.PATH.active() == np_.HUD:
+            channels.append("macos")
+        elif self.cfg.macos_notification and self._notifier is not None:
             try:
                 await self._notifier.notify(p.title, p.body)
                 channels.append("macos")
