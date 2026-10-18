@@ -137,6 +137,6 @@ never added by a category (only by naming them, as before). Unclear requests fal
   follow-up windows; the wake word keeps running for barge-in but needs `wake_threshold_while_speaking` (0.7); (2) gateway echo filter — a voice
   transcript that is mostly one of the last 5 replies never reaches the planner (log: a count and `reason=echo_match`); (3) loop breaker — 3 failed turns
   in 60 s, or 3 consecutive turns within 3 s of speech ending, pause voice input for 30 s with one HUD notice (nothing spoken). Real acoustic echo
-  cancellation is assessed, not built: see DIAGNOSIS4-style notes in the commit history (it needs a playback reference across two processes).
+  cancellation is assessed, not built: it needs the played audio as a reference, and Vesper's speech is played by a different process from the one listening.
 * **Banners come from the HUD** (app identity "Vesper HUD") when the stack's HUD is connected; `osascript` (terminal identity) is only the fallback.
   `vesper doctor` and `vesper notify-test` say which path is active and for which app the confirmation counts.
