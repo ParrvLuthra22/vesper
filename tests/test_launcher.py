@@ -567,6 +567,7 @@ async def test_run_up_refuses_a_second_instance(tmp_path):
 @pytest.mark.asyncio
 async def test_run_up_runs_until_sigterm_then_stops_everything_and_cleans_state(tmp_path, monkeypatch):
     world = World()
+    monkeypatch.setattr(stack, "resolve_hud_binary", lambda cfg, root=stack.PROJECT_ROOT: tmp_path / "nohud")   # never depend on the real repo's HUD build
     cfg = _cfg(gateway={"host": "127.0.0.1", "port": _free_port()},
                launcher={"hud_binary": str(tmp_path / "nohud"),
                          "components": {"voice_output": True, "voice_input": True, "hud": True}})
@@ -600,6 +601,7 @@ async def test_run_up_runs_until_sigterm_then_stops_everything_and_cleans_state(
 @pytest.mark.asyncio
 async def test_strict_mode_fails_when_an_optional_component_is_skipped(tmp_path, monkeypatch):
     world = World()
+    monkeypatch.setattr(stack, "resolve_hud_binary", lambda cfg, root=stack.PROJECT_ROOT: tmp_path / "nohud")   # never depend on the real repo's HUD build
     cfg = _cfg(gateway={"host": "127.0.0.1", "port": _free_port()},
                launcher={"hud_binary": str(tmp_path / "nohud"), "components": {"hud": True, "voice_output": True, "voice_input": True}})
     real_build = stack.build_specs
