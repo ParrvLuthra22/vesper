@@ -40,7 +40,7 @@ async def test_speech_endpoint_reports_a_turn_in_flight_and_voice_outputs_speaki
         async with httpx.AsyncClient() as c:
             url = f"http://127.0.0.1:{port}"
             base = (await c.get(f"{url}/speech", headers=_auth())).json()
-            assert set(base) == {"busy", "turns_active", "speaking"}
+            assert set(base) == {"busy", "turns_active", "speaking", "audible", "pause_s"}
             await c.post(f"{url}/speech", json={"speaking": True}, headers=_auth())
             assert (await c.get(f"{url}/speech", headers=_auth())).json()["speaking"] is True
             await c.post(f"{url}/speech", json={"speaking": False}, headers=_auth())

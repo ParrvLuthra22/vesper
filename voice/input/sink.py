@@ -62,7 +62,16 @@ class GatewayRestSink(TranscriptSink):
         return self._request("POST", path, payload, timeout)[0]
 
     def inject(self, text: str) -> bool:
-        return self.__post("/message", {"text": text}, timeout=10)
+        """True = queued. False = the gateway refused it ("dropped": it was the assistant's own voice, or voice input is paused) or was down."""
+        ok, body = self._request("POST", "/message", {"text": text, "origin": "voice"}, timeout=10)
+        if ok and isinstance(body, dict) and body.get("status") == "dropped":
+            return False
+        return ok
+
+    def speech_snapshot(self):
+        """GET /speech as a dict, or None if the gateway cannot be asked (the echo gate then stays open)."""
+        ok, body = self._request("GET", "/speech", None, timeout=1.5)
+        return body if ok and isinstance(body, dict) else None
 
     def signal_wake(self, greet: bool = True, animate: bool = True) -> bool:
         """Tell the gateway the wake word fired — the HUD flare and voice-output barge-in. `greet` asks for the spoken

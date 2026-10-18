@@ -71,6 +71,11 @@ class VoiceInputConfig:
     vad_min_speech_ms: int = 250  # a voiced burst shorter than this (wake-word tail, chime, click) is not an utterance
     vad_onset_ms: int = 90  # speech must persist this long before an utterance counts as started
 
+    # Echo control (voice.echo.*)
+    echo_enabled: bool = True
+    echo_tail_ms: int = 700
+    echo_wake_threshold_while_speaking: float = 0.7
+
     # Speech-to-text name vocabulary (voice.stt.*)
     stt_vocab: bool = True
     stt_max_names: int = 60
@@ -134,6 +139,7 @@ class VoiceInputConfig:
         vad = (voice.get("vad", {}) or {})
         session = (voice.get("session", {}) or {})
         stt = (voice.get("stt", {}) or {})
+        echo = (voice.get("echo", {}) or {})
 
         def pick(section: Dict[str, Any], key: str, legacy: Any) -> Any:
             val = section.get(key)
@@ -169,6 +175,9 @@ class VoiceInputConfig:
             max_utterance_ms=int(float(vad["max_utterance_s"]) * 1000) if vad.get("max_utterance_s") is not None
             else int(g("max_utterance_ms", cls.max_utterance_ms)),
             whisper_model=str(stt.get("model") or g("whisper_model", cls.whisper_model)),
+            echo_enabled=bool(pick(echo, "enabled", cls.echo_enabled)),
+            echo_tail_ms=int(pick(echo, "tail_ms", cls.echo_tail_ms)),
+            echo_wake_threshold_while_speaking=float(pick(echo, "wake_threshold_while_speaking", cls.echo_wake_threshold_while_speaking)),
             stt_vocab=bool(pick(stt, "vocab", cls.stt_vocab)),
             stt_max_names=int(pick(stt, "max_names", cls.stt_max_names)),
             briefing_db=str(os.getenv("VESPER_BRIEFING_DB") or ((config.get("briefing", {}) or {}).get("collect", {}) or {}).get("cache_path")

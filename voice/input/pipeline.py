@@ -33,6 +33,7 @@ import numpy as np
 
 from voice.input.audio import AudioSource
 from voice.input.config import VoiceInputConfig, VoiceState, VoiceTransition
+from voice.input.echo import EchoGate
 from voice.input.session import Chime, SessionClock, clean_transcript, is_end_phrase
 from voice.input.sink import TranscriptSink
 from voice.input.stages import (
@@ -68,6 +69,7 @@ class VoiceInputPipeline:
         drain: Optional[Callable[[], object]] = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
+        gate: Optional[EchoGate] = None,
     ):
         self._config = config
         self._wake = wake
@@ -82,6 +84,9 @@ class VoiceInputPipeline:
         #: Drops audio queued while we were busy (BufferedSource.flush), so Vesper's own voice is not heard as the user.
         self._drain = drain
         self._mono, self._sleep = monotonic, sleep
+        #: Half-duplex gate (voice/input/echo.py): None = no gating.
+        self._gate = gate
+        self.gated_frames = 0
         self._vad_factory = vad_factory or (lambda: make_vad(config))
         self._state = VoiceState.IDLE
         self._stop = False
@@ -158,7 +163,10 @@ class VoiceInputPipeline:
                 self._transition(VoiceState.IDLE, "conversation ended")
                 return
 
-            self._sink.inject(text)
+            accepted = self._sink.inject(text)
+            if accepted is False:                                 # the gateway refused it (echo of our own reply / voice paused)
+                self._transition(VoiceState.IDLE, "transcript not accepted")
+                return
             self._session_clock.touch()
             self._transition(VoiceState.INJECTED, text)
             first = False
@@ -206,6 +214,10 @@ class VoiceInputPipeline:
         for frame in it:
             if self._stop:
                 return False
+            if self._gate is not None:
+                if self._gate.paused_for() > 0:                  # loop breaker: deaf for a while, wake word included
+                    continue
+                self._wake.speaking = self._gate.speaking()      # raise the wake bar while it talks (barge-in still possible)
             try:
                 if self._wake.process(frame):
                     return True
@@ -249,6 +261,10 @@ class VoiceInputPipeline:
         for frame in it:
             if self._stop:
                 return None
+            if self._gate is not None and (self._gate.active() or self._gate.paused_for() > 0):
+                segmenter.hold()                                  # never START capturing while it speaks (or just spoke)
+                self.gated_frames += 1
+                continue
             result = segmenter.push(frame)
             if result == SpeechSegmenter.DONE:
                 return segmenter.audio

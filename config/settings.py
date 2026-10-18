@@ -118,6 +118,22 @@ class VoiceVadSettings(BaseModel):
     onset_ms: int = 90              # speech must persist this long before an utterance is considered started
 
 
+class VoiceEchoSettings(BaseModel):
+    """The built-in mic hears the speaker. Half-duplex gating + echo filter + loop breaker (voice/input/echo.py, gateway/echo.py)."""
+
+    enabled: bool = True
+    tail_ms: int = 700                        # keep the capture gate shut this long AFTER the assistant stops speaking
+    wake_threshold_while_speaking: float = 0.7    # the wake word still works for barge-in, but must be a stronger match
+    filter_threshold: float = 0.7             # a transcript this covered by one of the last replies is the assistant hearing itself
+    filter_min_words: int = 4                 # shorter transcripts ("stop", "thanks") are never treated as echo
+    history: int = 5                          # how many recent assistant utterances to compare with
+    loop_failures: int = 3                    # this many failed turns within loop_window_s ...
+    loop_window_s: float = 60.0
+    loop_quick_turns: int = 3                 # ... or this many consecutive turns starting within quick_gap_s of speech ending
+    quick_gap_s: float = 3.0
+    pause_s: float = 30.0                     # ... pause voice input this long
+
+
 class VoiceSttSettings(BaseModel):
     """Speech-to-text details (voice/input/stages.py Transcriber, voice/input/vocab.py)."""
 
@@ -165,6 +181,7 @@ class VoiceSettings(BaseModel):
     vad: VoiceVadSettings = Field(default_factory=VoiceVadSettings)
     session: VoiceSessionSettings = Field(default_factory=VoiceSessionSettings)
     stt: VoiceSttSettings = Field(default_factory=VoiceSttSettings)
+    echo: VoiceEchoSettings = Field(default_factory=VoiceEchoSettings)
     output: VoiceOutputSettings = Field(default_factory=VoiceOutputSettings)
 
 

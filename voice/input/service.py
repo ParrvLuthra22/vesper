@@ -19,6 +19,7 @@ from voice.input.config import VoiceInputConfig, VoiceTransition
 from voice.input.devices import (
     DeviceResolutionError, default_input_index, list_input_devices, read_transport_types, resolve_input_device)
 from voice.input.pipeline import VoiceInputPipeline
+from voice.input.echo import EchoGate, SpeechPoller
 from voice.input.session import Chime, SessionClock
 from voice.input.sink import GatewayRestSink
 from voice.input.stages import Transcriber, VoiceInputUnavailable, WakeDetector
@@ -42,6 +43,10 @@ def _log_emitter(t: VoiceTransition) -> None:
 
 def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None, drain=None) -> VoiceInputPipeline:
     sink = sink if sink is not None else GatewayRestSink(config)
+    gate = None
+    if config.echo_enabled and hasattr(sink, "speech_snapshot"):
+        gate = EchoGate(config.echo_tail_ms, source=sink.speech_snapshot)
+        SpeechPoller(gate).start()
     on_wake = getattr(sink, "signal_wake", None)  # POST /wake -> HUD flare, barge-in, and (rarely) the greeting
     return VoiceInputPipeline(
         config=config,
@@ -53,6 +58,7 @@ def build_pipeline(config: VoiceInputConfig, sink=None, emitter=None, drain=None
         chime=Chime(enabled=config.chime),
         session_clock=SessionClock(config.greet_after_idle_min),
         drain=drain,
+        gate=gate,
     )
 
 

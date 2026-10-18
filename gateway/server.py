@@ -36,11 +36,13 @@ from pydantic import BaseModel
 
 from channels.message import InboundMessage, InvalidMessage
 from gateway.channels import ChannelForbidden, ChannelTurnService
+from gateway.echo import EchoFilter, LoopBreaker
 from gateway.speech_state import SpeechState
 from gateway.turns import TurnManager
 from gateway.wire import FORWARDED_EVENT_TYPES, to_wire
 from schemas.events import (
     ConfirmationResponseEvent,
+    ProactiveNotificationEvent,
     VoiceInputEvent,
     VoiceOutputEvent,
     WakeEvent,
@@ -62,6 +64,8 @@ def _now_iso() -> str:
 
 class MessageIn(BaseModel):
     text: str
+    #: "voice" = a transcript from the microphone: it goes through the echo filter and the loop breaker (gateway/echo.py).
+    origin: str = ""
 
 
 class SpeechIn(BaseModel):
@@ -133,6 +137,14 @@ class Gateway:
         self._manager = ConnectionManager()
         self._greeting: Optional[str] = None
         self._speech = SpeechState()
+        echo_cfg = ((self._config.get("voice", {}) or {}).get("echo", {}) or {})
+        self._echo_on = bool(echo_cfg.get("enabled", True))
+        self._echo = EchoFilter(history=int(echo_cfg.get("history", 5)), threshold=float(echo_cfg.get("filter_threshold", 0.7)),
+                                min_words=int(echo_cfg.get("filter_min_words", 4)))
+        self._breaker = LoopBreaker(
+            failures=int(echo_cfg.get("loop_failures", 3)), window_s=float(echo_cfg.get("loop_window_s", 60)),
+            quick_turns=int(echo_cfg.get("loop_quick_turns", 3)), quick_gap_s=float(echo_cfg.get("quick_gap_s", 3)),
+            pause_s=float(echo_cfg.get("pause_s", 30)), on_trip=self._on_loop_trip)
         self._turns = TurnManager(
             emit=lambda ev: self._bus.emit(ev),
             make_event=lambda text: VoiceInputEvent(text=text, source="gateway"),
@@ -170,6 +182,10 @@ class Gateway:
             self._brain = Brain(config=self._config, event_bus=self._bus, enable_voice_agent=False)
 
         self._attach()
+        try:
+            self._brain.turn_observer = self._turn_outcome      # the Brain tells us when a voice turn FAILED (aborted)
+        except Exception:  # noqa: BLE001 — an injected stub without attributes
+            pass
 
         if self._manage_brain:
             logger.info("Gateway starting Brain (in-process)...")
@@ -216,6 +232,7 @@ class Gateway:
         if isinstance(event, VoiceOutputEvent) and self._turns.is_cancelled(getattr(event, "correlation_id", None)):
             return                                  # a cancelled turn says nothing: not to the HUD, not to voice output
         if isinstance(event, VoiceOutputEvent):
+            self._echo.add_reply(event.text)
             self._speech.reply_queued()
             if self._greeting is None:
                 self._greeting = event.text
@@ -226,11 +243,39 @@ class Gateway:
     # ------------------------------------------------------------------ #
     # Bus injection — mirrors how the CLI feeds the same bus
     # ------------------------------------------------------------------ #
-    def inject_message(self, text: str) -> None:
+    def inject_message(self, text: str, origin: str = "") -> str:
         """Enqueue a user turn. Emitting VoiceInputEvent awaits the whole turn
         (LLM + tools), so it MUST be fire-and-forget — never block the WS loop
-        or the HTTP response on it."""
+        or the HTTP response on it.
+
+        Returns "queued", or for a MICROPHONE transcript (origin="voice") that must not become a turn: "paused" (loop breaker) or the
+        echo filter's reason code. Only counts and codes are logged, never the text."""
+        if origin == "voice" and self._echo_on:
+            if self._breaker.paused_for() > 0:
+                logger.info("voice transcript dropped (reason=voice_paused)")
+                return "paused"
+            reason = self._echo.check(text)
+            if reason:
+                logger.info(f"voice transcript dropped (reason={reason}); {self._echo.dropped} dropped so far")
+                return reason
+            self._breaker.record_turn_start(self._speech.since_speech_end())
         self._turns.submit(text)
+        return "queued"
+
+    def _turn_outcome(self, failed: bool, correlation_id: Any = None) -> None:
+        if failed and self._echo_on:
+            self._breaker.record_failure()
+
+    def _on_loop_trip(self, reason: str) -> None:
+        """Voice input pauses for pause_s. ONE short HUD notice; nothing is spoken."""
+        logger.warning(f"voice loop breaker tripped (reason={reason}); voice input paused for {self._breaker.pause_s:.0f}s")
+        try:
+            asyncio.get_running_loop().create_task(self._bus.emit(ProactiveNotificationEvent(
+                title="Voice input paused",
+                body=f"Paused for {self._breaker.pause_s:.0f} s: it kept hearing itself or failing.", kind="voice_pause",
+                origin="gateway", source="Gateway")))
+        except RuntimeError:                                  # no running loop (sync tests)
+            pass
 
     async def _barge_in(self) -> None:
         """Speech is playing and the user spoke: stop it. The WakeEvent is what voice output (and the HUD) obey."""
@@ -305,8 +350,9 @@ class Gateway:
         @app.post("/message")
         async def post_message(body: MessageIn, _: None = Depends(require_token)) -> Dict[str, Any]:
             text = (body.text or "").strip()
-            if text:
-                self.inject_message(text)
+            outcome = self.inject_message(text, body.origin) if text else "queued"
+            if outcome != "queued":
+                return {"status": "dropped", "reason": outcome}      # no text echoed back for a dropped transcript
             return {"status": "queued", "text": text}
 
         @app.post("/confirm")
@@ -376,7 +422,7 @@ class Gateway:
         @app.get("/speech")
         async def get_speech(_: None = Depends(require_token)) -> Dict[str, Any]:
             """Is a reply still being worked out or spoken? (voice input holds its follow-up window on this)"""
-            return self._speech.snapshot()
+            return {**self._speech.snapshot(), "pause_s": round(self._breaker.paused_for(), 1)}
 
         @app.post("/speech")
         async def post_speech(body: SpeechIn, _: None = Depends(require_token)) -> Dict[str, Any]:

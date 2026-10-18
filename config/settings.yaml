@@ -158,6 +158,25 @@ voice:
     max_names: 60
     model: ""                   # empty = voice.input.whisper_model ("base.en"); e.g. "small.en" for better names, slower
 
+  # Echo control. The built-in mic hears the speaker, so Vesper's own voice used to come back as "User spoke" and start self-triggered
+  # turns (which also burn the Groq token budget). Three layers: (1) half-duplex gate: no utterance capture while it speaks, nor for
+  # tail_ms after; the wake word still runs (barge-in) but needs wake_threshold_while_speaking; (2) echo filter: a transcript that is
+  # mostly one of the last `history` replies never reaches the planner (logged as a count + reason code only); (3) loop breaker: voice
+  # input pauses pause_s (one HUD notice, nothing spoken) after loop_failures failed turns within loop_window_s, or loop_quick_turns
+  # turns in a row starting within quick_gap_s of speech ending.
+  echo:
+    enabled: true
+    tail_ms: 700
+    wake_threshold_while_speaking: 0.7
+    filter_threshold: 0.7
+    filter_min_words: 4
+    history: 5
+    loop_failures: 3
+    loop_window_s: 60
+    loop_quick_turns: 3
+    quick_gap_s: 3
+    pause_s: 30
+
   # A conversation after ONE wake: chime (no greeting) -> you speak -> Vesper answers -> a follow-up window in which the
   # next utterance needs no wake word. The window ends on silence, or when you say "thanks" / "that's all" / "stop".
   session:

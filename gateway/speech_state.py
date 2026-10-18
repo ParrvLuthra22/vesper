@@ -22,6 +22,7 @@ class SpeechState:
         self._turns = 0
         self._speaking_since = None
         self._hold_until = 0.0
+        self.ended_at = None                      # when the assistant last STOPPED speaking (our clock)
 
     def turn_started(self) -> None:
         self._turns += 1
@@ -40,6 +41,7 @@ class SpeechState:
             self._hold_until = 0.0
         else:
             self._speaking_since = None
+            self.ended_at = now
             self._hold_until = now + self._tail                    # the next line of the same reply may follow at once
 
     @property
@@ -53,5 +55,11 @@ class SpeechState:
     def busy(self) -> bool:
         return self._turns > 0 or self.speaking or self._clock() < self._hold_until
 
+    def since_speech_end(self) -> "float | None":
+        """0 while it speaks; seconds since it stopped; None if it has never spoken."""
+        if self.audible():
+            return 0.0
+        return None if self.ended_at is None else self._clock() - self.ended_at
+
     def snapshot(self) -> Dict[str, object]:
-        return {"busy": self.busy(), "turns_active": self._turns, "speaking": self.speaking}
+        return {"busy": self.busy(), "turns_active": self._turns, "speaking": self.speaking, "audible": self.audible()}

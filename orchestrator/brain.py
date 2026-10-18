@@ -1205,7 +1205,13 @@ class Brain:
     async def _handle_voice_input(self, event: VoiceInputEvent) -> None:
         """Handle voice input event (USER_SPOKE) by feeding the Planner."""
         logger.info(f"User spoke: '{event.text}'")
-        await self.handle_user_text(event.text, correlation_id=event.event_id)
+        result = await self.handle_user_text(event.text, correlation_id=event.event_id)
+        observer = getattr(self, "turn_observer", None)
+        if observer is not None:                                   # the gateway's loop breaker counts failed (aborted) turns
+            try:
+                observer(bool(getattr(result, "aborted", False)), event.event_id)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _handle_observation(self, event: ObservationEvent) -> None:
         """Queue a Proactive Engine call-out as a pending observation."""

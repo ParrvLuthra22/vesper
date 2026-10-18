@@ -56,6 +56,9 @@ class WakeDetector:
         self._win_start: Optional[float] = None
         #: Patience guard: which of the last `wake_patience_window` windows scored at/above the threshold.
         self._recent: "deque[bool]" = deque(maxlen=max(1, int(config.wake_patience_window)))
+        #: True while the assistant is speaking (or just stopped): the bar is raised so its own voice cannot wake it, while a real
+        #: "Hey Jarvis" over it (barge-in) still can. Set by the pipeline from the echo gate.
+        self.speaking = False
         #: Set once a load has permanently failed, so the next frame re-raises
         #: from memory instead of retrying the same import.
         self._load_error: Optional[VoiceInputUnavailable] = None
@@ -195,6 +198,10 @@ class WakeDetector:
                        now - self._win_start, self._config.wake_threshold, self._hits_needed(), self._recent.maxlen)
             self._win_max, self._win_start = 0.0, now
 
+    def threshold(self) -> float:
+        cfg = self._config
+        return max(cfg.wake_threshold, cfg.echo_wake_threshold_while_speaking) if (self.speaking and cfg.echo_enabled) else cfg.wake_threshold
+
     def _hits_needed(self) -> int:
         return max(1, min(int(self._config.wake_patience_hits), self._recent.maxlen or 1))
 
@@ -211,7 +218,7 @@ class WakeDetector:
             predictions = self._model.predict(window)
             s = self.score(predictions)
             seen.append(s)
-            self._recent.append(s >= self._config.wake_threshold)
+            self._recent.append(s >= self.threshold())
             if sum(self._recent) >= self._hits_needed():
                 detected = True
                 self.reset()
@@ -298,6 +305,13 @@ class SpeechSegmenter:
     @property
     def speech_ms(self) -> int:
         return self._speech_frames * self._frame_ms
+
+    def hold(self) -> None:
+        """The echo gate is shut (the assistant is speaking / just spoke): this frame is NOT considered, the listen timeout does not
+        advance, and any half-built onset is forgotten. An utterance that has already started is left alone (the user talking over it)."""
+        if not self._started:
+            self._run = 0
+            self._preroll.clear()
 
     def _restart(self) -> None:
         self._started, self._run, self._trailing_silence, self._speech_frames = False, 0, 0, 0
