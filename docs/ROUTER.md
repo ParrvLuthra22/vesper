@@ -119,3 +119,14 @@ never added by a category (only by naming them, as before). Unclear requests fal
   only the names you type).
 * **LLM failures** say the class (rate limit, timeout, network, auth, server); Retry-After is honoured once up to 20 s
   (`llm.rate_limit.retry_after_max_seconds`); a reply that was half-streamed when the call failed is discarded (`STREAM_RESET`).
+
+## Notifications, sounds, Contacts permission (2026-10-18)
+
+* `show_notification` never claims display: `osascript` exits 0 with no banner when the terminal app lacks notification permission or a Focus mode
+  is on. Run `vesper notify-test` (posts one, asks "Did you see it? (y/n)", stores the answer in `data/notifications.json`); `vesper doctor`
+  reports notifications as confirmed / unconfirmed / failed and names the app and the path (System Settings > Notifications > <app>).
+  Delivery: the HUD always; spoken as well when voice mode is on and it is not quiet hours; the macOS banner best-effort on top.
+* `play_sound` (safe tier): one of the macOS system sounds via `afplay` (allow-list, argv, no shell). "make a beep" is a router skill. The result
+  says it ran, never that it was heard.
+* `vesper contacts-auth`: the one command that makes macOS ask for Contacts access (for the terminal app it runs from); `vesper doctor` shows the
+  status and says when the running stack was started from a different app.
