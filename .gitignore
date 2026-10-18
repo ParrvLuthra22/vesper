@@ -77,6 +77,15 @@ secrets.yaml
 !.env.example
 !.env.template
 
+# The repo is PUBLIC. OAuth/API token files anywhere in the tree, and local working notes (diagnoses, progress logs, status dumps),
+# which hold paths, counts and sometimes names, stay out of git. (Matches at any depth.)
+google_token.json
+*.token
+DIAGNOSIS*.md
+PROGRESS.md
+BLOCKED.md
+VESPER_STATUS.md
+
 # Claude Code per-machine settings: these accumulate pasted commands, which can
 # embed API keys. Ignore them in THIS repo, not only in a global gitignore.
 .claude/settings.local.json
